@@ -163,7 +163,7 @@ const CRUISE_STATES: {section: OverlayPresentation['sections'][number]; en: {val
   {section: {id: 'cruise-control', state: 'unavailable'}, en: {value: '—'}, ru: {value: '—'}}
 ];
 const CRUISE_LABELS = {en: {short: 'Cruise', label: 'Cruise control'}, ru: {short: 'Круиз', label: 'Круиз-контроль'}} as const;
-it.each(['en', 'ru'] as const)('renders cruise control with its icon, reserve and a fixed strip slot in every state and layout in %s', language => {
+it.each(['en', 'ru'] as const)('renders cruise control with its icon, reserve and a content-sized strip item in every state and layout in %s', language => {
   const labels = CRUISE_LABELS[language];
   for (const expected of CRUISE_STATES) {
     const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '90 km/h'}, expected.section, {id: 'fuel', state: 'value', text: '73.0 L'}];
@@ -268,4 +268,129 @@ it('colours the indicator per state with its own tokens, mirrored in the design 
   }
   expect(css).toMatch(/\.overlay-hm-cue \{[^}]*width: 14px;[^}]*height: 14px;[^}]*\}/);
   expect(css).toMatch(/\.overlay-hm-struck \{ text-decoration: line-through; \}/);
+});
+
+// ET-084 (REG-009, REG-016): the speed limit road sign in every layout, sized only by its fixed box per layout and shape: the
+// markup carries no size of its own, so a limit, no limit and no reading never move anything. The texts are hand-written from
+// strings.ts and the plan's sign table.
+type SignLayout = 'strip' | 'card' | 'cluster';
+const SIGN_LAYOUTS: readonly SignLayout[] = ['strip', 'card', 'cluster'];
+const limitSections = (text?: string): OverlayPresentation['sections'] => [{id: 'speed', state: 'value', text: '90 km/h'}, text === undefined ? {id: 'speed-limit', state: 'unavailable'} : {id: 'speed-limit', state: 'value', text}];
+const signHtml = (layout: 'strip' | 'card' | 'cluster' | 'hud', source: string, sections: OverlayPresentation['sections'], language: 'en' | 'ru' = 'en') =>
+  renderToStaticMarkup(React.createElement(OverlayContent, {view: overlayView({...base, layout, language, source, speedUnit: source === 'ATS' ? 'mph' : 'km/h', sections} as OverlayPresentation)}));
+const SIGN_CASES = [
+  {source: 'ETS2', text: '90 km/h', shape: 'circle', state: 'limit', digits: 2, number: '90', name: 'Speed limit: 90 km/h'},
+  {source: 'ETS2', text: '120 km/h', shape: 'circle', state: 'limit', digits: 3, number: '120', name: 'Speed limit: 120 km/h'},
+  {source: 'ETS2', text: 'none', shape: 'circle', state: 'no-limit', digits: 1, number: '—', name: 'Speed limit: no limit'},
+  {source: 'ETS2', text: undefined, shape: 'circle', state: 'no-limit', digits: 1, number: '—', name: 'Speed limit: unavailable'},
+  {source: 'ATS', text: '65 mph', shape: 'rectangle', state: 'limit', digits: 2, number: '65', name: 'Speed limit: 65 mph'},
+  {source: 'ATS', text: 'none', shape: 'rectangle', state: 'no-limit', digits: 1, number: '—', name: 'Speed limit: no limit'},
+  {source: 'ATS', text: undefined, shape: 'rectangle', state: 'no-limit', digits: 1, number: '—', name: 'Speed limit: unavailable'}
+] as const;
+it.each(SIGN_CASES)('renders the $source sign "$number" ($state) in the strip, card and cluster, with its name and no inline size', ({source, text, shape, state, digits, number, name}) => {
+  for (const layout of SIGN_LAYOUTS) {
+    const html = signHtml(layout, source, limitSections(text));
+    expect(html.match(/data-testid="overlay-section-speed-limit"/g), layout).toHaveLength(1);
+    expect(html, layout).toContain(`class="overlay-sign overlay-sign-${layout}" data-shape="${shape}" data-state="${state}" data-digits="${digits}"`);
+    expect(html, layout).toContain(`<strong class="overlay-sign-number" data-testid="overlay-speed-limit">${number}</strong>`);
+    expect(html, layout).toContain(`aria-label="${name}"`);
+    // The box is the stylesheet's alone: no value can reach an inline size.
+    expect(html, layout).not.toMatch(/class="overlay-sign [^>]*style=/);
+    expect(html, layout).not.toContain('overlay-speed-limit-unit');
+    // The words are sign art beside a number on the larger ATS signs only, hidden from assistive technology.
+    const words = '<span class="overlay-sign-words" aria-hidden="true"><span>SPEED</span><span>LIMIT</span></span>';
+    if (shape === 'rectangle' && state === 'limit' && layout !== 'strip') expect(html, layout).toContain(words);
+    else expect(html, layout).not.toContain('overlay-sign-words');
+    expect(html, layout).not.toContain('lucide-signpost');
+  }
+});
+it('keeps the sign art untranslated and the accessible names localized in Russian', () => {
+  const html = signHtml('card', 'ATS', limitSections('65 mph'), 'ru');
+  expect(html).toContain('<span>SPEED</span><span>LIMIT</span>');
+  expect(html).toContain('aria-label="Ограничение скорости: 65 миль/ч"');
+  expect(signHtml('strip', 'ETS2', limitSections('none'), 'ru')).toContain('aria-label="Ограничение скорости: без ограничения"');
+  expect(signHtml('cluster', 'ETS2', limitSections(), 'ru')).toContain('aria-label="Ограничение скорости: нет данных"');
+});
+it('reserves the strip sign its fixed 32 px slot in every state, and only the sign item has a minimum width', () => {
+  for (const {source, text, name} of SIGN_CASES) {
+    const html = signHtml('strip', source, limitSections(text));
+    expect(html, name).toContain(`data-testid="overlay-section-speed-limit" aria-label="${name}" style="max-width:32px;min-width:32px"`);
+    expect(html.match(/min-width/g), name).toHaveLength(1);
+  }
+  const both = signHtml('strip', 'ETS2', [{id: 'cruise-control', state: 'value', text: 'off'}, ...limitSections('90 km/h')]);
+  expect(both.match(/min-width/g)).toHaveLength(1);
+});
+it.each([
+  {sections: ['speed', 'gear', 'rpm'], height: 96, count: 3, withSpeed: true},
+  {sections: ['speed', 'gear'], height: 74, count: 2, withSpeed: true},
+  {sections: ['speed', 'rpm'], height: 74, count: 2, withSpeed: true},
+  {sections: ['gear', 'rpm'], height: 74, count: 2, withSpeed: false},
+  {sections: ['speed'], height: 74, count: 1, withSpeed: true},
+  {sections: ['gear'], height: 74, count: 1, withSpeed: false},
+  {sections: ['rpm'], height: 74, count: 1, withSpeed: false},
+  {sections: [], height: 74, count: 0, withSpeed: false}
+] as {sections: OverlaySectionId[]; height: number; count: number; withSpeed: boolean}[])('sizes the card hero $height px with the sign for $sections', ({sections, height, count, withSpeed}) => {
+  const html = signHtml('card', 'ETS2', [...sections.map(id => ({id, state: 'unavailable' as const})), {id: 'speed-limit', state: 'value', text: '90 km/h'}]);
+  expect(html).toContain(`class="overlay-card-hero" data-count="${count}" data-sign="true" data-speed="${withSpeed}" data-testid="overlay-card-hero" style="height:${height}px"`);
+  expect(html).toContain('class="overlay-card-speed-limit" data-testid="overlay-section-speed-limit" aria-label="Speed limit: 90 km/h"');
+  // The sign is not one of the card's rows.
+  expect(html).not.toMatch(/class="overlay-row"[^>]*overlay-section-speed-limit/);
+});
+it('renders no hero and no data-sign for a card without the sign, and marks it false beside the parts', () => {
+  expect(signHtml('card', 'ETS2', [{id: 'fuel', state: 'value', text: '73.0 L'}])).not.toContain('overlay-card-hero');
+  expect(signHtml('card', 'ETS2', [{id: 'speed', state: 'value', text: '90 km/h'}])).toContain('data-count="1" data-sign="false" data-speed="true" data-testid="overlay-card-hero" style="height:24px"');
+});
+it('places the cluster sign in the gauge, and without a gauge section alone before the panel, never as a panel row', () => {
+  const onGauge = signHtml('cluster', 'ETS2', limitSections('90 km/h'));
+  expect(onGauge).toContain('class="overlay-cluster-sign" data-testid="overlay-section-speed-limit" aria-label="Speed limit: 90 km/h"');
+  expect(onGauge.indexOf('class="overlay-gauge"')).toBeLessThan(onGauge.indexOf('class="overlay-cluster-sign"'));
+  expect(onGauge.indexOf('class="overlay-cluster-sign"')).toBeLessThan(onGauge.indexOf('overlay-panel-tags'));
+  const alone = signHtml('cluster', 'ATS', [{id: 'speed-limit', state: 'value', text: '65 mph'}, {id: 'fuel', state: 'value', text: '19.3 US gal'}]);
+  expect(alone).not.toContain('class="overlay-gauge"');
+  expect(alone).toMatch(/^.*class="overlay-cluster-body"><div class="overlay-cluster-sign" data-testid="overlay-section-speed-limit"/);
+  expect(alone).not.toMatch(/class="overlay-panel-row"[^>]*overlay-section-speed-limit/);
+});
+it.each([
+  ['ETS2', '90 km/h', 'circle', 'limit', '90', 'km/h', 'Speed limit: 90 km/h'],
+  ['ATS', '65 mph', 'rectangle', 'limit', '65', 'mph', 'Speed limit: 65 mph'],
+  ['ETS2', 'none', 'circle', 'no-limit', '—', undefined, 'Speed limit: no limit'],
+  ['ATS', undefined, 'rectangle', 'no-limit', '—', undefined, 'Speed limit: unavailable']
+] as const)('renders the %s %s HUD line with a CSS glyph in the icon place, the short label and the value', (source, text, shape, state, value, unit, name) => {
+  const html = signHtml('hud', source, limitSections(text));
+  expect(html).toContain(`class="overlay-hud-line" data-testid="overlay-section-speed-limit" aria-label="${name}"><span class="overlay-sign-glyph" data-shape="${shape}" data-state="${state}" aria-hidden="true"></span><span class="overlay-label">Limit</span>`);
+  expect(html).toContain(`data-testid="overlay-speed-limit">${value}</strong>`);
+  if (unit) expect(html).toContain(`<span class="overlay-unit" data-testid="overlay-speed-limit-unit">${unit}</span>`);
+  else expect(html).not.toContain('overlay-speed-limit-unit');
+  expect(html).not.toContain('class="overlay-sign ');
+  expect(html).not.toContain('lucide-signpost');
+});
+it('fixes every sign box, border and font in the stylesheet per layout and shape, and dims and mirrors its tokens', () => {
+  const css = readFileSync('apps/desktop/src/renderer.css', 'utf8'), tokens = readFileSync('apps/desktop/src/shell/overlay-tokens.css', 'utf8');
+  const design = readFileSync('docs/design/tokens.css', 'utf8');
+  for (const rule of [
+    '.overlay-sign-strip[data-shape="circle"] {width:32px;height:32px;border-width:3.5px;font-size:14px}',
+    '.overlay-sign-strip[data-shape="rectangle"] {width:26px;height:34px;border-width:1.5px;border-radius:3px;font-size:14px}',
+    '.overlay-sign-strip[data-digits="3"] {font-size:12px}',
+    '.overlay-sign-card[data-shape="circle"] {width:72px;height:72px;border-width:9px;font-size:30px}',
+    '.overlay-sign-card[data-shape="rectangle"] {width:58px;height:72px;border-width:2px;border-radius:6px;font-size:30px;gap:3px}',
+    '.overlay-sign-card[data-digits="3"] {font-size:25px}',
+    '.overlay-sign-card .overlay-sign-words {font-size:9px}',
+    '.overlay-sign-cluster[data-shape="circle"] {width:56px;height:56px;border-width:6px;font-size:22px}',
+    '.overlay-sign-cluster[data-shape="rectangle"] {width:46px;height:58px;border-width:1.5px;border-radius:5px;font-size:22px;gap:2px}',
+    '.overlay-sign-cluster[data-digits="3"] {font-size:18px}',
+    '.overlay-sign-cluster .overlay-sign-words {font-size:7.5px}',
+    '.overlay-sign[data-state="no-limit"] {background:var(--yu-ov-sign-none-face);border:2px dashed var(--yu-ov-sign-none-border);box-shadow:none;color:var(--yu-ov-sign-none-dash)}',
+    '.overlay-gauge>.overlay-cluster-sign {position:absolute;left:0;top:0}',
+    '.overlay-cluster-body>.overlay-cluster-sign {flex:none;display:flex;align-items:flex-end;justify-content:center;width:58px;height:60px}',
+    '.overlay-sign-glyph {box-sizing:border-box;flex:none;width:14px;height:14px;background:var(--yu-ov-sign-face)}',
+    '.overlay-card-hero[data-sign="true"] {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 74px}',
+    '.overlay-card-hero[data-sign="true"][data-speed="false"],.overlay-card-hero[data-sign="true"][data-count="1"],.overlay-card-hero[data-sign="true"][data-count="0"] {grid-template-columns:minmax(0,1fr) 74px}',
+    '.overlay.is-dim .overlay-ring, .overlay.is-dim .overlay-sign, .overlay.is-dim .overlay-sign-glyph { opacity: .5; }'
+  ]) expect(css, rule).toContain(rule);
+  // Every box clips a longer number instead of growing with it.
+  expect(css).toMatch(/\.overlay-sign \{[^}]*overflow:hidden;[^}]*white-space:nowrap\}/);
+  for (const [name, value] of [['--yu-ov-sign-red', '#D32F2F'], ['--yu-ov-sign-ink', '#111827'], ['--yu-ov-sign-face', '#FFFFFF'], ['--yu-ov-sign-shadow', 'rgba(11, 17, 32, 0.55)'],
+    ['--yu-ov-sign-none-face', 'rgba(11, 17, 32, 0.35)'], ['--yu-ov-sign-none-border', 'rgba(209, 213, 219, 0.5)'], ['--yu-ov-sign-none-dash', 'rgba(209, 213, 219, 0.72)']]) {
+    expect(tokens, name).toContain(`${name}: ${value};`); expect(design, name).toContain(`${name}: ${value};`);
+  }
 });

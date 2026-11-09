@@ -166,7 +166,7 @@ Overlay measurements use whole numbers rounded to the nearest unit (`200.2 km` �
 
 Open **Settings → Overlay** and change **Show overlay** (Russian: **Показывать оверлей**). The switch changes after saving succeeds and stays saved after restarting. Hiding the overlay keeps telemetry updating. It does not change whether recording is available. Turning it off during position editing discards unsaved position and size changes; editing is unavailable while it is off. Turning it on shows it when a supported game is in front and current telemetry/window information is available. If saving fails, the previous setting and edit draft stay in effect.
 
-The **Preview** card uses invented example data, never your live game telemetry. It follows the selected layout, size, background opacity and enabled sections, including size and opacity drafts while you edit. Large layouts fit within the preview; Strip wraps whole items. This illustrates appearance rather than the exact position in a game window. The Sections card groups all sixteen switches under Driving, Fuel, Job and Time and counts the enabled ones; its presets change those same switches.
+The **Preview** card uses invented example data, never your live game telemetry. It follows the selected layout, size, background opacity and enabled sections, including size and opacity drafts while you edit. Large layouts fit within the preview; Strip wraps whole items. This illustrates appearance rather than the exact position in a game window. The Sections card groups all seventeen switches under Driving, Fuel, Job and Time and counts the enabled ones; its presets change those same switches.
 
 ## Next mandatory break on the overlay (ET-052)
 
@@ -183,6 +183,12 @@ The overlay has an extra section, **Next mandatory break** (Russian: **До об
 The overlay has a **Cruise control** section (Russian: **Круиз-контроль**; short name **Cruise** / **Круиз** in the strip, cluster panel and HUD) after RPM. It shows the speed set for cruise control in the game's units, for example `90 km/h` or `56 mph`, and **OFF** (**ВЫКЛ**) while cruise control is off. A dash (`—`) means the value is not available, for example with an older plugin still loaded in a running game; it never stands for off.
 
 It is on by default, also after an update, and you can switch it off under **Driving** in **Settings → Overlay → Sections**. The **Everything** and **Driving only** presets include it; **Job focus** does not, so after the update a Job focus selection matches no preset until you choose it again. As with the break, the Card, the Cluster panel and the Minimal HUD grow by one row, an earlier version treats settings saved by this version as newer, and the value is not recorded.
+
+## Speed limit on the overlay
+
+The overlay has a **Speed limit** section (Russian: **Ограничение скорости**; short name **Limit** / **Лимит** in the Minimal HUD) after cruise control. It shows the navigation speed limit the game reports, in the game's units, as a road sign: round with a red border in ETS2 and rectangular in ATS. A dashed sign with a dash (`—`) means that no limit applies or that the value is not available, for example with an older plugin still loaded in a running game.
+
+The value follows the game's Route Advisor speed limit option, so if the game does not show a limit there, the overlay may not show one either. The section is on by default, also after an update, and you can switch it off under **Driving** in **Settings → Overlay → Sections**. The **Everything** and **Driving only** presets include it; **Job focus** does not, so after the update a Job focus selection matches no preset until you choose it again. The Card and the Minimal HUD grow by one row, an earlier version treats settings saved by this version as newer, and the value is not recorded.
 
 ## Account and synchronization
 

@@ -59,7 +59,7 @@ export const ENUMS = Object.freeze({
   unitProfile: ['metric', 'us-customary'],
   gearDisplay: ['automatic', 'manual', 'crawler'],
   overlayLayout: ['strip', 'card', 'cluster', 'hud'],
-  overlaySection: ['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
+  overlaySection: ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
     'deadline', 'expected-income', 'game-time', 'mandatory-break'],
   settingsState: ['loading', 'defaults', 'loaded', 'loaded-with-fallbacks', 'invalid-file', 'unsupported-older', 'newer-version', 'unreadable', 'unavailable'],
   pluginMode: ['active', 'test-root', 'disabled'],

@@ -22,10 +22,17 @@ export const STRIP_TAG_MAX_WIDTH_CSS = 96;
  * group's first item. A longer value ends in an ellipsis.
  */
 export const STRIP_ITEM_MAX_WIDTH_CSS: Readonly<Record<OverlaySectionId, number>> = Object.freeze({
-  'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300, 'origin': 300, 'destination': 300,
+  'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'speed-limit': 32, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300, 'origin': 300, 'destination': 300,
   'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150
 });
 
+/**
+ * Sections whose strip item is always exactly its maximum width: only the speed limit sign (ET-084). The renderer sets the
+ * minimum width to the cap, so the ETS2 sign (32 px wide), the ATS sign (26 px wide) and the no-limit state take the same
+ * item width and never move a neighbour. The sign is the item's whole 32 px: no icon, no unit, and no divider, because it
+ * belongs to the first group.
+ */
+export const STRIP_FIXED_WIDTH_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed-limit']);
 
 /**
  * ET-070 (owner decisions D2, D3): the fixed Hard Mode indicator is the strip's last item after every enabled section. Its

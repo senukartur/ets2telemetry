@@ -1,6 +1,7 @@
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {CRUISE_CONTROL_OFF} from '../../../packages/telemetry-core/src/cruise-control';
+import {SPEED_LIMIT_NONE} from '../../../packages/telemetry-core/src/speed-limit';
 import type {NotableBreakUrgency} from '../../../packages/telemetry-core/src/mandatory-break';
 import type {LiveField, LiveFieldId, LiveSectionId} from '../../../packages/telemetry-core/src/live-view';
 import type {MissingReason} from '../../../packages/telemetry-core/src/readings';
@@ -61,6 +62,8 @@ export function liveFieldValue(field: LiveField, language: AppLanguage): string 
   if (field.state === 'value' && field.id === 'mandatory-break') return localizeDeadlineString(field.text, language);
   // Cruise control off is a value, the app-owned word (ET-071); a set speed is a measurement like speed.
   if (field.state === 'value' && field.id === 'cruise-control' && field.text === CRUISE_CONTROL_OFF) return t('live.cruiseOff', undefined, language);
+  // No limit is a value, the app-owned words (ET-084); a limit is a measurement like speed.
+  if (field.state === 'value' && field.id === 'speed-limit' && field.text === SPEED_LIMIT_NONE) return t('live.speedLimitNone', undefined, language);
   return field.state === 'value' ? ((field.id === 'special-job' || field.id === 'cargo-loaded') ? field.text === 'yes' ? (language === 'ru' ? 'да' : 'yes') : (language === 'ru' ? 'нет' : 'no') : ['cargo', 'source-city', 'source-company', 'destination-city', 'destination-company', 'truck', 'truck-plate', 'trailers', 'game-mode'].includes(field.id) ? field.text : localizedMeasurement(field.text, language)) : appCopy(field.text, language);
 }
 

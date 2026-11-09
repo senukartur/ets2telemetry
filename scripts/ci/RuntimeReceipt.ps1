@@ -913,7 +913,9 @@ function Test-UiReceipt {
     }
     if ($ExpectedUiCase -ceq 'overlay') {
         $previewNames = @('strip','card','cluster','hud','narrow-strip','large-strip','large-card')
-        $previewSections = 'speed,gear,rpm,cruise-control,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break'
+        $previewSections = 'speed,gear,rpm,cruise-control,speed-limit,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break'
+        # ET-084: the card and the cluster draw the speed limit sign with speed, gear and RPM, so it precedes cruise control in their DOM.
+        $previewSectionsHero = 'speed,gear,rpm,speed-limit,cruise-control,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break'
         if (@($ui.overlayPreview).Count -ne 14) { return $false }
         foreach ($language in @('en','ru')) {
             foreach ($name in $previewNames) {
@@ -926,7 +928,7 @@ function Test-UiReceipt {
                     !(Test-ReceiptInteger -Value $observation.viewportWidth -Minimum 1280 -Maximum 1280) -or
                     !(Test-ReceiptInteger -Value $observation.viewportHeight -Minimum 800 -Maximum 800) -or
                     $observation.fitsScene -isnot [bool] -or !$observation.fitsScene -or @($observation.outside).Count -ne 0 -or
-                    (@($observation.sections) -join ',') -cne $previewSections) { return $false }
+                    (@($observation.sections) -join ',') -cne $(if ($layout -ceq 'card' -or $layout -ceq 'cluster') { $previewSectionsHero } else { $previewSections })) { return $false }
                 foreach ($dimension in @('width','height')) {
                     $number = $observation.$dimension
                     if (($number -isnot [int] -and $number -isnot [long] -and $number -isnot [double] -and $number -isnot [decimal]) -or

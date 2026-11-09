@@ -95,6 +95,8 @@ export function normalizeV1State(state: Omit<CurrentState, 'window'>, status?: P
     nextMandatoryBreak: state.nextMandatoryBreak ? fromAvailable(state.nextMandatoryBreak) : missing('not-supported'),
     // Below minor 3 the state carries no cruise control: the protocol does not transport it, which is not-supported (ET-071).
     cruiseControl: state.cruiseControl ? fromAvailable(state.cruiseControl) : missing('not-supported'),
+    // Below minor 4 the state carries no speed limit: the protocol does not transport it, which is not-supported (ET-084).
+    speedLimit: state.speedLimit ? fromAvailable(state.speedLimit) : missing('not-supported'),
     configurationRevision: configuration.revision
   };
 }

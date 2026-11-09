@@ -20,6 +20,16 @@ export const CARD_HEADER_GAP_CSS = 6;
 /** One card row, its 1 px top border included. */
 export const CARD_ROW_HEIGHT_CSS = 24;
 
+/**
+ * The card's speed limit sign (ET-084) has a fixed slot at the hero's right, as wide as the tallest sign and its halo. The
+ * hero is one 24 px row per enabled speed, gear and RPM part plus one for the sign, and never lower than the slot, so its
+ * height follows only the enabled sections, never a value. Without the sign it is the parts' rows alone.
+ */
+export const CARD_SIGN_SLOT_CSS = 74;
+export function cardHeroHeightCss(parts: number, sign: boolean): number {
+  return sign ? Math.max((parts + 1) * CARD_ROW_HEIGHT_CSS, CARD_SIGN_SLOT_CSS) : parts * CARD_ROW_HEIGHT_CSS;
+}
+
 /** Cluster side panel: a 1 px surface border, 8 px vertical padding, an 18 px tag row, then 18 px rows, each 3 px apart. */
 export const CLUSTER_PANEL_BORDER_CSS = 1;
 export const CLUSTER_PANEL_PADDING_Y_CSS = 8;
@@ -47,27 +57,36 @@ export const LAYOUT_BORDER_CSS: Readonly<Record<RowLayout, number>> = Object.fre
 /**
  * The rows a layout reserves for these enabled sections: one per section in the card and the HUD, and one per section
  * outside the gauge (speed, gear and RPM) in the cluster's side panel, plus the Hard Mode indicator's row (ET-070). The
- * header or tag row is reserved separately.
+ * cluster's speed limit sign (ET-084) sits on the gauge or in its place, so it has no panel row. The header or tag row is
+ * reserved separately.
  */
 export function layoutRowCount(layout: RowLayout, sections: OverlaySections): number {
-  return OVERLAY_SECTION_IDS.filter(id => sections[id] && !(layout === 'cluster' && CLUSTER_GAUGE_SECTIONS.has(id))).length + HARD_MODE_ROWS;
+  return OVERLAY_SECTION_IDS.filter(id => sections[id] && !(layout === 'cluster' && (CLUSTER_GAUGE_SECTIONS.has(id) || id === 'speed-limit'))).length + HARD_MODE_ROWS;
+}
+
+/** What the card's hero needs for the speed limit sign (ET-084) beyond the 24 px row each hero section already reserves. */
+function cardSignSurplusCss(sections: OverlaySections): number {
+  if (!sections['speed-limit']) return 0;
+  const parts = [...CLUSTER_GAUGE_SECTIONS].filter(id => sections[id]).length;
+  return cardHeroHeightCss(parts, true) - (parts + 1) * CARD_ROW_HEIGHT_CSS;
 }
 
 /**
  * The CSS height a layout's content needs inside its outer border: the header or tag row is always reserved, because
  * tags can appear at any time, plus one fixed row per counted row (the sections and the Hard Mode indicator). Card
- * 46 + 24 × rows, cluster panel 34 + 21 × rows, HUD 18 + 24 × rows. The cluster's gauge is covered by its nominal height, not by this reserve.
+ * 46 + 24 × rows (plus up to 50 px when the speed limit sign needs a taller hero than its rows, ET-084), cluster panel
+ * 34 + 21 × rows, HUD 18 + 24 × rows. The cluster's gauge is covered by its nominal height, not by this reserve.
  */
 export function layoutContentCss(layout: RowLayout, sections: OverlaySections): number {
   const rows = layoutRowCount(layout, sections);
-  if (layout === 'card') return 2 * CARD_PADDING_Y_CSS + CARD_HEADER_HEIGHT_CSS + CARD_HEADER_GAP_CSS + CARD_ROW_HEIGHT_CSS * rows;
+  if (layout === 'card') return 2 * CARD_PADDING_Y_CSS + CARD_HEADER_HEIGHT_CSS + CARD_HEADER_GAP_CSS + CARD_ROW_HEIGHT_CSS * rows + cardSignSurplusCss(sections);
   if (layout === 'cluster') return 2 * CLUSTER_PANEL_PADDING_Y_CSS + CLUSTER_TAG_ROW_HEIGHT_CSS + (CLUSTER_ROW_GAP_CSS + CLUSTER_ROW_HEIGHT_CSS) * rows;
   return HUD_TAG_ROW_HEIGHT_CSS + (HUD_LINE_GAP_CSS + HUD_LINE_HEIGHT_CSS) * rows;
 }
 
 /**
  * The reserved CSS height at zoom 1, the outer border included, for n enabled sections (m outside the cluster's gauge) and
- * the Hard Mode row: card 48 + 24(n + 1), cluster panel 36 + 21(m + 1), HUD 18 + 24(n + 1).
+ * the Hard Mode row: card 48 + 24(n + 1) and the sign's surplus, cluster panel 36 + 21(m + 1), HUD 18 + 24(n + 1).
  */
 export function layoutReservedCss(layout: RowLayout, sections: OverlaySections): number {
   return layoutContentCss(layout, sections) + 2 * LAYOUT_BORDER_CSS[layout];

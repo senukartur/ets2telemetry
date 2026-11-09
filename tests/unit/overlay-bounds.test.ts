@@ -30,6 +30,10 @@ import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 // only one (its line is 1234 of 1801, 29). At 50% (CSS 3657, inner 3627) Everything's 3674 CSS px line needs two rows,
 // ceil(26.6 + 2) = 29 at top 1163, while Driving only and Job focus stay one 16 DIP row at 1176. At 200% (inner 1169)
 // Driving only needs two rows, ceil(106.4 + 2.8) = 110.
+// ET-084 re-derived (the speed limit, a fixed 32 CSS px strip item that Driving only includes): every height above stands. At 100%
+// Everything stays three rows (82; the first row now ends at cargo, 1724) and Driving only one (1280 of 1801, 29). At 50% Everything's
+// 3720 CSS px line still needs two rows (29) and the other selections stay one row of 16. At 200% (inner 1169) Driving only's first
+// row ends at range (1166), so the indicator takes a second (110). At 300% (inner 771) it stays two rows (164).
 const SCALE = 1.5;
 const OWNER: OverlayPlacement = {x: 0.8485, y: 1, scale: 0.5};
 /** The owner's fractions at the setting 1, where Everything and Driving only differ. */

@@ -300,11 +300,13 @@ it('keeps metric without a game and the fixture game profile for synthetic sourc
 // ET-071 (cruise control, a sixteenth section, adds one more row to each and a 140 CSS px strip item): the card is 210 × 320,
 // the cluster 308 × 232 with its top at 16 + (540 − 32 − 232) = 292, and the HUD 224 × 299. The strip's rows (inner 1298)
 // now end at range (1120), destination (1172) and the break (1240), so the indicator takes a fourth: ceil(152 × 0.7 + 2) = 109.
+// ET-084 (the speed limit adds a row to the card and the HUD and a 32 CSS px strip item): the card is 210 × 337 and the HUD
+// 224 × 315; the cluster's reserve and the strip's four rows (range now ends at 1166) are unchanged.
 it.each([
   {layout: 'strip' as const, bounds: {x: -944, y: 8, width: 928, height: 109}},
-  {layout: 'card' as const, bounds: {x: -226, y: 16, width: 210, height: 320}},
+  {layout: 'card' as const, bounds: {x: -226, y: 16, width: 210, height: 337}},
   {layout: 'cluster' as const, bounds: {x: -944, y: 292, width: 308, height: 232}},
-  {layout: 'hud' as const, bounds: {x: -944, y: 16, width: 224, height: 299}}
+  {layout: 'hud' as const, bounds: {x: -944, y: 16, width: 224, height: 315}}
 ])('places the $layout layout at its own anchor and shows it without focus', ({layout, bounds}) => {
   const {window, overlay} = controller(layout); overlay.loaded(true); overlay.update(live());
   expect(window.setBounds.mock.calls).toEqual([[bounds]]); raisedAfterShow(window); noActivation(window);
@@ -313,7 +315,7 @@ it('re-places a visible overlay for a new layout and re-asserts topmost without 
   const {window, screen, overlay} = controller(); overlay.loaded(true); overlay.update(live());
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
   overlay.setLayout('card');
-  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 109}], [{x: -226, y: 16, width: 210, height: 320}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 109}], [{x: -226, y: 16, width: 210, height: 337}]]);
   expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
   expect(window.setBounds.mock.invocationCallOrder[1]).toBeLessThan(window.setAlwaysOnTop.mock.invocationCallOrder[0]);
   expect(window.showInactive).toHaveBeenCalledOnce(); expect(screen.screenToDipRect).toHaveBeenCalledTimes(2); noActivation(window);
@@ -331,8 +333,8 @@ it('never shows or raises a hidden overlay when the layout changes', () => {
   expect(window.setBounds).not.toHaveBeenCalled(); expect(window.hide).not.toHaveBeenCalled();
 });
 it('hides when the chosen layout does not fit the client area and shows again when one fits', () => {
-  // 1920 x 540 physical is 960 x 270 DIP: the strip (ET-071: 125 DIP) and cluster (ET-071: 264 DIP) fit; the card (352 DIP)
-  // and HUD (331 DIP) do not with every section. The cluster's top is 16 + (270 − 32 − 232) = 22.
+  // 1920 x 540 physical is 960 x 270 DIP: the strip (ET-071: 125 DIP) and cluster (ET-071: 264 DIP) fit; the card (ET-084: 369 DIP)
+  // and HUD (347 DIP) do not with every section. The cluster's top is 16 + (270 − 32 − 232) = 22.
   const {window, overlay} = controller(), current = live();
   const metadata = current.observation!.state.window;
   if (!metadata.available) throw new Error('Expected metadata');
@@ -554,15 +556,16 @@ it('applies the edited scale as zoom factor and size, and reports a scale that d
 });
 it('applies the zoom of the 50% and 300% settings while editing', () => {
   const tracked = trackedController('card', {x: 0, y: 0, scale: 1}), {overlay, window} = tracked;
-  // A 2560 x 2000 physical client is 1280 x 1000 DIP at (-960, 0): the card at 3 (ET-071: 630 × 958) leaves 618 x 10 free.
-  tracked.metadata.width = 2560; tracked.metadata.height = 2000; editing(tracked);
+  // A 2560 x 2100 physical client is 1280 x 1050 DIP at (-960, 0): the card at 3 (ET-084: 630 × 1008; 2000 physical no longer
+  // fits it) leaves 618 x 10 free.
+  tracked.metadata.width = 2560; tracked.metadata.height = 2100; editing(tracked);
   expect(overlay.setEditScale(3)).toEqual({active: true, layout: 'card', scale: 3, placement: 'visible'});
   expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([2.1]);
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 630, height: 958});
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 630, height: 1008});
   expect(overlay.setEditScale(0.5)).toEqual({active: true, layout: 'card', scale: 0.5, placement: 'visible'});
   expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([0.35]);
-  // ET-071: at 0.5 the card is ceil(454 × 0.35 + 2) = ceil(160.9) = 161 high.
-  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 105, height: 161});
+  // ET-084: at 0.5 the card is ceil(478 × 0.35 + 2) = ceil(169.3) = 170 high.
+  expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 16, width: 105, height: 170});
   expect(overlay.endEdit()).toEqual({x: 0, y: 0, scale: 0.5});
   expect(window.webContents.setZoomFactor.mock.lastCall).toEqual([0.7]);
 });
@@ -635,8 +638,8 @@ it('neither moves nor raises a visible strip when saved sections keep its reserv
   // (ceil(114 × 0.7 + 2) = 82) and so does the set without RPM and cargo: the first row ends at the SDK mean (1066), the second
   // at the deadline (1176; income would reach 1490), the third holds income, game time and the break (678).
   // ET-071: every section is four rows at 928 DIP with the indicator alone on the fourth, so removing any section gives
-  // three; the case starts from ET-070's fifteen sections (cruise control off), three rows (1210, 1256, 1026), and removes
-  // RPM and cargo from them as before (1066, 1176, 792).
+  // three; the case starts from sixteen sections (cruise control off, ET-084's speed limit on), three rows (1256, 1256, 1026),
+  // and removes RPM and cargo from them as before (1112, 1176, 792).
   const {window, overlay} = controller(), current = live();
   const withoutCruise = {...DEFAULT_OVERLAY_SECTIONS, 'cruise-control': false};
   overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, withoutCruise);
@@ -702,16 +705,16 @@ it('reports an edit strip that no longer fits its saved sections as too large an
 
 // ET-012d (decisions K4 and K9): the card, cluster and HUD reserve rows for the saved sections, so a sections save can
 // change their height through the unchanged controller path. Hand-computed in the 960 x 540 DIP client at (-960, 0) at
-// the setting 1 (zoom 0.7, ET-045e): the card is 210 wide and 320 high with every section, cruise control and the Hard
-// Mode row (ET-071: ceil(454 × 0.7 + 2); 303 with ET-070's fifteen sections) and 252 (its nominal floor round(360 × 0.7))
+// the setting 1 (zoom 0.7, ET-045e): the card is 210 wide and 337 high with every section, the speed limit and the Hard
+// Mode row (ET-084: ceil(478 × 0.7 + 2); 320 with ET-071's sixteen sections) and 252 (its nominal floor round(360 × 0.7))
 // with driving-only or job-focus; the cluster is 308 wide and 232 high with every section (ceil(328 × 0.7 + 2) =
 // ceil(231.6)) at y = 16 + (540 − 32 − 232) = 292, and 154 with driving-only at y = 16 + (540 − 32 − 154) = 370.
 it('re-places a visible card for saved sections once, raising it without showing or focusing it again', () => {
   const {window, overlay} = controller('card'); overlay.loaded(true); overlay.update(live());
-  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 320}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 337}]]);
   window.setAlwaysOnTop.mockClear(); window.moveTop.mockClear();
   overlay.setLayout('card', DEFAULT_OVERLAY_PLACEMENTS.card, OVERLAY_PRESETS['driving-only']);
-  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 320}], [{x: -226, y: 16, width: 210, height: 252}]]);
+  expect(window.setBounds.mock.calls).toEqual([[{x: -226, y: 16, width: 210, height: 337}], [{x: -226, y: 16, width: 210, height: 252}]]);
   expect(window.setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(window.moveTop).toHaveBeenCalledOnce();
   expect(window.setBounds.mock.invocationCallOrder[1]).toBeLessThan(window.setAlwaysOnTop.mock.invocationCallOrder[0]);
   expect(window.setAlwaysOnTop.mock.invocationCallOrder[0]).toBeLessThan(window.moveTop.mock.invocationCallOrder[0]);

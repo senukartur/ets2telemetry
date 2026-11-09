@@ -243,7 +243,7 @@ describe('ET-010c card with the v1 smoke projection', () => {
   it('lists the v1 rows of the smoke as the combined rows that v0 does not carry', () => {
     const v0Ids = new Set(SYNTHETIC_V0_LIVE_ROWS.map(([id]) => id));
     expect(SYNTHETIC_V0V1_LIVE_ROWS.filter(([id]) => !v0Ids.has(id))).toEqual(SYNTHETIC_V1_LIVE_ROWS);
-    expect(SYNTHETIC_V1_VALUE_IDS).toEqual(['live-cruise-control', 'live-route-remaining', 'live-deadline', 'live-mandatory-break', 'live-source-city', 'live-source-company', 'live-destination-company',
+    expect(SYNTHETIC_V1_VALUE_IDS).toEqual(['live-cruise-control', 'live-speed-limit', 'live-route-remaining', 'live-deadline', 'live-mandatory-break', 'live-source-city', 'live-source-company', 'live-destination-company',
       'live-cargo-mass', 'live-market', 'live-special-job', 'live-truck-plate', 'live-trailers', 'live-position', 'live-bearing', 'live-game-mode', 'live-event-loss']);
   });
   it('labels the v1 rows', () => {

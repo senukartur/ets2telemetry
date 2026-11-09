@@ -9,8 +9,8 @@
 #include <variant>
 #include <vector>
 
-// Durable telemetry protocol 1.0 to 1.3 (ET-002b; minor 1, the gearbox state, is ET-050b; minor 2, the next mandatory
-// break, is ET-052; minor 3, the cruise control speed, is ET-071): the C++17 counterpart of
+// Durable telemetry protocol 1.0 to 1.4 (ET-002b; minor 1, the gearbox state, is ET-050b; minor 2, the next mandatory
+// break, is ET-052; minor 3, the cruise control speed, is ET-071; minor 4, the speed limit, is ET-084): the C++17 counterpart of
 // packages/contracts/src/protocol-v1.ts. It is a separate major
 // from the frozen v0 live protocol and from CAP0, and reuses only the bounded strict JSON layer (v0::Json, the parser
 // and the serializer). The wire format is specified in docs/protocol/v1.md.
@@ -19,11 +19,11 @@ using Json = v0::Json;
 // Version 1.0: every hello, and every message of a connection that selected minor 0.
 constexpr unsigned protocol_major = 1, protocol_minor = 0;
 // The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7); minor 2
-// adds `state.nextMandatoryBreak` on top of it (ET-052 MB1), and minor 3 adds `state.cruiseControl` (ET-071). Every
+// adds `state.nextMandatoryBreak` on top of it (ET-052 MB1), minor 3 adds `state.cruiseControl` (ET-071) and minor 4 adds `state.speedLimit` (ET-084). Every
 // stateless entry point below takes a `max_minor` that defaults to 0, so a caller accepts or writes a message above
 // minor 0 only when it opts in; a maximum above `highest_minor` is a caller error and throws ProtocolError. The plugin
 // endpoint serves up to this minor (v1-server.cpp) and the broker accepts up to it.
-constexpr unsigned highest_minor = 3;
+constexpr unsigned highest_minor = 4;
 // Gearbox bounds of minor 1 (ET-050b B2). A producer marks a reading outside them `invalid`, never truncated.
 struct GearboxLimits { unsigned max_gears, max_selector_count, max_slots, max_handle_position; };
 constexpr GearboxLimits gearbox_limits{100, 6, 64, 255};
@@ -83,12 +83,14 @@ struct Gearbox { Available<unsigned> forward_gears, reverse_gears; Available<HSh
 // `minor` is the selected minor the welcome announces; it equals the welcome's envelope minor.
 struct WelcomeView { unsigned minor = 0; bool durable_events = false, gameplay_events_registered = false; std::vector<std::string> event_types; GameMode game_mode; };
 // `gearbox` is set exactly for a state of minor 1 or higher; `next_mandatory_break` (ET-052 MB1) exactly for a minor-2 or
-// minor-3 state, and `cruise_control` (ET-071) exactly for a minor-3 state. The break is a `Measure` of unit "min" whose
-// value is a plain signed s32 integer (negative means overdue, zero is a value). The cruise control speed is a `Measure`
-// of unit "m/s" in [0, 1000]; zero means cruise control is off and is a value, never unavailable.
+// later state, `cruise_control` (ET-071) exactly for a minor-3 or minor-4 state and `speed_limit` (ET-084) exactly for a
+// minor-4 state. The break is a `Measure` of unit "min" whose value is a plain signed s32 integer (negative means overdue,
+// zero is a value). The cruise control speed is a `Measure` of unit "m/s" in [0, 1000]; zero means cruise control is off
+// and is a value, never unavailable. The speed limit is a `Measure` of unit "m/s" in [-1000, 1000]; zero or negative means
+// no limit and is a value, never unavailable.
 struct StateView {
   std::optional<std::uint64_t> boundary_seq; std::uint64_t boundary_order = 0; SourceStatus status; Continuity continuity;
-  std::optional<Gearbox> gearbox; std::optional<Measure> next_mandatory_break, cruise_control;
+  std::optional<Gearbox> gearbox; std::optional<Measure> next_mandatory_break, cruise_control, speed_limit;
 };
 struct Occurrence {
   Available<std::uint64_t> monotonic_ns; GameTimeStamp game_time; Available<std::uint64_t> utc_unix_ms;

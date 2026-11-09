@@ -136,15 +136,16 @@ struct HShifterPod { std::uint32_t selector_count = 0; std::array<HShifterSlotRa
 struct GearboxPod { Field<std::uint32_t> forward_gears, reverse_gears; Field<HShifterPod> hshifter; };
 // Current state in SDK units: speed m/s, fuel L, odometer and range km, consumption L/km, navigation distance m.
 // `gearbox` is encoded from minor 1, `next_mandatory_break_min` (SDK s32 game minutes, negative is overdue and zero is a
-// value) from minor 2 and `cruise_control_mps` (SDK float m/s, zero is off and a value, ET-071) only on a minor-3
-// connection; a lower minor ignores them.
+// value) from minor 2, `cruise_control_mps` (SDK float m/s, zero is off and a value, ET-071) from minor 3 and
+// `speed_limit_mps` (SDK float m/s, zero and negative mean no limit and are values, ET-084) only on a minor-4 connection;
+// a lower minor ignores them.
 struct StatePod {
   SimulationState simulation = SimulationState::unavailable;
   Field<double> speed_mps, fuel_l, fuel_capacity_l, engine_rpm; Field<std::int32_t> gear;
   Field<double> odometer_km, average_consumption_l_per_km, estimated_range_km, navigation_distance_m;
   GameTimePod game_time; Field<std::uint64_t> capture_utc_unix_ms; std::uint64_t boundary_order = 0;
   Field<PlacementPod> world_placement; ConfigurationPod configuration; Field<WindowPod> window; GearboxPod gearbox; Field<std::int32_t> next_mandatory_break_min;
-  Field<double> cruise_control_mps;
+  Field<double> cruise_control_mps, speed_limit_mps;
 };
 enum class GameId : std::uint8_t { ets2 = 0, ats = 1 };
 enum class Origin : std::uint8_t { game = 0, synthetic = 1, replay = 2 };

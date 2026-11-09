@@ -1,0 +1,12 @@
+normal 1 C:hello,S:welcome,S:checkpoint,S:event-job-configured,A:1,S:snapshot,C:clock-probe,S:clock-reply,C:ack-1,S:end accept 1
+limit-availability 1 S:welcome,S:checkpoint,S:snapshot,S:snapshot-limit-zero,S:snapshot-limit-negative,S:snapshot-limit-max,S:snapshot-limit-min,S:snapshot-limit-not-observed,S:snapshot-limit-not-supported,S:snapshot-limit-invalid accept 0
+minor-change-snapshot 1 S:welcome,S:checkpoint,S:snapshot-minor-3 reject@2
+minor-change-event 1 S:welcome,S:checkpoint,S:event-job-configured-minor-3 reject@2
+minor-change-checkpoint 1 S:welcome,S:checkpoint-minor-3 reject@1
+ack-minor-3 1 S:welcome,S:checkpoint,S:event-job-configured,C:ack-1-minor-3 reject@3
+probe-minor-3 1 S:welcome,S:checkpoint,C:clock-probe-minor-3 reject@2
+old-plugin-minor-3 1 C:hello-offer-3,S:welcome-minor-3,S:checkpoint-minor-3,S:event-job-configured-minor-3,A:1,S:snapshot-minor-3,C:ack-1-minor-3 accept 1
+old-plugin-minor-0 1 S:welcome-minor-0,S:checkpoint-minor-0,S:event-job-configured-minor-0,A:1,S:snapshot-minor-0,C:ack-1-minor-0 accept 1
+old-plugin-minor-change 1 S:welcome-minor-3,S:checkpoint reject@1
+old-plugin-ack-minor-4 1 S:welcome-minor-3,S:checkpoint-minor-3,S:event-job-configured-minor-3,C:ack-1 reject@3
+old-plugin-probe-minor-4 1 S:welcome-minor-0,S:checkpoint-minor-0,C:clock-probe reject@2

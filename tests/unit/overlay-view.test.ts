@@ -1,6 +1,7 @@
 import {expect, it} from 'vitest';
 import type {OverlayPresentation} from '../../packages/contracts/src';
 import {overlayView, overlayCardParts} from '../../apps/desktop/src/overlay-view';
+import {staleOverlay} from '../../apps/desktop/src/overlay-sections';
 
 // The overlay renderer's view model (ET-012a): arrangement only. React components are not unit-tested (decision L14);
 // the runtime overlay smoke reads the rendered DOM.
@@ -253,4 +254,83 @@ it('keeps the Hard Mode indicator apart from the sections and shows anything but
   expect(overlayView(base).hardMode).toMatchObject({state: 'inactive', name: 'Hard Mode not active'});
   const malformed = {...base, hardMode: {state: 'active', passed: 12}} as unknown as OverlayPresentation;
   expect(overlayView(malformed).hardMode).toMatchObject({state: 'inactive', cue: 'none', name: 'Hard Mode not active'});
+});
+
+// ET-084 (REG-009, REG-016): the speed limit road sign. The numbers, units and names are written by hand from strings.ts. The
+// shape follows the game: a rectangle for ATS, otherwise a circle. Three digits only change `digits`. No limit and no reading
+// are the same dashed sign without a unit, told apart only by the accessible name.
+const limitSection = (text?: string): OverlayPresentation['sections'][number] => text === undefined ? {id: 'speed-limit', state: 'unavailable'} : {id: 'speed-limit', state: 'value', text};
+const limitItem = (source: string, speedUnit: string, language: 'en' | 'ru', text?: string) =>
+  overlayView({...base, source, speedUnit, language, sections: [limitSection(text)]} as OverlayPresentation).items[0];
+it.each([
+  ['ETS2', 'km/h', 'en', '90 km/h', 'circle', '90', 2, 'km/h', 'Speed limit: 90 km/h'],
+  ['ETS2', 'km/h', 'ru', '90 km/h', 'circle', '90', 2, 'км/ч', 'Ограничение скорости: 90 км/ч'],
+  ['ETS2', 'km/h', 'en', '120 km/h', 'circle', '120', 3, 'km/h', 'Speed limit: 120 km/h'],
+  ['ETS2', 'mph', 'en', '56 mph', 'circle', '56', 2, 'mph', 'Speed limit: 56 mph'],
+  ['ATS', 'mph', 'en', '65 mph', 'rectangle', '65', 2, 'mph', 'Speed limit: 65 mph'],
+  ['ATS', 'mph', 'ru', '65 mph', 'rectangle', '65', 2, 'миль/ч', 'Ограничение скорости: 65 миль/ч'],
+  ['ATS', 'km/h', 'en', '100 km/h', 'rectangle', '100', 3, 'km/h', 'Speed limit: 100 km/h']
+] as const)('builds the %s sign in %s %s for %s', (source, speedUnit, language, text, shape, number, digits, unit, name) => {
+  expect(limitItem(source, speedUnit, language, text)).toMatchObject({id: 'speed-limit', testId: 'overlay-speed-limit', value: number, unit, unavailable: false,
+    sign: {shape, state: 'limit', number, digits, name}});
+});
+it.each([
+  ['ETS2', 'circle'], ['ATS', 'rectangle']
+] as const)('draws no limit and no reading on the same dashed %s sign, without a unit', (source, shape) => {
+  const speedUnit = source === 'ATS' ? 'mph' : 'km/h';
+  for (const [language, none, unavailable] of [['en', 'Speed limit: no limit', 'Speed limit: unavailable'],
+    ['ru', 'Ограничение скорости: без ограничения', 'Ограничение скорости: нет данных']] as const) {
+    const noLimit = limitItem(source, speedUnit, language, 'none'), missing = limitItem(source, speedUnit, language);
+    expect(noLimit, language).toMatchObject({value: '—', unavailable: false, sign: {shape, state: 'no-limit', number: '—', digits: 1, name: none}});
+    expect(missing, language).toMatchObject({value: '—', unavailable: true, sign: {shape, state: 'no-limit', number: '—', digits: 1, name: unavailable}});
+    expect(noLimit.unit, language).toBeUndefined(); expect(missing.unit, language).toBeUndefined();
+    expect({...noLimit.sign, name: ''}, language).toEqual({...missing.sign, name: ''});
+  }
+});
+it('keeps the speed limit label beside the sign and localizes it', () => {
+  expect(limitItem('ETS2', 'km/h', 'en', '90 km/h')).toMatchObject({label: 'Speed limit', short: 'Limit'});
+  expect(limitItem('ETS2', 'km/h', 'ru', '90 km/h')).toMatchObject({label: 'Ограничение скорости', short: 'Лимит'});
+});
+it('keeps the sign and its shape when the preload expires a shown section, with the unavailable name', () => {
+  const shown: OverlayPresentation = {...base, source: 'ATS', speedUnit: 'mph', sections: [limitSection('65 mph')]};
+  expect(overlayView(staleOverlay(shown)).items[0]).toMatchObject({value: '—', unavailable: true,
+    sign: {shape: 'rectangle', state: 'no-limit', number: '—', digits: 1, name: 'Speed limit: unavailable'}});
+  expect(overlayView({...shown, sections: [{id: 'speed-limit', state: 'unavailable'}]}).dim).toBe(false);
+  expect(overlayView(staleOverlay(shown)).dim).toBe(true);
+});
+it('sets a sign only on the speed limit item and places it in the driving group, on the cluster gauge and in the card hero', () => {
+  const sections: OverlayPresentation['sections'] = [{id: 'speed', state: 'value', text: '90 km/h'}, {id: 'gear', state: 'value', text: 'N'}, {id: 'rpm', state: 'value', text: '600 rpm', ring: 0.2},
+    {id: 'cruise-control', state: 'value', text: 'off'}, limitSection('90 km/h'), {id: 'fuel', state: 'value', text: '73.0 L'}];
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    const view = overlayView({...base, layout, sections});
+    expect(view.items.filter(item => item.sign).map(item => item.id), layout).toEqual(['speed-limit']);
+    expect(view.groups.map(group => [group.id, group.items.map(item => item.id)]), layout).toEqual([['driving', ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit']], ['fuel', ['fuel']]]);
+    // The sign never takes a side panel row, and the gauge still shows only speed, gear and RPM.
+    expect(view.panel.map(item => item.id), layout).toEqual(['cruise-control', 'fuel']);
+    const parts = overlayCardParts(view);
+    expect(parts.hero.map(item => item.id), layout).toEqual(['speed', 'gear', 'rpm']);
+    expect(parts.sign?.id, layout).toBe('speed-limit');
+    expect(parts.rows.map(item => item.id), layout).toEqual(['cruise-control', 'fuel']);
+    expect(parts.heroHeight, layout).toBe(96);
+  }
+});
+it('stands the cluster sign alone without a gauge section and keeps it out of the panel', () => {
+  const view = overlayView({...base, layout: 'cluster', sections: [limitSection('90 km/h'), {id: 'fuel', state: 'value', text: '73.0 L'}]});
+  expect(view.gauge).toBeUndefined();
+  expect(view.items.find(item => item.sign)?.id).toBe('speed-limit');
+  expect(view.panel.map(item => item.id)).toEqual(['fuel']);
+});
+it('sizes the card hero for all eight subsets of speed, gear and RPM with the sign, and for the parts alone without it', () => {
+  const ids = ['speed', 'gear', 'rpm'] as const;
+  // Hand-derived (plan table): three parts + the sign 96, every other subset the 74 px slot; without the sign 24 px per part.
+  for (let mask = 0; mask < 8; mask++) {
+    const chosen = ids.filter((_id, index) => (mask & (1 << index)) !== 0);
+    const rows = [...chosen.map(id => ({id, state: 'unavailable' as const})), {id: 'fuel', state: 'value', text: '0.0 L'} as const];
+    const withSign = overlayCardParts(overlayView({...base, layout: 'card', sections: [...rows, limitSection('90 km/h')]}));
+    expect(withSign.heroHeight, chosen.join()).toBe(chosen.length === 3 ? 96 : 74);
+    expect(withSign.sign?.id, chosen.join()).toBe('speed-limit');
+    const without = overlayCardParts(overlayView({...base, layout: 'card', sections: rows}));
+    expect(without.heroHeight, chosen.join()).toBe(chosen.length * 24);
+    expect(without.sign, chosen.join()).toBeUndefined();
+  }
 });

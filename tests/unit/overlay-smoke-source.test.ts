@@ -232,21 +232,25 @@ describe('ET-012c strip containment observation', () => {
 });
 
 describe('ET-012d card, cluster and HUD containment observation', () => {
-  // Hand-derived from the shared v0 and v1 smoke fixtures (SYNTHETIC_V1_STRIP_SECTIONS): the fourteen sections the
+  // Hand-derived from the shared v0 and v1 smoke fixtures (SYNTHETIC_V1_STRIP_SECTIONS): the fifteen sections the
   // telemetry smoke shows (twelve before ET-052 added the 95-minute break, thirteen before ET-071 added the 25 m/s cruise
-  // control), in canonical order, which is also the cluster's DOM order (gauge, then panel).
-  const EXPECTED = ['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
+  // control, fourteen before ET-084 added the 22.5 m/s speed limit), in canonical order.
+  const EXPECTED = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
     'expected-income', 'game-time', 'mandatory-break'];
-  // The reserved CSS heights for those fourteen sections and ET-070's fixed Hard Mode row: card 48 + 24 × 15 = 408, cluster
-  // 36 + 21 × 12 = 288 and HUD 18 + 24 × 15 = 378. ET-045e: the product windows at the scale setting 1 (zoom 0.7) are, in
-  // DIP, ET-071 re-derived: the card ceil(406 × 0.7 + 2) = ceil(286.2) = 287 high by round(300 × 0.7) = 210, the cluster 308
-  // wide and ceil(286 × 0.7 + 2) = ceil(202.2) = 203 high, and the HUD ceil(378 × 0.7) = ceil(264.6) = 265 high by 224. Their
-  // CSS viewports, which the fake documents below fill, are 300 × 410 (287 / 0.7 = 410), 440 × 290 (203 / 0.7 = 290) and
-  // 320 × 379 (265 / 0.7 = 378.57).
-  const WINDOWS = {card: {width: 210, height: 287}, cluster: {width: 308, height: 203}, hud: {width: 224, height: 265}};
+  // ET-084: the card and the cluster draw the sign with the hero or the gauge, so it comes before cruise control in their DOM;
+  // the HUD's lines are in canonical order.
+  const HERO = ['speed', 'gear', 'rpm', 'speed-limit'];
+  const domOrder = (layout: string) => layout === 'hud' ? EXPECTED : [...HERO, ...EXPECTED.filter(id => !HERO.includes(id))];
+  // The reserved CSS heights for those fifteen sections and ET-070's fixed Hard Mode row, ET-084 re-derived: card 48 + 24 × 16 = 432,
+  // cluster 36 + 21 × 12 = 288 (the sign has no panel row) and HUD 18 + 24 × 16 = 402. ET-045e: the product windows at the scale
+  // setting 1 (zoom 0.7) are, in DIP: the card ceil(430 × 0.7 + 2) = ceil(303) = 303 high by round(300 × 0.7) = 210, the
+  // cluster 308 wide and ceil(286 × 0.7 + 2) = ceil(202.2) = 203 high, and the HUD ceil(402 × 0.7) = ceil(281.4) = 282 high by
+  // 224. Their CSS viewports, which the fake documents below fill, are 300 × 433 (303 / 0.7 = 432.86), 440 × 290 (203 / 0.7 = 290)
+  // and 320 × 403 (282 / 0.7 = 402.86).
+  const WINDOWS = {card: {width: 210, height: 303}, cluster: {width: 308, height: 203}, hud: {width: 224, height: 282}};
   const ZOOM = 0.7;
-  const VIEWPORTS = {card: {width: 300, height: 410}, cluster: {width: 440, height: 290}, hud: {width: 320, height: 379}};
-  const RESERVED = {card: 408, cluster: 288, hud: 378};
+  const VIEWPORTS = {card: {width: 300, height: 433}, cluster: {width: 440, height: 290}, hud: {width: 320, height: 403}};
+  const RESERVED = {card: 432, cluster: 288, hud: 402};
   type LayoutName = keyof typeof WINDOWS;
   type Box = {left: number; top: number; width: number; height: number};
   interface Containment {layout?: string; sections?: string[]; roots?: number; indicators?: number; freshness?: string; viewport?: {innerWidth: number; innerHeight: number};
@@ -260,7 +264,7 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
    * layout's surface, which the sections' `closest` finds, named as in renderer.css. ET-070: the fixed Hard Mode indicator
    * is the surface's last row, under the id 'hard-mode' in `item` and `value`; `indicators` sets how many the root holds.
    */
-  function containmentDocument(layout: LayoutName, {layout: rendered = layout, sections = EXPECTED, roots = 1, indicators = 1, freshness = 'current', clip, item = {},
+  function containmentDocument(layout: LayoutName, {layout: rendered = layout, sections = domOrder(layout), roots = 1, indicators = 1, freshness = 'current', clip, item = {},
     value = {}, truncated = []}: Containment = {}) {
     const window = VIEWPORTS[layout], rootBox = {left: 0, top: 0, width: window.width, height: window.height};
     const container = (box: Box, overflow: string, parentElement: unknown, className = '') => ({overflow, parentElement, className, getBoundingClientRect: () => rect(box)});
@@ -277,8 +281,8 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     const clipped = layout === 'cluster' ? panel : clip ? container(clip, 'hidden', body, SURFACE) : body;
     let row = 0;
     for (const id of [...sections, ...Array.from({length: indicators}, () => 'hard-mode')]) {
-      const inGauge = layout === 'cluster' && ['speed', 'gear', 'rpm'].includes(id);
-      const box = item[id] ?? (inGauge ? {left: 50, top: window.height - 150 + ['speed', 'gear', 'rpm'].indexOf(id) * 30, width: 100, height: 24}
+      const inGauge = layout === 'cluster' && HERO.includes(id);
+      const box = item[id] ?? (inGauge ? {left: 50, top: window.height - 150 + HERO.indexOf(id) * 30, width: 100, height: 24}
         : {left: (layout === 'cluster' ? 220 : 10), top: 28 + 21 * row++, width: 200, height: 18});
       const valueBox = value[id] ?? {left: box.left + 100, top: box.top + 1, width: 60, height: 16};
       (id === 'hard-mode' ? hardModes : nodes).push({parentElement: inGauge ? gauge : clipped, closest: (selector: string) => !inGauge && selector === SURFACES ? clipped : null,
@@ -336,44 +340,56 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
       expect(frame, layout).toEqual({width: product.width, height: layout === 'strip' ? Math.max(38, product.height) : product.height});
     }
   });
-  // ET-070: the fake rows end with the Hard Mode indicator's; ET-071's cruise control row moves it to 28 + 21 × 14 + 18 = 340
-  // in the card and HUD (319 before) and to 28 + 21 × 11 + 18 = 277 in the cluster panel (256).
-  const BOTTOM = {card: 340, cluster: 277, hud: 340};
-  // Each surface fills the viewport's height: the card body and HUD lines from 0 to 410 and 379, the cluster panel to 290.
-  const SURFACE = {card: {className: 'overlay-surface overlay-card-body', top: 0, bottom: 410, inside: true},
-    cluster: {className: 'overlay-surface overlay-panel', top: 0, bottom: 290, inside: true}, hud: {className: 'overlay-hud-lines', top: 0, bottom: 379, inside: true}};
+  // ET-070: the fake rows end with the Hard Mode indicator's; ET-084's speed limit row moves it to 28 + 21 × 15 + 18 = 361
+  // in the card and HUD (340 before) and leaves it at 28 + 21 × 11 + 18 = 277 in the cluster panel.
+  const BOTTOM = {card: 361, cluster: 277, hud: 361};
+  // Each surface fills the viewport's height: the card body and HUD lines from 0 to 433 and 403, the cluster panel to 290.
+  const SURFACE = {card: {className: 'overlay-surface overlay-card-body', top: 0, bottom: 433, inside: true},
+    cluster: {className: 'overlay-surface overlay-panel', top: 0, bottom: 290, inside: true}, hud: {className: 'overlay-hud-lines', top: 0, bottom: 403, inside: true}};
   it.each(['card', 'cluster', 'hud'] as const)('reports every shown %s section inside the window and records truncation', async layout => {
     expect(await observeLayout(layout, {truncated: ['origin']})).toEqual({layout, viewport: {innerWidth: VIEWPORTS[layout].width, innerHeight: VIEWPORTS[layout].height},
-      sections: EXPECTED, fixed: ['hard-mode'], outside: [], clipped: [], bottom: BOTTOM[layout], surfaces: [SURFACE[layout]], truncated: ['origin']});
+      sections: domOrder(layout), fixed: ['hard-mode'], outside: [], clipped: [], bottom: BOTTOM[layout], surfaces: [SURFACE[layout]], truncated: ['origin']});
+  });
+  // ET-084: the card and the cluster place the sign before cruise control in the DOM, the HUD in canonical order, and the
+  // observation accepts each layout's own order only.
+  it('expects the speed limit with the hero in the card and cluster and in canonical order in the HUD', async () => {
+    expect(domOrder('card').slice(0, 5)).toEqual(['speed', 'gear', 'rpm', 'speed-limit', 'cruise-control']);
+    expect(domOrder('hud').slice(0, 5)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit']);
+    for (const layout of ['card', 'cluster'] as const) {
+      expect(await observeLayout(layout), layout).toMatchObject({sections: domOrder(layout)});
+      expect(await observeLayout(layout, {sections: EXPECTED}), layout).toBe(false);
+    }
+    expect(await observeLayout('hud')).toMatchObject({sections: EXPECTED});
+    expect(await observeLayout('hud', {sections: domOrder('card')})).toBe(false);
   });
   it.each<{name: string; layout: 'card' | 'cluster' | 'hud'; options: Containment}>([
-    // ET-071: the card viewport is 410 high, so a row from 400 ends 8 px below it.
-    {name: 'below the card window', layout: 'card' as const, options: {item: {'game-time': {left: 10, top: 400, width: 200, height: 18}}}},
-    // ET-071: the HUD viewport is 379 high, so a row from 370 ends 9 px below it (ET-070's 340 now ends inside).
-    {name: 'partly below the HUD window', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 370, width: 200, height: 18}}}},
+    // ET-084: the card viewport is 433 high, so a row from 425 ends 10 px below it.
+    {name: 'below the card window', layout: 'card' as const, options: {item: {'game-time': {left: 10, top: 425, width: 200, height: 18}}}},
+    // ET-084: the HUD viewport is 403 high, so a row from 395 ends 10 px below it.
+    {name: 'partly below the HUD window', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 395, width: 200, height: 18}}}},
     // ET-012a's cluster panel was capped at 200 px and clipped its last row inside a taller window.
     {name: 'outside only the clipping cluster panel', layout: 'cluster' as const,
       // ET-052: the break's default row would lie outside the 200 px panel as well, so it is moved inside it; ET-070 moves
       // the Hard Mode indicator's inside it too, and ET-071 expected income's (196 to 214, after the cruise control row).
       options: {clip: {left: 210, top: 0, width: 230, height: 200}, item: {'game-time': {left: 220, top: 205, width: 200, height: 18}, 'mandatory-break': {left: 220, top: 100, width: 200, height: 18},
         'hard-mode': {left: 220, top: 120, width: 200, height: 18}, 'expected-income': {left: 220, top: 80, width: 200, height: 18}}}},
-    // ET-071: expected income's row ends at 28 + 21 × 11 + 18 = 277, inside the 280 px body; game time is moved below it, and
-    // the break and the indicator are moved inside it.
+    // ET-084: the deadline's row ends at 28 + 21 × 11 + 18 = 277, inside the 280 px body; game time is moved below it, and
+    // expected income, the break and the indicator are moved inside it.
     {name: 'outside only the clipping card body', layout: 'card' as const,
-      options: {clip: {left: 0, top: 0, width: 300, height: 280}, item: {'game-time': {left: 10, top: 282, width: 200, height: 18}, 'mandatory-break': {left: 10, top: 100, width: 200, height: 18},
-        'hard-mode': {left: 10, top: 120, width: 200, height: 18}}}},
+      options: {clip: {left: 0, top: 0, width: 300, height: 280}, item: {'game-time': {left: 10, top: 282, width: 200, height: 18}, 'expected-income': {left: 10, top: 80, width: 200, height: 18},
+        'mandatory-break': {left: 10, top: 100, width: 200, height: 18}, 'hard-mode': {left: 10, top: 120, width: 200, height: 18}}}},
     {name: 'with an empty box', layout: 'hud' as const, options: {item: {'game-time': {left: 10, top: 259, width: 0, height: 18}}}}
   ])('lists a section $name as outside', async ({layout, options}) => {
     expect(await observeLayout(layout, options)).toMatchObject({outside: ['game-time'], clipped: []});
   });
   it.each<{name: string; layout: 'card' | 'cluster' | 'hud'; options: Containment; outside: string[]; clipped: string[]}>([
-    // ET-071: the card viewport is 410 high: a row from 400 ends 8 px below it.
-    {name: 'below the card window', layout: 'card', options: {item: {'hard-mode': {left: 10, top: 400, width: 200, height: 18}}}, outside: ['hard-mode'], clipped: []},
+    // ET-084: the card viewport is 433 high: a row from 425 ends 10 px below it.
+    {name: 'below the card window', layout: 'card', options: {item: {'hard-mode': {left: 10, top: 425, width: 200, height: 18}}}, outside: ['hard-mode'], clipped: []},
     // The panel's last default row, the indicator's, ends at 277 and the clip at 270; the break's ends at 256, inside it.
     {name: 'outside the clipping cluster panel', layout: 'cluster', options: {clip: {left: 210, top: 0, width: 230, height: 270}},
       outside: ['hard-mode'], clipped: []},
-    // The indicator's HUD row is {10, 322, 200, 18}; a value from 331 ends 7 px below it.
-    {name: 'with its value below its row', layout: 'hud', options: {value: {'hard-mode': {left: 110, top: 331, width: 60, height: 16}}}, outside: [], clipped: ['hard-mode']}
+    // The indicator's HUD row is {10, 343, 200, 18} (ET-084); a value from 352 ends 7 px below it.
+    {name: 'with its value below its row', layout: 'hud', options: {value: {'hard-mode': {left: 110, top: 352, width: 60, height: 16}}}, outside: [], clipped: ['hard-mode']}
   ])('checks the Hard Mode indicator $name like a section, under its fixed name', async ({layout, options, outside, clipped}) => {
     expect(await observeLayout(layout, options)).toMatchObject({fixed: ['hard-mode'], outside, clipped});
   });
@@ -382,24 +398,24 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     expect(await observeLayout('cluster', {item: {speed: {left: 150, top: 117, width: 100, height: 24}}})).toMatchObject({outside: [], clipped: []});
   });
   it.each([
-    // Cargo's card row is {10, 154, 200, 18}: 28 + 21 × 6 since ET-071's cruise control row.
-    {name: 'taller than its row', value: {left: 110, top: 152, width: 60, height: 22}},
-    {name: 'above its row', value: {left: 110, top: 153, width: 60, height: 16}},
-    {name: 'below its row', value: {left: 110, top: 157, width: 60, height: 16}}
+    // Cargo's card row is {10, 175, 200, 18}: 28 + 21 × 7 since ET-084's speed limit row.
+    {name: 'taller than its row', value: {left: 110, top: 173, width: 60, height: 22}},
+    {name: 'above its row', value: {left: 110, top: 174, width: 60, height: 16}},
+    {name: 'below its row', value: {left: 110, top: 178, width: 60, height: 16}}
   ])('lists a value $name as clipped', async ({value}) => {
     expect(await observeLayout('card', {value: {cargo: value}})).toMatchObject({outside: [], clipped: ['cargo']});
   });
   it('accepts a value that fills its row exactly, also with float noise, and only within 0.01 px', async () => {
-    expect(await observeLayout('card', {value: {cargo: {left: 110, top: 154, width: 60, height: 18}}})).toMatchObject({outside: [], clipped: []});
+    expect(await observeLayout('card', {value: {cargo: {left: 110, top: 175, width: 60, height: 18}}})).toMatchObject({outside: [], clipped: []});
     // The development smoke's cluster RPM value: 205.7291717529297 to 221.3229217529297 in a row ending at 221.32291793823242.
     expect(await observeLayout('cluster', {item: {rpm: {left: 70, top: 203.0625, width: 60, height: 18.260417938232422}},
       value: {rpm: {left: 75, top: 205.7291717529297, width: 50, height: 15.59375}}})).toMatchObject({outside: [], clipped: []});
-    expect(await observeLayout('card', {value: {cargo: {left: 110, top: 154, width: 60, height: 18.02}}})).toMatchObject({clipped: ['cargo']});
+    expect(await observeLayout('card', {value: {cargo: {left: 110, top: 175, width: 60, height: 18.02}}})).toMatchObject({clipped: ['cargo']});
     // A HUD line flush with the bottom of its clipping container, with noise, is inside; 0.02 px past it is outside.
-    // ET-070: the lowest default row is the Hard Mode indicator's, ending at 340 since ET-071 (319 before, the break's 298 before ET-070).
-    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 340}, item: {'hard-mode': {left: 10, top: 322, width: 200, height: 18.000004}}}))
+    // ET-070: the lowest default row is the Hard Mode indicator's, ending at 361 since ET-084 (340 before, 319 before ET-071, the break's 298 before ET-070).
+    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 361}, item: {'hard-mode': {left: 10, top: 343, width: 200, height: 18.000004}}}))
       .toMatchObject({outside: [], clipped: []});
-    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 340}, item: {'hard-mode': {left: 10, top: 322, width: 200, height: 18.02}}}))
+    expect(await observeLayout('hud', {clip: {left: 0, top: 0, width: 320, height: 361}, item: {'hard-mode': {left: 10, top: 343, width: 200, height: 18.02}}}))
       .toMatchObject({outside: ['hard-mode']});
   });
   it.each([
@@ -460,18 +476,18 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
   });
   it('requires the lowest section to end within the reserved height of the shown sections', async () => {
     const {verifyLayoutContainment} = await import(observationModule);
-    // A card row below the reserve but inside the window and its body: 48 + 24 × 15 = 408 CSS px reserved (ET-071), 410 window.
-    const low = await observeLayout('card', {item: {'mandatory-break': {left: 10, top: 392, width: 200, height: 18}}});
-    expect(low).toMatchObject({outside: [], clipped: [], bottom: 410});
+    // A card row below the reserve but inside the window and its body: 48 + 24 × 16 = 432 CSS px reserved (ET-084), 433 window.
+    const low = await observeLayout('card', {item: {'mandatory-break': {left: 10, top: 415, width: 200, height: 18}}});
+    expect(low).toMatchObject({outside: [], clipped: [], bottom: 433});
     expect(() => verifyLayoutContainment(low, WINDOWS.card, RESERVED.card, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
     // The Hard Mode indicator counts like a section: the same low row as the indicator fails the same way.
-    const lowIndicator = await observeLayout('card', {item: {'hard-mode': {left: 10, top: 392, width: 200, height: 18}}});
-    expect(lowIndicator).toMatchObject({outside: [], clipped: [], bottom: 410});
+    const lowIndicator = await observeLayout('card', {item: {'hard-mode': {left: 10, top: 415, width: 200, height: 18}}});
+    expect(lowIndicator).toMatchObject({outside: [], clipped: [], bottom: 433});
     expect(() => verifyLayoutContainment(lowIndicator, WINDOWS.card, RESERVED.card, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
     const valid = await observeLayout('card');
-    expect(verifyLayoutContainment({...valid, bottom: 408}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
-    expect(verifyLayoutContainment({...valid, bottom: 408.005}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
-    for (const bottom of [408.02, Number.NaN]) expect(() => verifyLayoutContainment({...valid, bottom}, WINDOWS.card, RESERVED.card, ZOOM), String(bottom))
+    expect(verifyLayoutContainment({...valid, bottom: 432}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
+    expect(verifyLayoutContainment({...valid, bottom: 432.005}, WINDOWS.card, RESERVED.card, ZOOM)).toBeTruthy();
+    for (const bottom of [432.02, Number.NaN]) expect(() => verifyLayoutContainment({...valid, bottom}, WINDOWS.card, RESERVED.card, ZOOM), String(bottom))
       .toThrow('Overlay sections extend below the height the row model reserves');
     expect(() => verifyLayoutContainment(valid, WINDOWS.card, undefined, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
   });
@@ -488,9 +504,9 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     // row lies lower; the indicator row ends at 277 (ET-071), so a speed box ending at 284 (top 260, height 24) is the lowest.
     expect(await observeLayout('cluster', {item: {speed: {left: 50, top: 260, width: 100, height: 24}}})).toMatchObject({bottom: 284});
     // Review pass 3 changed the requirement: a top-aligned surface pushed down from the root's top (a card body that
-    // starts 10 px down) is measured from the root's top, the higher of the two, so the offset counts: 340, not 340 − 10.
-    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 400}})).toMatchObject({bottom: 340,
-      surfaces: [{className: 'overlay-surface overlay-card-body', top: 10, bottom: 410, inside: true}]});
+    // starts 10 px down) is measured from the root's top, the higher of the two, so the offset counts: 361, not 361 − 10.
+    expect(await observeLayout('card', {clip: {left: 0, top: 10, width: 300, height: 423}})).toMatchObject({bottom: 361,
+      surfaces: [{className: 'overlay-surface overlay-card-body', top: 10, bottom: 433, inside: true}]});
   });
   it('rejects a surface outside the window and an unexpected number of surfaces', async () => {
     const {verifyLayoutContainment} = await import(observationModule);
@@ -500,10 +516,10 @@ describe('ET-012d card, cluster and HUD containment observation', () => {
     const inside = {...grown, surfaces: [{...grown.surfaces[0], inside: true}]};
     expect(() => verifyLayoutContainment(inside, WINDOWS.cluster, RESERVED.cluster, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
     // The reviewer's pass-3 case: a 20 px margin above the card body moves its last row, the Hard Mode indicator (ET-070), to
-    // {10, 392, 200, 18} (ET-071). From the root's top it ends at 410, past the 408 reserve; from the body's top it would end at
-    // 390 and pass.
-    const pushed = await observeLayout('card', {clip: {left: 0, top: 20, width: 300, height: 390}, item: {'hard-mode': {left: 10, top: 392, width: 200, height: 18}}});
-    expect(pushed).toMatchObject({outside: [], clipped: [], bottom: 410, surfaces: [{top: 20, inside: true}]});
+    // {10, 415, 200, 18} (ET-084). From the root's top it ends at 433, past the 432 reserve; from the body's top it would end at
+    // 413 and pass.
+    const pushed = await observeLayout('card', {clip: {left: 0, top: 20, width: 300, height: 413}, item: {'hard-mode': {left: 10, top: 415, width: 200, height: 18}}});
+    expect(pushed).toMatchObject({outside: [], clipped: [], bottom: 433, surfaces: [{top: 20, inside: true}]});
     expect(() => verifyLayoutContainment(pushed, WINDOWS.card, RESERVED.card, ZOOM)).toThrow('Overlay sections extend below the height the row model reserves');
     const valid = await observeLayout('cluster') as {surfaces: Record<string, unknown>[]};
     for (const surfaces of [[], [valid.surfaces[0], valid.surfaces[0]], undefined])

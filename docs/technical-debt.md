@@ -44,7 +44,7 @@ SDK 1.15 defines `bus_job` and `car_job` configurations and the `car_job.deliver
 
 Recorded October 15, 2026 by the coordinator during ET-010 planning. **This entry is a coordinator decision under the owner's standing delegation of October 15, 2026, not an individually owner-approved deferral** (see the ET-010 authorization in [DESIGN-DECISIONS.md](../DESIGN-DECISIONS.md#et-010-authorization--october-15-2026)). The owner may revise it.
 
-Protocol v1 does not carry throttle, brake and clutch inputs, navigation time, the navigation speed limit, the parking brake or lights (cruise control is carried since minor 3 and shown on the dashboard and the overlay). The ET-010 live dashboard therefore covers the MVP field set only: the concept §6 overlay metrics, the §7 sample fields, job, truck and trailer identity and source validity ([live telemetry fields](live-telemetry-fields.md)).
+Protocol v1 does not carry throttle, brake and clutch inputs, navigation time, the parking brake or lights (cruise control is carried since minor 3 and the navigation speed limit since minor 4, both shown on the dashboard and the overlay). The ET-010 live dashboard therefore covers the MVP field set only: the concept §6 overlay metrics, the §7 sample fields, job, truck and trailer identity and source validity ([live telemetry fields](live-telemetry-fields.md)).
 
 **Future work:**
 - Add these channels in a v1 minor revision with fixtures, in both the TypeScript and C++ representations.

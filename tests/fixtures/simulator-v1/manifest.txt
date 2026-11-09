@@ -26,3 +26,4 @@ client-control-faults
 wire-faults
 pipe-reconnect
 pipe-stalled-reader
+speed-limit

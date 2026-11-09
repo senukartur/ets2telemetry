@@ -234,11 +234,11 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
     expect(() => live.p.receive(ack('0'), 1n)).toThrow(ProtocolError);
   });
 
-  // ET-050b B1, ET-052, ET-071: the producer selects min(hello maxMinor, 3); minor-0 to minor-2 bytes stay the original ones.
+  // ET-050b B1, ET-052, ET-071, ET-084: the producer selects min(hello maxMinor, 4); minor-0 to minor-3 bytes stay the original ones.
   const helloOffering = (maxMinor: number, durable = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: '50000000-0000-4000-8000-000000000001', minMinor: 0, maxMinor, durableEvents: durable}});
   const M1 = {major: 1, minor: 1} as const;
-  it('serves minor 0 without a gearbox or break to a client that offers only minor 0, minor 1 with the gearbox, minor 2 with both, and minor 3 with cruise control too', () => {
-    for (const [offered, selected] of [[0, 0], [1, 1], [2, 2], [3, 3], [4, 3]] as const) {
+  it('serves minor 0 without a gearbox or break to a client that offers only minor 0, minor 1 with the gearbox, minor 2 with both, minor 3 with cruise control too, and minor 4 with the speed limit too', () => {
+    for (const [offered, selected] of [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 4]] as const) {
       const {adapter, p} = producer();
       adapter.configuration('truck', [{name: 'gears.forward', sdkType: 'u32', value: 12}, {name: 'gears.reverse', sdkType: 'u32', value: 4}], 'terminated', 0); adapter.frame(false, {}, 1);
       p.open(); const [welcome, checkpoint] = p.receive(helloOffering(offered), 1_000_002_000_000n);
@@ -246,11 +246,13 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
       const state = checkpoint.message.kind === 'checkpoint' ? checkpoint.message.data.state : undefined;
       if (selected === 0) expect(Object.hasOwn(state!, 'gearbox')).toBe(false);
       else expect(state!.gearbox).toEqual({forwardGears: {available: true, value: 12}, reverseGears: {available: true, value: 4}, hshifter: {available: false, reason: 'not-observed'}});
-      // The break key exists from minor 2 and cruise control at minor 3; neither channel was called back, so both are not-observed.
+      // The break key exists from minor 2, cruise control from minor 3 and the limit at minor 4; no channel was called back, so each is not-observed.
       expect(Object.hasOwn(state!, 'nextMandatoryBreak'), `offer ${offered}`).toBe(selected >= 2);
       if (selected >= 2) expect(state!.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'});
-      expect(Object.hasOwn(state!, 'cruiseControl'), `offer ${offered}`).toBe(selected === 3);
-      if (selected === 3) expect(state!.cruiseControl).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+      expect(Object.hasOwn(state!, 'cruiseControl'), `offer ${offered}`).toBe(selected >= 3);
+      if (selected >= 3) expect(state!.cruiseControl).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+      expect(Object.hasOwn(state!, 'speedLimit'), `offer ${offered}`).toBe(selected === 4);
+      if (selected === 4) expect(state!.speedLimit).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
       // Every later message of the connection, here a snapshot, keeps the selected minor.
       adapter.frame(false, {speed: 1}, 100);
       const snapshot = p.publication(1_000_100_000_000n)!;
@@ -293,6 +295,25 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
         const snapshot = p.publication(1_000_100_000_000n)!;
         expect(snapshot.message.version).toEqual(M3);
         expect(snapshot.message.kind === 'snapshot' && snapshot.message.data.state.cruiseControl).toEqual({available: true, value: 22.5, unit: 'm/s'});
+      }
+    }
+  });
+  it('serves the speed limit on a minor-4 connection exactly as the adapter holds it, and a lower minor never carries it (ET-084)', () => {
+    const M4 = {major: 1, minor: 4} as const;
+    for (const [value, expected] of [[25, {available: true, value: 25, unit: 'm/s'}], [0, {available: true, value: 0, unit: 'm/s'}], [-1, {available: true, value: -1, unit: 'm/s'}],
+      [1000, {available: true, value: 1000, unit: 'm/s'}], [-1000, {available: true, value: -1000, unit: 'm/s'}], [1000.5, {available: false, reason: 'invalid', unit: 'm/s'}],
+      [-1000.5, {available: false, reason: 'invalid', unit: 'm/s'}], [null, {available: false, reason: 'not-observed', unit: 'm/s'}], ['invalid', {available: false, reason: 'invalid', unit: 'm/s'}]] as const) {
+      for (const offered of [3, 4]) {
+        const {adapter, p} = producer();
+        adapter.frame(false, {'navigation.speed.limit': value}, 0);
+        p.open(); const [, checkpoint] = p.receive(helloOffering(offered), 1_000_002_000_000n);
+        const state = checkpoint.message.kind === 'checkpoint' ? checkpoint.message.data.state : undefined;
+        if (offered === 3) { expect(Object.hasOwn(state!, 'speedLimit'), `value ${value}`).toBe(false); continue; }
+        expect(state!.speedLimit, `value ${value}`).toEqual(expected);
+        adapter.frame(false, {'navigation.speed.limit': 22.5}, 100);
+        const snapshot = p.publication(1_000_100_000_000n)!;
+        expect(snapshot.message.version).toEqual(M4);
+        expect(snapshot.message.kind === 'snapshot' && snapshot.message.data.state.speedLimit).toEqual({available: true, value: 22.5, unit: 'm/s'});
       }
     }
   });

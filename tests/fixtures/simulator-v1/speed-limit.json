@@ -1,0 +1,19 @@
+{
+  "format": "ets2telemetry-simulator-v1", "schemaVersion": 1, "id": "speed-limit",
+  "purpose": "The optional navigation speed limit reaches a minor-4 client as a value in m/s: a limit, no limit as zero and as a negative reading, a callback without a value and a wrong-typed value. The channel is v1-only, so it advances no boundary order.",
+  "reg": ["REG-009", "REG-010"], "origin": "synthetic", "game": "ets2", "seed": "et084-speed-limit", "provenance": null,
+  "source": {"versions": {"telemetryApi": {"major": 1, "minor": 1}, "gameTelemetry": {"major": 1, "minor": 19}, "sdkArchive": "scs-sdk-1.15"}, "gameplayEvents": "not-supported", "currency": "unknown", "gameMode": "unknown"},
+  "steps": [
+    {"atMs": 0, "action": "frame", "channels": {"speed": 20, "navigation.speed.limit": 25}},
+    {"atMs": 110, "action": "frame", "channels": {"navigation.speed.limit": 13.75}},
+    {"atMs": 210, "action": "frame", "channels": {"navigation.speed.limit": 0}},
+    {"atMs": 310, "action": "frame", "channels": {"navigation.speed.limit": -1}},
+    {"atMs": 410, "action": "frame", "channels": {"navigation.speed.limit": null}},
+    {"atMs": 510, "action": "frame", "channels": {"navigation.speed.limit": "invalid"}},
+    {"atMs": 610, "action": "frame", "channels": {"navigation.speed.limit": 29.5}}
+  ],
+  "transport": [
+    {"atMs": 50, "action": "connect", "client": {"durable": true}},
+    {"atMs": 700, "action": "disconnect"}
+  ]
+}

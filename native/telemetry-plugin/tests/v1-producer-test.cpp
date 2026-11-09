@@ -955,6 +955,97 @@ void cruise_control_case(const Fixtures& f) {
   std::cout << "worst minor-3 checkpoint built " << heavy_frame.size() - 4 << " bytes; ";
 }
 
+
+// ET-084: the minor-4 `state.speedLimit` from the SDK float copy (m/s). The hand-written minor-4 corpus is the oracle: the
+// encoder's output must equal its fixtures, the lower minors must keep their bytes, and the minor-4 Consumer must accept
+// the encoder's stream.
+Message minor4(const Fixtures& f, const std::string& name) { return decode_payload(read(f.dir / "minor4" / (name + ".json")), Sender::server, 4); }
+Message roundtrip4(const Json& wire) { const auto frame = encode(wire, 4); return decode_payload(std::string(frame.begin() + 4, frame.end()), Sender::server, 4); }
+const Json& limit_node(const Json& message) { return field(field(field(message, "data"), "state"), "speedLimit"); }
+bool has_limit_key(const Json& message) { return std::get<Json::Object>(field(field(message, "data"), "state").value).count("speedLimit") != 0; }
+Field<double> limit_of(double mps) { return available_field<double>(mps); }
+Field<double> limit_unavailable(FieldState state) { Field<double> l; l.state = state; return l; }
+void speed_limit_case(const Fixtures& f) {
+  const Encoder encoder(identity());
+  StoreStatus delivery; StatusInfo status{single_player_weak(), true, delivery, {}};
+  // The checkpoint of minor4/checkpoint.json: the DAF 12-speed gearbox, a break of 95 minutes, a set speed of 22.5 m/s and a limit of 25 m/s.
+  auto checkpoint_state = fixture_state(100, 7, true); checkpoint_state.gearbox = gearbox_of(12, 4, daf_12()); checkpoint_state.next_mandatory_break_min = break_of(95);
+  checkpoint_state.cruise_control_mps = cruise_of(22.5); checkpoint_state.speed_limit_mps = limit_of(25);
+  const auto checkpoint = encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 4);
+  check(canonical(checkpoint) == canonical(with_ten_trailers(minor4(f, "checkpoint").wire)), "minor-4 checkpoint matches minor4/checkpoint");
+  check(canonical(roundtrip4(checkpoint).wire) == canonical(with_ten_trailers(minor4(f, "checkpoint").wire)), "minor-4 checkpoint encodes at minor 4");
+  // The snapshot of minor4/snapshot.json: counts without a layout, 95 minutes, 25 m/s set speed and a 22.5 m/s limit.
+  StoreStatus snap; snap.next_event_seq = 2; snap.retained_entries = 1; snap.retained_bytes = 1500; snap.oldest_retained_ns = 1000149000000ULL;
+  const StatusInfo snap_status{single_player_weak(), true, snap, {1, 0}};
+  auto snapshot_state = fixture_state(102, 8, false); snapshot_state.gearbox.forward_gears = available_field<std::uint32_t>(12); snapshot_state.gearbox.reverse_gears = available_field<std::uint32_t>(4);
+  snapshot_state.next_mandatory_break_min = break_of(95); snapshot_state.cruise_control_mps = cruise_of(25); snapshot_state.speed_limit_mps = limit_of(22.5);
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 4)) == canonical(with_ten_trailers(minor4(f, "snapshot").wire)), "minor-4 snapshot matches minor4/snapshot");
+  // Every value and reason against its hand-written fixture: zero and negative (no limit) are values, both bounds, and each
+  // unavailable reason; the sequence numbers and times are the fixtures' own.
+  struct Case { const char* fixture; std::uint64_t seq, ns; Field<double> value; };
+  const Case cases[]{
+    {"snapshot-limit-zero", 6, 1000300000000ULL, limit_of(0)}, {"snapshot-limit-negative", 7, 1000350000000ULL, limit_of(-1)},
+    {"snapshot-limit-max", 8, 1000400000000ULL, limit_of(1000)}, {"snapshot-limit-min", 9, 1000450000000ULL, limit_of(-1000)},
+    {"snapshot-limit-not-observed", 10, 1000500000000ULL, limit_unavailable(FieldState::not_observed)},
+    {"snapshot-limit-not-supported", 11, 1000550000000ULL, limit_unavailable(FieldState::not_supported)},
+    {"snapshot-limit-invalid", 12, 1000600000000ULL, limit_unavailable(FieldState::invalid)}};
+  for (const auto& c : cases) {
+    auto state = snapshot_state; state.speed_limit_mps = c.value;
+    const auto built = encoder.snapshot(c.seq, c.ns, state, snap_status, 4);
+    check(canonical(built) == canonical(with_ten_trailers(minor4(f, c.fixture).wire)), std::string(c.fixture) + " matches the fixture");
+    check(canonical(roundtrip4(built).wire) == canonical(with_ten_trailers(minor4(f, c.fixture).wire)), std::string(c.fixture) + " encodes");
+  }
+  // A default (zero-initialized) copy is not-observed, never an available zero.
+  check(canonical(limit_node(encoder.snapshot(1, 1, minimal_state(), {}, 4))) == canonical(limit_node(minor4(f, "snapshot-limit-not-observed").wire)), "a default copy is not-observed");
+  // The value is a plain JSON number in m/s, never rounded to an integer.
+  { auto state = snapshot_state; state.speed_limit_mps = limit_of(13.75); const auto built = encoder.snapshot(1, 1, state, snap_status, 4);
+    check(std::holds_alternative<double>(field(limit_node(built), "value").value) && field(limit_node(built), "value").number() == 13.75, "the limit value is a JSON number"); }
+  // A copy outside the bounds [-1000, 1000] or not finite never reaches the wire as a value: it encodes as invalid (§6).
+  for (const double bad : {-1000.5, 1000.5, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), -std::numeric_limits<double>::infinity()}) {
+    auto state = snapshot_state; state.speed_limit_mps = limit_of(bad);
+    check(canonical(encoder.snapshot(12, 1000600000000ULL, state, snap_status, 4)) == canonical(with_ten_trailers(minor4(f, "snapshot-limit-invalid").wire)), "an out-of-range limit copy encodes as invalid");
+  }
+  // Minor 0 to 3 never carry the limit, whatever the POD holds: the bytes equal the minor-4 corpus's lower-minor fixtures,
+  // the frozen corpora and the encoding of a state without the limit.
+  auto without_limit = checkpoint_state; without_limit.speed_limit_mps = {};
+  for (const unsigned minor : {0U, 1U, 2U, 3U}) {
+    check(encode(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, minor), minor) == encode(encoder.checkpoint(2, 1000100000000ULL, without_limit, status, minor), minor), "lower-minor checkpoint bytes identical with and without the limit");
+    check(!has_limit_key(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, minor)) && !has_limit_key(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, minor)), "no speed limit key below minor 4");
+  }
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 3)) == canonical(with_ten_trailers(minor4(f, "checkpoint-minor-3").wire)), "minor-3 checkpoint equals minor4/checkpoint-minor-3");
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 3)) == canonical(with_ten_trailers(minor3(f, "checkpoint").wire)), "minor-3 checkpoint equals minor3/checkpoint");
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 2)) == canonical(with_ten_trailers(minor2(f, "checkpoint").wire)), "minor-2 checkpoint equals minor2/checkpoint");
+  check(canonical(encoder.checkpoint(2, 1000100000000ULL, checkpoint_state, status, 0)) == canonical(with_ten_trailers(minor4(f, "checkpoint-minor-0").wire)), "minor-0 checkpoint equals minor4/checkpoint-minor-0");
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 3)) == canonical(with_ten_trailers(minor4(f, "snapshot-minor-3").wire)), "minor-3 snapshot equals minor4/snapshot-minor-3");
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 3)) == canonical(with_ten_trailers(minor3(f, "snapshot").wire)), "minor-3 snapshot equals minor3/snapshot");
+  check(canonical(encoder.snapshot(5, 1000250000000ULL, snapshot_state, snap_status, 0)) == canonical(with_ten_trailers(minor4(f, "snapshot-minor-0").wire)), "minor-0 snapshot equals minor4/snapshot-minor-0");
+  // The lower encoders refuse a minor-4 checkpoint.
+  rejects([&] { encode(checkpoint, 3); }, "a minor-3 encoder refuses a minor-4 checkpoint");
+  rejects([&] { encode(checkpoint, 1); }, "a minor-1 encoder refuses a minor-4 checkpoint");
+  // Every other message of a minor-4 connection differs from minor 3 only by its minor.
+  WelcomeInfo w; w.durable_events = true; w.gameplay_events_registered = true; w.game_mode_events = true; w.telemetry_api = {1, 1}; w.game_telemetry = {1, 19}; w.game_mode = single_player_weak();
+  check(canonical(encoder.welcome(1, 1000050000000ULL, w, 4)) == canonical(minor4(f, "welcome").wire), "minor-4 welcome");
+  check(canonical(roundtrip4(encoder.welcome(1, 1000050000000ULL, w, 4)).wire) == canonical(minor4(f, "welcome").wire), "minor-4 welcome encodes");
+  check(canonical(encoder.event(3, 1000150000000ULL, make_event(1, synthetic_job(), 1000149000000ULL), false, 4)) == canonical(minor4(f, "event-job-configured").wire), "minor-4 event");
+  check(canonical(encoder.gap(7, 1000350000000ULL, GapRange{3, 4, counts(0, 0, 1, 1, 0, 0), 1000330000000ULL, 1000340000000ULL}, false, 4)) == canonical(minor4(f, "gap").wire), "minor-4 gap");
+  check(canonical(encoder.clock_reply(9, 1000450000000ULL, 1, 1000449700000ULL, 1000449900000ULL, 4)) == canonical(minor4(f, "clock-reply").wire), "minor-4 clock reply");
+  check(canonical(encoder.end(10, 1000500000000ULL, EndReason::plugin_shutdown, EndCursor{2, 1, 0}, 4)) == canonical(minor4(f, "end").wire), "minor-4 end");
+  // The worst-case state (D17): every text at its limit, ten trailers, the worst gearbox, the widest break, cruise control and limit still fit.
+  const Encoder worst_encoder(identity()); StatePod heavy = fixture_state(u64_max, u64_max, true);
+  heavy.gearbox = worst_gearbox(); heavy.next_mandatory_break_min = break_unavailable(FieldState::not_supported); heavy.cruise_control_mps = cruise_of(1.2345678901234568e-300); heavy.speed_limit_mps = limit_of(-1.2345678901234568e-300);
+  const auto heavy_frame = encode(worst_encoder.checkpoint(u64_max, u64_max, heavy, StatusInfo{single_player_weak(), true, StoreStatus{}, {u64_max, u64_max}}, 4), 4);
+  check(heavy_frame.size() - 4 <= limits.server_frame_bytes, "worst minor-4 state fits 64 KiB");
+  // The ET-002b Consumer at minor 4 accepts the encoder's stream; a minor-3 frame within it is refused.
+  Consumer consumer(true, 4); std::uint64_t seq = 0;
+  const auto accept = [&](const Json& wire) { return consumer.accept(roundtrip4(wire)); };
+  accept(encoder.welcome(++seq, 10, w, 4));
+  const auto hydrated = accept(encoder.checkpoint(++seq, 20, checkpoint_state, StatusInfo{single_player_weak(), true, StoreStatus{}, {}}, 4));
+  check(hydrated.hydration && consumer.minor() == 4u, "a minor-4 checkpoint hydrates a minor-4 consumer");
+  accept(encoder.snapshot(++seq, 30, snapshot_state, StatusInfo{single_player_weak(), true, StoreStatus{}, {}}, 4));
+  rejects([&] { consumer.accept(roundtrip3(encoder.snapshot(++seq, 40, snapshot_state, StatusInfo{single_player_weak(), true, StoreStatus{}, {}}, 3))); }, "a minor-3 snapshot on a minor-4 connection");
+  std::cout << "worst minor-4 checkpoint built " << heavy_frame.size() - 4 << " bytes; ";
+}
+
 void streams_case() {
   // normal: events and a gap in order, ACK 5, end.
   {
@@ -1264,6 +1355,7 @@ int main(int argc, char** argv) {
     else if (name == "gearbox") gearbox_case(f);
     else if (name == "mandatory-break") mandatory_break_case(f);
     else if (name == "cruise-control") cruise_control_case(f);
+    else if (name == "speed-limit") speed_limit_case(f);
     else throw std::runtime_error("unknown case " + name);
     std::cout << "v1-producer " << name << " passed\n";
     return 0;

@@ -240,6 +240,13 @@
   --yu-ov-hm-active: #8FD3AE;              /* Hard Mode indicator active (ET-070); also a check */
   --yu-ov-hm-inactive: #E8C58A;            /* Hard Mode indicator not active, also unknown (ET-070); a count or no check */
   --yu-ov-hm-lost: #F87171;                /* Hard Mode lost for this trip (ET-070); also a cross and a strike-through */
+  --yu-ov-sign-red: #D32F2F;                /* speed limit sign border, ETS2 (ET-084) */
+  --yu-ov-sign-ink: #111827;                /* speed limit sign number and ATS border (ET-084) */
+  --yu-ov-sign-face: #FFFFFF;               /* speed limit sign face and halo (ET-084) */
+  --yu-ov-sign-shadow: rgba(11, 17, 32, 0.55); /* outline of the circular sign (ET-084) */
+  --yu-ov-sign-none-face: rgba(11, 17, 32, 0.35); /* no limit or no reading: dashed sign (ET-084) */
+  --yu-ov-sign-none-border: rgba(209, 213, 219, 0.5);
+  --yu-ov-sign-none-dash: rgba(209, 213, 219, 0.72);
   --yu-ov-radius: 10px;
   --yu-ov-strip-h: 38px;
 }

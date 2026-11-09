@@ -46,9 +46,9 @@ const GUARD_BATCH_ITERATIONS = 25;
 /** Bounds the CPU work of one campaign of ITERATIONS inputs. It grows with the count and asserts no timing. */
 const CAMPAIGN_CPU_BUDGET_MS = 30_000 + ITERATIONS * 25;
 /**
- * The default (minor-0), maxMinor-1 and maxMinor-2 v1 readers get half a campaign each: the maxMinor-3 readers already
- * fuzz every older seed, and this keeps the older entry points and the minor-swap defect under test without multiplying
- * the v1 cost (ET-050b, ET-052, ET-071).
+ * The default (minor-0), maxMinor-1, maxMinor-2 and maxMinor-3 v1 readers get half a campaign each: the maxMinor-4 readers
+ * already fuzz every older seed, and this keeps the older entry points and the minor-swap defect under test without
+ * multiplying the v1 cost (ET-050b, ET-052, ET-071, ET-084).
  */
 const DEFAULT_READER_ITERATIONS = Math.ceil(ITERATIONS / 2);
 /** A campaign of at least this many inputs must reach both acceptance and rejection, or its mutations are too weak. */
@@ -142,17 +142,19 @@ const isUuid = (v: unknown) => typeof v === 'string' && UUID.test(v);
 const isU64 = (v: unknown): v is string => typeof v === 'string' && /^(0|[1-9][0-9]{0,19})$/.test(v) && BigInt(v) <= 18_446_744_073_709_551_615n;
 const isInt = (v: unknown, min: number, max: number) => typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max;
 const isVersion = (v: unknown, major: number, minors: readonly number[] = [0]) => hasKeys(v, ['major', 'minor']) && v.major === major && minors.includes(v.minor as number);
-/** The documented v1 minors (v1.md §2): 0 and, from ET-050b, 1, from ET-052, 2 and, from ET-071, 3. */
-const V1_MINORS_DOC = [0, 1, 2, 3];
+/** The documented v1 minors (v1.md §2): 0 and, from ET-050b, 1, from ET-052, 2, from ET-071, 3 and, from ET-084, 4. */
+const V1_MINORS_DOC = [0, 1, 2, 3, 4];
 /**
  * Kinds whose schema or rules name the minor: the hello is always 1.0, the welcome repeats it, and state carries the
- * gearbox from minor 1, the next mandatory break from minor 2 and cruise control from minor 3 (v1.md §2, §4, §7).
+ * gearbox from minor 1, the next mandatory break from minor 2, cruise control from minor 3 and the speed limit from minor 4 (v1.md §2, §4, §7).
  */
 const V1_MINOR_DEPENDENT_KINDS = ['hello', 'welcome', 'checkpoint', 'snapshot'];
 /** Minor-2 `nextMandatoryBreak`: a signed s32 integer of game minutes, never a decimal string (v1.md §7, ET-052 MB1). */
 const V1_BREAK_DOC = {min: -2_147_483_648, max: 2_147_483_647, unit: 'min'};
 /** Minor-3 `cruiseControl`: the cruise control set speed, a finite JSON number of m/s from 0 to 1,000 (v1.md §7, ET-071). */
 const V1_CRUISE_DOC = {min: 0, max: 1_000, unit: 'm/s'};
+/** Minor-4 `speedLimit`: a finite JSON number of m/s from -1,000 to 1,000; zero and negative mean no limit (v1.md §7, ET-084). */
+const V1_LIMIT_DOC = {min: -1_000, max: 1_000, unit: 'm/s'};
 /** Minor-1 gearbox bounds (v1.md §7, ET-050b B2). */
 const V1_GEARBOX_DOC = {maxGears: 100, maxSelectorCount: 6, maxSlots: 64, maxHandlePosition: 255};
 const isAvailability = (v: unknown, value: (x: unknown) => boolean) => hasKeys(v, ['available', 'value']) ? v.available === true && value(v.value) :
@@ -222,18 +224,22 @@ function v1ServerProblem(m: unknown, size: number, minors: readonly number[]): s
   const data = m.data as Json, minor = (m.version as Json).minor;
   // The welcome's envelope minor equals the minor it selects (v1.md §2, §4).
   if (m.kind === 'welcome' && (data.minor !== minor || !jsonEqual(data.limits, V1_LIMITS_DOC))) return 'welcome minor or limits';
-  // State carries `gearbox` from minor 1, `nextMandatoryBreak` from minor 2 and `cruiseControl` from minor 3, within the
-  // documented bounds (v1.md §7).
+  // State carries `gearbox` from minor 1, `nextMandatoryBreak` from minor 2, `cruiseControl` from minor 3 and `speedLimit`
+  // from minor 4, within the documented bounds (v1.md §7).
   if (m.kind === 'checkpoint' || m.kind === 'snapshot') {
     const state = isRecord(data) ? data.state : undefined;
     if (!isRecord(state) || Object.hasOwn(state, 'gearbox') !== (minor !== 0)) return 'gearbox presence differs from the envelope minor';
     if (minor !== 0) { const problem = gearboxProblem(state.gearbox); if (problem) return problem; }
-    const breakMinor = minor === 2 || minor === 3;
+    const breakMinor = minor === 2 || minor === 3 || minor === 4;
     if (Object.hasOwn(state, 'nextMandatoryBreak') !== breakMinor) return 'nextMandatoryBreak presence differs from the envelope minor';
     if (breakMinor && !isMeasure(state.nextMandatoryBreak, V1_BREAK_DOC.unit, x => isInt(x, V1_BREAK_DOC.min, V1_BREAK_DOC.max))) return 'nextMandatoryBreak';
-    if (Object.hasOwn(state, 'cruiseControl') !== (minor === 3)) return 'cruiseControl presence differs from the envelope minor';
+    const cruiseMinor = minor === 3 || minor === 4;
+    if (Object.hasOwn(state, 'cruiseControl') !== cruiseMinor) return 'cruiseControl presence differs from the envelope minor';
     const speed = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= V1_CRUISE_DOC.min && x <= V1_CRUISE_DOC.max;
-    if (minor === 3 && !isMeasure(state.cruiseControl, V1_CRUISE_DOC.unit, speed)) return 'cruiseControl';
+    if (cruiseMinor && !isMeasure(state.cruiseControl, V1_CRUISE_DOC.unit, speed)) return 'cruiseControl';
+    if (Object.hasOwn(state, 'speedLimit') !== (minor === 4)) return 'speedLimit presence differs from the envelope minor';
+    const limit = (x: unknown) => typeof x === 'number' && Number.isFinite(x) && x >= V1_LIMIT_DOC.min && x <= V1_LIMIT_DOC.max;
+    if (minor === 4 && !isMeasure(state.speedLimit, V1_LIMIT_DOC.unit, limit)) return 'speedLimit';
   }
   if (m.kind === 'event') {
     if (size > V1_EVENT_BYTES) return `event of ${size} bytes`;
@@ -314,11 +320,11 @@ const v0Decoder: PayloadDecoder = {
   reencode: message => encodedOrSizeRefusal(() => v0.encodeFrame(message as v0.ProtocolMessage), error => error instanceof v0.ProtocolError, jsonBytes(message) > V0_PAYLOAD_BYTES)
 };
 /**
- * A v1 reader: `maxMinor: 3` accepts every documented minor, so minor-1 to minor-3 seeds and minor swaps are in scope;
- * `maxMinor: 2` accepts minors 0 to 2 and `maxMinor: 1` minors 0 and 1; the default reader accepts minor 0 only, as the
- * oldest callers do (v1.md §2, ET-050b, ET-052, ET-071).
+ * A v1 reader: `maxMinor: 4` accepts every documented minor, so minor-1 to minor-4 seeds and minor swaps are in scope;
+ * `maxMinor: 3` accepts minors 0 to 3, `maxMinor: 2` minors 0 to 2 and `maxMinor: 1` minors 0 and 1; the default reader
+ * accepts minor 0 only, as the oldest callers do (v1.md §2, ET-050b, ET-052, ET-071, ET-084).
  */
-const v1Decoder = (sender: v1.Sender, maxMinor: 0 | 1 | 2 | 3): PayloadDecoder => {
+const v1Decoder = (sender: v1.Sender, maxMinor: 0 | 1 | 2 | 3 | 4): PayloadDecoder => {
   const reader = maxMinor === 0 ? {} : {maxMinor}, minors = V1_MINORS_DOC.slice(0, maxMinor + 1);
   return {
   name: `protocol v1 decodePayload (${sender}, ${maxMinor === 0 ? 'default minor-0' : `maxMinor ${maxMinor}`} reader)`, limit: sender === 'server' ? V1_SERVER_PAYLOAD_BYTES : V1_CLIENT_PAYLOAD_BYTES,
@@ -353,15 +359,17 @@ const cap0Decoder: PayloadDecoder = {
   // sanitization"), so a re-serialized accepted packet must decode to an equal packet.
   reencode: message => { const bytes = utf8.encode(JSON.stringify(message)); return bytes.length > CAP0_PACKET_BYTES ? undefined : bytes; }
 };
-const v1Server = v1Decoder('server', 3), v1Client = v1Decoder('client', 3);
+const v1Server = v1Decoder('server', 4), v1Client = v1Decoder('client', 4);
 const v1ServerDefault = v1Decoder('server', 0), v1ClientDefault = v1Decoder('client', 0);
 const v1ServerMinor1 = v1Decoder('server', 1), v1ClientMinor1 = v1Decoder('client', 1);
 const v1ServerMinor2 = v1Decoder('server', 2), v1ClientMinor2 = v1Decoder('client', 2);
-const PAYLOAD_DECODERS = [v0Decoder, v1Server, v1Client, cap0Decoder, v1ServerDefault, v1ClientDefault, v1ServerMinor1, v1ClientMinor1, v1ServerMinor2, v1ClientMinor2];
+const v1ServerMinor3 = v1Decoder('server', 3), v1ClientMinor3 = v1Decoder('client', 3);
+const PAYLOAD_DECODERS = [v0Decoder, v1Server, v1Client, cap0Decoder, v1ServerDefault, v1ClientDefault, v1ServerMinor1, v1ClientMinor1, v1ServerMinor2, v1ClientMinor2, v1ServerMinor3, v1ClientMinor3];
 /** Each narrower reader must accept only what the wider readers of the same sender accept, identically. */
 const WIDER_READERS = new Map<PayloadDecoder, PayloadDecoder[]>([
-  [v1ServerDefault, [v1ServerMinor1, v1ServerMinor2, v1Server]], [v1ClientDefault, [v1ClientMinor1, v1ClientMinor2, v1Client]],
-  [v1ServerMinor1, [v1ServerMinor2, v1Server]], [v1ClientMinor1, [v1ClientMinor2, v1Client]], [v1ServerMinor2, [v1Server]], [v1ClientMinor2, [v1Client]]]);
+  [v1ServerDefault, [v1ServerMinor1, v1ServerMinor2, v1ServerMinor3, v1Server]], [v1ClientDefault, [v1ClientMinor1, v1ClientMinor2, v1ClientMinor3, v1Client]],
+  [v1ServerMinor1, [v1ServerMinor2, v1ServerMinor3, v1Server]], [v1ClientMinor1, [v1ClientMinor2, v1ClientMinor3, v1Client]],
+  [v1ServerMinor2, [v1ServerMinor3, v1Server]], [v1ClientMinor2, [v1ClientMinor3, v1Client]], [v1ServerMinor3, [v1Server]], [v1ClientMinor3, [v1Client]]]);
 type Outcome = {accepted: true; message: unknown} | {accepted: false};
 function decodeWith(decoder: PayloadDecoder, bytes: Uint8Array): Outcome {
   try { return {accepted: true, message: decoder.decode(bytes)}; } catch (error) {
@@ -386,13 +394,14 @@ function checkAccepted(decoder: PayloadDecoder, bytes: Uint8Array, message: unkn
 const manifest = (dir: string) => readFileSync(resolve(dir, 'manifest.txt'), 'utf8').trim().split(/\r?\n/).map(line => line.trim().split(/\s+/));
 const fixtures = (dir: string, result: string) => manifest(dir).filter(([, r]) => r === result).map(([file]) => new Uint8Array(readFileSync(resolve(dir, file))));
 const V0_SEEDS = fixtures(resolve('tests/fixtures/protocol-v0'), 'valid');
-// The frozen minor-0 corpus, the ET-050b minor-1 corpus, the ET-052 minor-2 corpus and the ET-071 minor-3 corpus.
+// The frozen minor-0 corpus, the ET-050b minor-1 corpus, the ET-052 minor-2 corpus, the ET-071 minor-3 corpus and the ET-084 minor-4 corpus.
 const V1_DIRS = [resolve('tests/fixtures/protocol-v1'), resolve('tests/fixtures/protocol-v1/minor1'), resolve('tests/fixtures/protocol-v1/minor2'),
-  resolve('tests/fixtures/protocol-v1/minor3')];
+  resolve('tests/fixtures/protocol-v1/minor3'), resolve('tests/fixtures/protocol-v1/minor4')];
 const V1_SERVER_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid'));
 const V1_CLIENT_SEEDS = V1_DIRS.flatMap(dir => fixtures(dir, 'valid-client'));
 const V1_MINOR1_SERVER_SEEDS = V1_DIRS.slice(0, 2).flatMap(dir => fixtures(dir, 'valid')), V1_MINOR1_CLIENT_SEEDS = V1_DIRS.slice(0, 2).flatMap(dir => fixtures(dir, 'valid-client'));
 const V1_MINOR2_SERVER_SEEDS = V1_DIRS.slice(0, 3).flatMap(dir => fixtures(dir, 'valid')), V1_MINOR2_CLIENT_SEEDS = V1_DIRS.slice(0, 3).flatMap(dir => fixtures(dir, 'valid-client'));
+const V1_MINOR3_SERVER_SEEDS = V1_DIRS.slice(0, 4).flatMap(dir => fixtures(dir, 'valid')), V1_MINOR3_CLIENT_SEEDS = V1_DIRS.slice(0, 4).flatMap(dir => fixtures(dir, 'valid-client'));
 const V1_MINOR0_SERVER_SEEDS = fixtures(V1_DIRS[0], 'valid'), V1_MINOR0_CLIENT_SEEDS = fixtures(V1_DIRS[0], 'valid-client');
 const CAP0_SEEDS = [header(0), header(0, 'game'), envelope(1, 1, {observations: delivered()}), envelope(2, 2, {group: 'lifecycle', id: 'simulation.paused'}),
   envelope(3, 4, {droppedBefore: 1, group: 'configuration', id: 'job', observations: [observation(0, 'cargo', 'string', 'Caf\u00e9 \u0001\t\u{1f69a}'),
@@ -590,8 +599,8 @@ const chooseMode = (r: Random): Mode => { const x = r(); return x < 0.25 ? 'pres
 interface PayloadFamily {decoder: PayloadDecoder; seeds: Uint8Array[]; sizes: number[]; schema: boolean; swapMinors: readonly number[]; iterations: number}
 const PAYLOAD_FAMILIES: PayloadFamily[] = [
   {decoder: v0Decoder, seeds: V0_SEEDS, sizes: [V0_PAYLOAD_BYTES], schema: true, swapMinors: [], iterations: ITERATIONS},
-  {decoder: v1Server, seeds: V1_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [0, 1, 2, 3], iterations: ITERATIONS},
-  {decoder: v1Client, seeds: V1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1, 2, 3], iterations: ITERATIONS},
+  {decoder: v1Server, seeds: V1_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [0, 1, 2, 3, 4], iterations: ITERATIONS},
+  {decoder: v1Client, seeds: V1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1, 2, 3, 4], iterations: ITERATIONS},
   {decoder: cap0Decoder, seeds: CAP0_SEEDS, sizes: [CAP0_PACKET_BYTES], schema: false, swapMinors: [], iterations: ITERATIONS},
   // The default readers start from the frozen minor-0 corpus, with every version swap a defect, as before ET-050b.
   {decoder: v1ServerDefault, seeds: V1_MINOR0_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [], iterations: DEFAULT_READER_ITERATIONS},
@@ -601,7 +610,10 @@ const PAYLOAD_FAMILIES: PayloadFamily[] = [
   {decoder: v1ClientMinor1, seeds: V1_MINOR1_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1], iterations: DEFAULT_READER_ITERATIONS},
   // The maxMinor-2 readers keep what they accepted before minor 3 existed: minors 0 to 2 only, so a minor-3 swap is a defect (ET-071).
   {decoder: v1ServerMinor2, seeds: V1_MINOR2_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [0, 1, 2], iterations: DEFAULT_READER_ITERATIONS},
-  {decoder: v1ClientMinor2, seeds: V1_MINOR2_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1, 2], iterations: DEFAULT_READER_ITERATIONS}
+  {decoder: v1ClientMinor2, seeds: V1_MINOR2_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1, 2], iterations: DEFAULT_READER_ITERATIONS},
+  // The maxMinor-3 readers keep what they accepted before minor 4 existed: minors 0 to 3 only, so a minor-4 swap is a defect (ET-084).
+  {decoder: v1ServerMinor3, seeds: V1_MINOR3_SERVER_SEEDS, sizes: [V1_SERVER_PAYLOAD_BYTES, V1_EVENT_BYTES], schema: true, swapMinors: [0, 1, 2, 3], iterations: DEFAULT_READER_ITERATIONS},
+  {decoder: v1ClientMinor3, seeds: V1_MINOR3_CLIENT_SEEDS, sizes: [V1_CLIENT_PAYLOAD_BYTES], schema: true, swapMinors: [0, 1, 2, 3], iterations: DEFAULT_READER_ITERATIONS}
 ];
 /** Whether a meaning-preserving variant of a valid payload stays within the documented byte bounds. */
 const withinBounds = (decoder: PayloadDecoder, bytes: Uint8Array, kind: unknown) => bytes.length <= decoder.limit && !(decoder.protocol === 'v1-server' && kind === 'event' && bytes.length > V1_EVENT_BYTES);

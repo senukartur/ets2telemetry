@@ -107,5 +107,10 @@ export interface NormalizedLiveState {
    * never unavailable. v1 minor 3 carries it; a source below minor 3 reports `not-supported`; v0 does not carry it.
    */
   cruiseControl: Reading<number>;
+  /**
+   * The navigation speed limit in m/s (ET-084), the raw SDK value: zero or negative means no limit and is a value, never
+   * unavailable. v1 minor 4 carries it; a source below minor 4 reports `not-supported`; v0 does not carry it.
+   */
+  speedLimit: Reading<number>;
   configurationRevision: string;
 }

@@ -22,7 +22,7 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-tag-paused { background: rgba(90, 68, 33, .95); }
 .overlay-tag-no-signal { background: rgba(91, 42, 39, .95); }
 /* Not current: placeholders and icons are dimmed; there are no last-known values to dim (N6). */
-.overlay.is-dim .overlay-value, .overlay.is-dim .overlay-unit, .overlay.is-dim .overlay-icon, .overlay.is-dim .overlay-ring { opacity: .5; }
+.overlay.is-dim .overlay-value, .overlay.is-dim .overlay-unit, .overlay.is-dim .overlay-icon, .overlay.is-dim .overlay-ring, .overlay.is-dim .overlay-sign, .overlay.is-dim .overlay-sign-glyph { opacity: .5; }
 
 /* Strip (ET-012c): 38 px rows at the top centre of a window main sized for the enabled sections (overlay-strip.ts, whose
    constants these rules must match). Items wrap whole onto as many rows as they need; each is capped by an inline
@@ -145,6 +145,49 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-card-hero[data-count="1"] .overlay-card-speed .overlay-value {font-size:16px}
 .overlay-card-hero[data-count="1"] .overlay-card-speed .overlay-value-group {flex-direction:row;align-items:baseline;gap:4px}
 .overlay-card-hero[data-count="1"] .overlay-card-rpm,.overlay-card-hero[data-count="1"] .overlay-card-gear {grid-column:1/span 2;grid-row:1}
+/* Speed limit sign in the card's hero (ET-084): a fixed 74 px slot at the right, spanning the hero's rows; the hero's
+   height comes from overlay-rows.ts. Speed, gear and RPM keep the columns before it. */
+.overlay-card-hero[data-sign="true"] {grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 74px}
+.overlay-card-hero[data-sign="true"][data-count="3"] .overlay-card-gear {align-self:end}
+.overlay-card-hero[data-sign="true"][data-count="3"] .overlay-card-rpm {align-self:start}
+.overlay-card-hero[data-sign="true"][data-count="2"] .overlay-card-gear,.overlay-card-hero[data-sign="true"][data-count="2"] .overlay-card-rpm {grid-row:1/span 2}
+.overlay-card-hero[data-sign="true"][data-speed="false"],.overlay-card-hero[data-sign="true"][data-count="1"],.overlay-card-hero[data-sign="true"][data-count="0"] {grid-template-columns:minmax(0,1fr) 74px}
+.overlay-card-hero[data-sign="true"][data-speed="false"][data-count="2"] .overlay-card-gear {grid-column:1;grid-row:1}
+.overlay-card-hero[data-sign="true"][data-speed="false"][data-count="2"] .overlay-card-rpm {grid-column:1;grid-row:2}
+.overlay-card-hero[data-sign="true"][data-count="1"] .overlay-card-speed,.overlay-card-hero[data-sign="true"][data-count="1"] .overlay-card-gear,.overlay-card-hero[data-sign="true"][data-count="1"] .overlay-card-rpm {grid-column:1;grid-row:1/span 2}
+.overlay-card-hero>.overlay-card-speed-limit {grid-column:-2;grid-row:1/span 2;align-self:stretch;display:flex;align-items:center;justify-content:center;overflow:visible}
+
+/* Speed limit sign (ET-084). Every box is fixed per layout and shape and clips a longer number; only three digits change
+   the font. Sizes are CSS px at zoom 1. */
+.overlay-sign {position:relative;box-sizing:border-box;display:inline-flex;flex:none;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;background:var(--yu-ov-sign-face);color:var(--yu-ov-sign-ink);font-weight:700;line-height:1;white-space:nowrap}
+.overlay-sign[data-shape="circle"] {border-style:solid;border-color:var(--yu-ov-sign-red);border-radius:50%}
+.overlay-sign[data-shape="rectangle"] {border-style:solid;border-color:var(--yu-ov-sign-ink)}
+.overlay-sign-card[data-shape="circle"],.overlay-sign-cluster[data-shape="circle"] {box-shadow:0 0 0 1px var(--yu-ov-sign-shadow)}
+.overlay-sign-card[data-shape="rectangle"],.overlay-sign-cluster[data-shape="rectangle"] {box-shadow:0 0 0 1px var(--yu-ov-sign-face)}
+.overlay-sign-number {font-size:inherit;font-weight:700;line-height:1}
+.overlay-sign-words {display:flex;flex-direction:column;align-items:center;line-height:1}
+.overlay-sign-strip[data-shape="circle"] {width:32px;height:32px;border-width:3.5px;font-size:14px}
+.overlay-sign-strip[data-shape="rectangle"] {width:26px;height:34px;border-width:1.5px;border-radius:3px;font-size:14px}
+.overlay-sign-strip[data-digits="3"] {font-size:12px}
+.overlay-sign-card[data-shape="circle"] {width:72px;height:72px;border-width:9px;font-size:30px}
+.overlay-sign-card[data-shape="rectangle"] {width:58px;height:72px;border-width:2px;border-radius:6px;font-size:30px;gap:3px}
+.overlay-sign-card[data-digits="3"] {font-size:25px}
+.overlay-sign-card .overlay-sign-words {font-size:9px}
+.overlay-sign-cluster[data-shape="circle"] {width:56px;height:56px;border-width:6px;font-size:22px}
+.overlay-sign-cluster[data-shape="rectangle"] {width:46px;height:58px;border-width:1.5px;border-radius:5px;font-size:22px;gap:2px}
+.overlay-sign-cluster[data-digits="3"] {font-size:18px}
+.overlay-sign-cluster .overlay-sign-words {font-size:7.5px}
+/* No limit or no reading: the same shape and box with a dash; the border width and the halo are the only changes. */
+.overlay-sign[data-state="no-limit"] {background:var(--yu-ov-sign-none-face);border:2px dashed var(--yu-ov-sign-none-border);box-shadow:none;color:var(--yu-ov-sign-none-dash)}
+.overlay-strip [data-testid="overlay-section-speed-limit"] {justify-content:center}
+/* The cluster's sign overlaps the gauge at left 0, top 0 (not -1: the gauge is flush with the window's edge and the overlay clips). Without a gauge it stands alone in a fixed slot. */
+.overlay-gauge>.overlay-cluster-sign {position:absolute;left:0;top:0}
+.overlay-cluster-body>.overlay-cluster-sign {flex:none;display:flex;align-items:flex-end;justify-content:center;width:58px;height:60px}
+/* The HUD's sign line has a CSS glyph in the icon's 14 px place: a small red ring or an ink frame. */
+.overlay-sign-glyph {box-sizing:border-box;flex:none;width:14px;height:14px;background:var(--yu-ov-sign-face)}
+.overlay-sign-glyph[data-shape="circle"] {border:2px solid var(--yu-ov-sign-red);border-radius:50%}
+.overlay-sign-glyph[data-shape="rectangle"] {width:11px;border:1.5px solid var(--yu-ov-sign-ink);border-radius:2px}
+.overlay-sign-glyph[data-state="no-limit"] {background:var(--yu-ov-sign-none-face);border:1px dashed var(--yu-ov-sign-none-border)}
 .overlay-rpm-track {stroke-width:3}
 .overlay-ring-value {stroke-width:3}
 

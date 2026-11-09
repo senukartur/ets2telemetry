@@ -272,7 +272,7 @@ void failure_cleanup() {
     host.throw_event = 0; host.fail_event = 0;
     require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "failed init allows retry");
     host.throw_cleanup = true; adapter->shutdown(); auto stopped = read(*adapter);
-    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 18, "throwing unregister isolates all cleanup operations"); // 12 channels (ET-052 adds the break channel, ET-071 cruise control) and 6 events
+    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 19, "throwing unregister isolates all cleanup operations"); // 13 channels (ET-052 adds the break channel, ET-071 cruise control, ET-084 the speed limit) and 6 events
   }
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); host.erroneous = "truck.engine.rpm";
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_generic_error && host.channels.empty() && host.events.empty(), "unexpected channel registration errors fail closed");
@@ -643,8 +643,8 @@ void v1_nonblocking() {
 // Every v0 publication (state, continuity, revision, diagnostics) and every CAP0 envelope must be identical.
 namespace cap0 = ets2telemetry::cap0;
 struct IsolationFrame { std::unique_ptr<Snapshot> snapshot; std::vector<cap0::Envelope> evidence; };
-// break_mode 0: the host registers the optional v1-only channel `optional` (the break, or cruise control for ET-071) and
-// never calls it; 1: the game does not provide it; 2: it is called in every frame.
+// break_mode 0: the host registers the optional v1-only channel `optional` (the break, cruise control for ET-071 or the
+// speed limit for ET-084) and never calls it; 1: the game does not provide it; 2: it is called in every frame.
 std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0, Field optional = Field::mandatory_break) {
   auto adapter = std::make_unique<Adapter>(); Host host; if (break_mode == 1) host.missing = channel_specs()[static_cast<std::size_t>(optional)].name; auto params = host.params();
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "isolation init"); read(*adapter);
@@ -655,7 +655,7 @@ std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0, Field
   std::vector<IsolationFrame> frames;
   const auto end_frame = [&] {
     if (break_mode == 2) {
-      auto value = optional == Field::cruise_control ? floating(static_cast<float>(frames.size()) * 2.5F) : s32(static_cast<std::int32_t>(frames.size()) * 7 - 3);
+      auto value = optional == Field::mandatory_break ? s32(static_cast<std::int32_t>(frames.size()) * 7 - 3) : floating(static_cast<float>(frames.size()) * 2.5F);
       host.channel(optional, &value);
     }
     host.frame_end(); IsolationFrame output; output.snapshot = std::make_unique<Snapshot>(); require(adapter->read_latest(*output.snapshot), "v0 frame published");
@@ -1396,6 +1396,154 @@ void cruise_control(const std::filesystem::path& fixtures) {
     require(delivered && observations > 20, "cruise control was delivered and the script exercised diagnostics");
   }
 }
+
+// ET-084: the optional `truck.navigation.speed.limit` channel (float m/s; zero or negative is no limit and a value). The
+// wire expectations are the hand-written minor-4 fixtures; the rest is written out by hand: zero and negative are values,
+// NULL is not observed, a wrong type or a value outside [-1000, 1000] is invalid, a refused registration is not-supported
+// and never fails initialization, and the channel changes nothing in v0 or CAP0.
+// The encoded minor-4 `state.speedLimit` of the adapter's current v1 slot, through the minor-4 contract decoder.
+std::string limit_wire(Adapter& adapter) {
+  const auto current = v1_read(adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+  const auto frame = v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, 4), 4);
+  return serialized(v1::decode_payload(std::string(frame.begin() + 4, frame.end()), v1::Sender::server, 4).wire.at("data").at("state").at("speedLimit"));
+}
+std::string fixture_limit(const std::filesystem::path& minor4, const char* name) {
+  return serialized(v1::decode_payload(read_file(minor4 / (std::string(name) + ".json")), v1::Sender::server, 4).wire.at("data").at("state").at("speedLimit"));
+}
+// The break rig, delivering the speed limit channel instead.
+struct LimitRig : BreakRig {
+  using BreakRig::BreakRig;
+  std::unique_ptr<Snapshot> frame(const scs_value_t* value, bool deliver = true, std::uint32_t flags = 0) { start(flags); if (deliver) host.channel(Field::speed_limit, value); host.frame_end(); return read(*adapter); }
+  Reading<double> v0() const { return reading(*current(), Field::speed_limit); }
+  v1::Field<double> v1_limit() const { return v1_read(*adapter)->state.speed_limit_mps; }
+};
+void speed_limit(const std::filesystem::path& fixtures) {
+  const auto minor4 = fixtures / "protocol-v1" / "minor4";
+  const auto expect = [&](Adapter& adapter, const char* fixture, const char* what) { require(limit_wire(adapter) == fixture_limit(minor4, fixture), what); };
+  constexpr auto restart = SCS_TELEMETRY_FRAME_START_FLAG_timer_restart;
+  // Values: a limit, zero and negative (no limit), both bounds, and a value that changes from frame to frame.
+  {
+    LimitRig rig; V1Ring ring; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    require(rig.host.channels.count("truck.navigation.speed.limit") == 1 && rig.host.channels.at("truck.navigation.speed.limit").type == SCS_VALUE_TYPE_float, "registered once as the float channel truck.navigation.speed.limit");
+    rig.frame(nullptr, false); ring.drain(*rig.channel);
+    expect(*rig.adapter, "snapshot-limit-not-observed", "before any callback the limit is not observed");
+    require(rig.v0().status == Availability::not_observed && rig.v1_limit().state == v1::FieldState::not_observed, "not observed in the slot and in v1 before any callback");
+    const auto calls = rig.host.api_calls; const auto next = rig.channel->next_event_seq();
+    struct Row { float mps; const char* fixture; };
+    const Row rows[]{{25.0F, "checkpoint"}, {22.5F, "snapshot"}, {0.0F, "snapshot-limit-zero"}, {-1.0F, "snapshot-limit-negative"}, {1000.0F, "snapshot-limit-max"}, {-1000.0F, "snapshot-limit-min"}};
+    for (const auto& row : rows) {
+      auto value = floating(row.mps); const auto published = rig.frame(&value); const auto got = reading(*published, Field::speed_limit);
+      require(got.status == Availability::available && got.value == static_cast<double>(row.mps), "the channel reading holds the exact float");
+      require(rig.v1_limit().available() && rig.v1_limit().value == static_cast<double>(row.mps), "the v1 copy holds the exact float");
+      expect(*rig.adapter, row.fixture, "the encoded speed limit equals its hand-written fixture");
+    }
+    auto zero = floating(0); rig.frame(&zero);
+    require(rig.v1_limit().available() && rig.v1_limit().value == 0 && limit_wire(*rig.adapter) != fixture_limit(minor4, "snapshot-limit-not-observed"), "zero is available and distinct from unavailable");
+    for (const float mps : {13.888889F, 29.0576F, 33.3333F}) { auto value = floating(mps); rig.frame(&value); require(rig.v1_limit().value == static_cast<double>(mps) && rig.v0().value == static_cast<double>(mps), "a changing value follows each frame"); }
+    // The callback copies one value: no event, no eventSeq and no SDK call, and only the SDK thread ran.
+    require(!rig.channel->front() && rig.channel->next_event_seq() == next && rig.host.api_calls == calls && rig.host.wrong_thread == 0, "the speed limit callback emits no event and calls no SDK function");
+  }
+  // NULL is not observed; a wrong type, an out-of-bound or a non-finite value is invalid; a later valid reading recovers.
+  {
+    LimitRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = floating(25); rig.frame(&value);
+    rig.frame(nullptr);
+    require(rig.v0().status == Availability::not_observed && rig.v1_limit().state == v1::FieldState::not_observed && !rig.v1_limit().available(), "a NULL value is not observed, never zero");
+    expect(*rig.adapter, "snapshot-limit-not-observed", "NULL encodes as not-observed");
+    const scs_value_t wrong[]{u32(25), s32(25), s64(25), boolean(true), text("25"), floating(-1000.5F), floating(1000.5F), floating(NAN), floating(INFINITY), floating(-INFINITY)};
+    for (const auto& bad : wrong) {
+      rig.frame(&value);
+      rig.frame(&bad);
+      require(rig.v0().status == Availability::invalid && rig.v1_limit().state == v1::FieldState::invalid && !rig.v1_limit().available(), "a wrong type or an out-of-range value is invalid");
+      expect(*rig.adapter, "snapshot-limit-invalid", "an invalid value encodes as invalid");
+    }
+    auto negative = floating(-1); rig.frame(&negative);
+    require(rig.v0().status == Availability::available && rig.v1_limit().available() && rig.v1_limit().value == -1, "a valid negative reading recovers from invalid");
+  }
+  // Registration: any refusal of the optional channel is not-supported and initialization still succeeds.
+  struct Refusal { const char* label; std::function<void(Host&)> configure; scs_result_t result; };
+  const Refusal refusals[]{
+    {"not found", [](Host& h) { h.missing = "truck.navigation.speed.limit"; }, SCS_RESULT_not_found},
+    {"unsupported type", [](Host& h) { h.unsupported_type = "truck.navigation.speed.limit"; }, SCS_RESULT_unsupported_type},
+    {"generic error", [](Host& h) { h.erroneous = "truck.navigation.speed.limit"; }, SCS_RESULT_generic_error},
+    {"unsupported", [](Host& h) { h.erroneous = "truck.navigation.speed.limit"; h.erroneous_result = SCS_RESULT_unsupported; }, SCS_RESULT_unsupported},
+    {"not now", [](Host& h) { h.erroneous = "truck.navigation.speed.limit"; h.erroneous_result = SCS_RESULT_not_now; }, SCS_RESULT_not_now},
+    {"invalid parameter", [](Host& h) { h.erroneous = "truck.navigation.speed.limit"; h.erroneous_result = SCS_RESULT_invalid_parameter; }, SCS_RESULT_invalid_parameter}};
+  for (const auto& refusal : refusals) {
+    LimitRig rig(refusal.configure, SCS_RESULT_ok); const auto initial = rig.current();
+    require(initial->channel_results[static_cast<std::size_t>(Field::speed_limit)] == refusal.result, refusal.label);
+    require(reading(*initial, Field::speed_limit).status == Availability::not_supported, "a refused speed limit registration is not-supported");
+    require(!rig.host.channels.count("truck.navigation.speed.limit") && rig.host.channels.count("truck.speed") && rig.host.channels.count("mandatory.break") && rig.host.channels.count("truck.cruise_control") && rig.host.channels.count("truck.world.placement") && rig.host.events.size() == 6, "every other channel and event is registered");
+    rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto speed = floating(12.5F); auto minutes = s32(95); auto cruise = floating(20); scs_value_t placement{}; placement.type = SCS_VALUE_TYPE_dplacement; placement.value_dplacement.position = {1, 2, 3};
+    rig.start(); rig.host.channel(Field::speed, &speed); rig.host.channel(Field::mandatory_break, &minutes); rig.host.channel(Field::cruise_control, &cruise); rig.host.channel(Field::world_placement, &placement); rig.host.frame_end();
+    const auto published = read(*rig.adapter);
+    require(reading(*published, Field::speed).status == Availability::available && reading(*published, Field::speed).value == 12.5 && rig.v1_break().value == 95 && published->state.world_placement.status == Availability::available, "the other channels are intact");
+    require(reading(*published, Field::cruise_control).value == 20, "cruise control is intact");
+    expect(*rig.adapter, "snapshot-limit-not-supported", "a refused registration encodes as not-supported");
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_supported && rig.v1_limit().state == v1::FieldState::not_supported, "a timer restart keeps the capability verdict");
+  }
+  // Every optional channel refused at once: initialization still succeeds.
+  {
+    LimitRig rig([](Host& h) { h.missing = "truck.navigation.speed.limit"; h.unsupported_type = "mandatory.break"; h.erroneous = "truck.cruise_control"; }, SCS_RESULT_ok);
+    require(rig.v0().status == Availability::not_supported && reading(*rig.current(), Field::mandatory_break).status == Availability::not_supported && reading(*rig.current(), Field::cruise_control).status == Availability::not_supported && rig.host.channels.count("truck.speed"), "every optional channel refused");
+  }
+  // Freshness: the previous frame's value does not survive a timer restart unless the new frame delivered it, and a value
+  // delivered outside any frame is never adopted as fresh.
+  {
+    LimitRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = floating(25); rig.frame(&value);
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_observed && rig.v1_limit().state == v1::FieldState::not_observed, "a timer restart without a new reading clears the limit");
+    auto fresh = floating(13.75F); rig.frame(&fresh, true, restart);
+    require(rig.v0().status == Availability::available && rig.v0().value == 13.75 && rig.v1_limit().value == 13.75, "a limit delivered in the restart frame stays");
+    rig.host.channel(Field::speed_limit, &value);
+    rig.frame(nullptr, false, restart);
+    require(rig.v0().status == Availability::not_observed, "a value delivered outside a frame is not adopted as fresh");
+  }
+  // A truck configuration clears the dynamic channels like the others; each_frame delivery refills it.
+  {
+    LimitRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    scs_named_value_t truck[]{attribute("id", text("truck.model.a")), {}};
+    auto value = floating(25); rig.frame(&value);
+    rig.host.config("truck", truck); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::not_observed && rig.v1_limit().state == v1::FieldState::not_observed, "a truck configuration clears the limit");
+    value = floating(20); rig.start(); rig.host.config("truck", truck); rig.host.channel(Field::speed_limit, &value); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().value == 20 && rig.v1_limit().value == 20, "a limit delivered after the truck configuration stays");
+    value = floating(30); rig.start(); rig.host.channel(Field::speed_limit, &value); rig.host.config("truck", truck); rig.host.frame_end(); read(*rig.adapter);
+    require(rig.v0().status == Availability::not_observed, "a limit delivered before the truck configuration is cleared with the other dynamic channels");
+  }
+  // Lower minors never carry the limit, whatever the slot holds.
+  {
+    LimitRig rig; rig.host.event(SCS_TELEMETRY_EVENT_started);
+    auto value = floating(25); rig.frame(&value);
+    const auto current = v1_read(*rig.adapter); const v1::Encoder encoder(v1_identity(*current)); v1::StatusInfo status; status.continuity = current->continuity;
+    auto without = current->state; without.speed_limit_mps = {};
+    for (const unsigned minor : {0U, 1U, 2U, 3U}) {
+      require(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, minor), minor) == v1::encode(encoder.checkpoint(1, UINT64_MAX, without, status, minor), minor), "lower-minor bytes are identical with and without the limit");
+      require(v1::encode(encoder.snapshot(1, UINT64_MAX, current->state, status, minor), minor) == v1::encode(encoder.snapshot(1, UINT64_MAX, without, status, minor), minor), "lower-minor snapshot bytes are identical with and without the limit");
+    }
+    require(v1::encode(encoder.checkpoint(1, UINT64_MAX, current->state, status, 4), 4) != v1::encode(encoder.checkpoint(1, UINT64_MAX, without, status, 4), 4), "minor 4 carries the limit");
+  }
+  // v0 and CAP0 isolation: a game that provides the channel and one that does not give the same v0 snapshots, ordering,
+  // continuity, diagnostic batches and CAP0 envelopes, apart from the speed limit reading itself.
+  {
+    const auto absent = isolation_run(true, 1, Field::speed_limit), present = isolation_run(true, 2, Field::speed_limit);
+    require(absent.size() == present.size() && present.size() == 8, "speed limit isolation frames");
+    bool delivered = false; std::size_t observations = 0;
+    for (std::size_t i = 0; i < absent.size(); ++i) {
+      same_v0(*absent[i].snapshot, *present[i].snapshot, static_cast<std::size_t>(Field::speed_limit));
+      require(absent[i].evidence.size() == present[i].evidence.size(), "speed limit isolation: CAP0 envelope count");
+      for (std::size_t e = 0; e < absent[i].evidence.size(); ++e) same_cap0(absent[i].evidence[e], present[i].evidence[e]);
+      require(absent[i].snapshot->state.channels[static_cast<std::size_t>(Field::speed_limit)].status == Availability::not_supported, "the absent channel stays not-supported");
+      delivered = delivered || present[i].snapshot->state.channels[static_cast<std::size_t>(Field::speed_limit)].status == Availability::available;
+      for (std::size_t o = 0; o < present[i].snapshot->observation_count; ++o) require(std::string(present[i].snapshot->observations[o].name.c_str()) != "truck.navigation.speed.limit", "no v0 diagnostic observation of the speed limit");
+      observations += present[i].snapshot->observation_count;
+    }
+    require(delivered && observations > 20, "the limit was delivered and the script exercised diagnostics");
+  }
+}
 }
 int main(int argc, char** argv) {
   try {
@@ -1413,6 +1561,8 @@ int main(int argc, char** argv) {
     else if (argc == 3 && std::string(argv[1]) == "mandatory-break") mandatory_break(argv[2]);
     // ET-071: the optional cruise control channel; needs tests/fixtures for the hand-written minor-3 corpus.
     else if (argc == 3 && std::string(argv[1]) == "cruise-control") cruise_control(argv[2]);
+    // ET-084: the optional speed limit channel; needs tests/fixtures for the hand-written minor-4 corpus.
+    else if (argc == 3 && std::string(argv[1]) == "speed-limit") speed_limit(argv[2]);
     else {
       game_mode_evidence(); lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();

@@ -8,12 +8,18 @@ ET-012e added saved overlay visibility in historical format v6, defaulting to en
 
 ET-045e update, October 24, 2026 (decision Z5, owner decision D1 option b; ET-049 took v7 first, so ET-045e uses v8): the current format is **v8**. It has exactly the fields and canonical layout of ET-049's v7 document below with `"version": 8`. What changed is the meaning of each placement's `scale`: it is the user's setting, shown as a percentage, and the overlay document's zoom factor is now setting × 0.7 (`overlayZoom` in `apps/desktop/src/overlay-placement.ts`), so the new 100% looks like the earlier 70%. Its range is [0.5, 3] (50–300%) instead of [0.5, 2]. Saved numbers are kept and reinterpreted, never rewritten: a v7 file migrates to v8 by an identity step (`migratedFrom: 7`), and the owner's saved strip at 0.5 now renders at the earlier 35% (choose 70% for the earlier 50% look). See [ET-045e validation](validation/et-045e.md). The v7 and v6 headings below keep their ET-049 and ET-012e wording; read "current" there as the field layout that v8 retains.
 
-## Current format v14: theme preference (ET-082)
+## Current format v15: speed limit section (ET-084)
 
-The current format is **v14**: the v13 document with `"version": 14` and the top-level field `theme`, written right after `autostart`. Its value is `light`, `dark` or `system`; `system` follows the Windows app mode. An invalid or missing value in a v14 file falls back alone to `system` and reports the field `theme`.
+The current format is **v15**: the v14 document with `"version": 15` and the overlay section key `overlay.sections.speed-limit`, written after `cruise-control` and loaded like every other section (a missing or non-boolean value falls back to `true`). The pure v14-to-v15 step sets it to `true` on a copy of a records-only `overlay.sections`, so the section is on after an update and a Job focus selection then matches no preset; a v14 file stays unchanged at startup (`migratedFrom: 14`) and the next durable save writes v15. A version of 16 or later is newer-version, and a build from before ET-084 reads v15 as newer-version (read-only defaults) and never modifies the file.
+
+The v14 section below keeps its wording; read "current" there as the field layout that v15 retains.
+
+## Format v14: theme preference (ET-082)
+
+Format **v14** is the v13 document with `"version": 14` and the top-level field `theme`, written right after `autostart`. Its value is `light`, `dark` or `system`; `system` follows the Windows app mode. An invalid or missing value in a v14 file falls back alone to `system` and reports the field `theme`.
 
 - **Migration.** The pure v13-to-v14 step sets `theme` to `dark`, so everyone upgrading from any older format keeps the dark look they had. Only a new install (no settings file) starts with `system`. The migration runs in memory: a v13 file stays byte-identical at startup (`migratedFrom: 13`) and the next durable save writes v14.
-- **Newer and older builds.** A version of 15 or later is newer-version. A build from before ET-082 reads v14 as newer-version (read-only defaults) and never modifies the file.
+- **Newer and older builds.** A build from before ET-082 reads v14 as newer-version (read-only defaults) and never modifies the file.
 - **Application.** The dashboard bridge adds exactly `setTheme('light'|'dark'|'system')` on the channel `settings:set-theme`, trusted dashboard only. The value goes through the shared durable save queue like every other setting, and main applies it to `nativeTheme.themeSource` only after the save. Main also sets the saved value before it constructs the dashboard window, so the first paint already has the right theme, and re-applies it when a late settings read settles.
 
 The v13 section below keeps its wording; read "current" there as the field layout that v14 retains.
@@ -223,10 +229,10 @@ A v1 file passes all seven steps. A migrated file loads as `loaded` (or `loaded-
 | --- | --- | --- |
 | `overlay.enabled` (ET-012e) | `true` or `false` | `true` |
 | `overlay.layout` | `strip` (one or more 38 px rows at the top centre, as many as the enabled sections need), `card` (top right), `cluster` (round speed gauge and side panel at the bottom left), `hud` (shadowed text at the top left) | `strip` |
-| `overlay.sections.<id>` | `true` or `false` for each of the sixteen sections; at least one `true` | all `true` |
+| `overlay.sections.<id>` | `true` or `false` for each of the seventeen sections; at least one `true` | all `true` |
 | `overlay.placements.<layout>` (ET-012b) | `x` and `y` in [0, 1], `scale` in [0.5, 3] (ET-045e; zoom = scale × 0.7); see [overlay placements](#overlay-placements-and-edit-mode-et-012b) | the ET-012a anchor of each layout at scale 1: strip `0.5, 0`, card `1, 0`, cluster `0, 1`, HUD `0, 0` |
 
-The settings card groups the sections as Driving (`speed`, `gear`, `rpm`, `cruise-control`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`, and since ET-052 `mandatory-break`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a). Since ET-012c a sections save can change the strip's height: the strip reserves rows for every enabled section, whether or not it currently has data, and is re-placed after the durable save ([geometry](minimal-overlay.md#geometry-and-placements-et-012b)). The settings format is unchanged.
+The settings card groups the sections as Driving (`speed`, `gear`, `rpm`, `cruise-control`, `speed-limit`), Fuel (`fuel`, `range`, `sdk-consumption`), Job (`cargo`, `origin`, `destination`, `distance-driven`, `distance-remaining`, `deadline`, `expected-income`) and Time (`game-time`, and since ET-052 `mandatory-break`). Which sections the live bridge can fill today, and how a section without data appears, is described in [live telemetry fields](live-telemetry-fields.md#overlay) and [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a). Since ET-012c a sections save can change the strip's height: the strip reserves rows for every enabled section, whether or not it currently has data, and is re-placed after the durable save ([geometry](minimal-overlay.md#geometry-and-placements-et-012b)). The settings format is unchanged.
 
 ### Overlay placements and edit mode (ET-012b)
 
@@ -303,7 +309,7 @@ The preload bridge appends one method, `setUnitProfile(game, profile)`. The prel
 ET-012a adds the **Overlay** card after the units card and two more bridge methods (decision L3). There is no generic settings patch: each channel accepts one fixed shape.
 
 - `setOverlayLayout(layout)` over `settings:set-overlay-layout`: exactly one argument, one of the four layout ids.
-- `setOverlaySections(sections)` over `settings:set-overlay-sections`: exactly one argument, a complete record with exactly the sixteen section ids as own data properties, booleans only, at least one `true`, and a plain object prototype. The preload forwards a fresh copy of the validated record; main validates it again (`parseOverlaySections` in `apps/desktop/src/overlay-sections.ts`) and hands the store a frozen copy.
+- `setOverlaySections(sections)` over `settings:set-overlay-sections`: exactly one argument, a complete record with exactly the seventeen section ids as own data properties, booleans only, at least one `true`, and a plain object prototype. The preload forwards a fresh copy of the validated record; main validates it again (`parseOverlaySections` in `apps/desktop/src/overlay-sections.ts`) and hands the store a frozen copy.
 
 Both are refused for an untrusted sender or frame (including the overlay), for any other shape, and once the exit has started. They share the unit save's error mapping (fixed messages only) and its refusal reporting in `saveError`. After the durable save main pushes `AppState`, republishes the overlay projection with the new layout and sections from its stored freshness output, and moves the overlay window to the new layout's anchor (see [the minimal overlay](minimal-overlay.md#layouts-and-sections-et-012a)). As for units, this renews neither SDK nor window freshness. A late startup read that brings another layout is applied the same way. The card shows only saved values: the layout radio group, three presets (Everything, Job focus, Driving only, shown as pressed when the saved sections equal them) and one switch per section grouped Driving, Fuel, Job and Time, with a marker for sections that need protocol v1 or trip tracking. Since ET-010c the protocol v1 sections appear once the plugin's v1 data arrives, so the markers read "needs the plugin's protocol v1 data" (origin, distance remaining, deadline), "shows game ids without protocol v1" (cargo, destination) and "needs trip tracking; hidden for now" (distance driven). Controls are disabled while a save runs and when settings cannot be saved; the last enabled section cannot be switched off.
 
@@ -353,7 +359,7 @@ Startup queries actual registration while intent is unknown and never writes log
 
 ## Unified Overlay page (ET-048)
 
-Settings > Overlay contains one mounted card for visibility, layout, position/size, presets and the sixteen grouped section switches. The separate Overlay sections destination and Choose sections action are removed. ET-049 replaces the former Planned opacity text with the persisted slider described above. Ordinary page scrolling and wrapping keep the lower controls reachable, including keyboard focus at renderer zoom.
+Settings > Overlay contains one mounted card for visibility, layout, position/size, presets and the seventeen grouped section switches. The separate Overlay sections destination and Choose sections action are removed. ET-049 replaces the former Planned opacity text with the persisted slider described above. Ordinary page scrolling and wrapping keep the lower controls reachable, including keyboard focus at renderer zoom.
 
 Owner follow-up, October 24, 2026: individual section rows show their label, icon and switch without the parenthetical protocol-v1, game-ID or trip-tracking notes. This presentation change applies to EN/RU; availability rules and the general unavailable/stale explanation remain unchanged.
 

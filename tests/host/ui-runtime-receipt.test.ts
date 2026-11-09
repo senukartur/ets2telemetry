@@ -15,7 +15,9 @@ const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmo
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
 const previewScreens = ['settings-preview-strip', 'settings-preview-card', 'settings-preview-cluster', 'settings-preview-hud', 'settings-preview-narrow'];
 const previewNames = ['strip', 'card', 'cluster', 'hud', 'narrow-strip', 'large-strip', 'large-card'];
-const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break'];
+const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break'];
+// ET-084: the card and the cluster draw the speed limit sign with speed, gear and RPM, so it comes before cruise control in their DOM.
+const previewSectionsHero = ['speed', 'gear', 'rpm', 'speed-limit', ...previewSections.filter(id => !['speed', 'gear', 'rpm', 'speed-limit'].includes(id))];
 type Case = keyof typeof screens;
 const sizes = [{width: 1280, height: 800}, {width: 1100, height: 720}];
 const mainEvents = [{event: 'APP_EXIT', detail: {code: 0}}, {event: 'SERVICE_EXIT', detail: {code: 0}}];
@@ -38,7 +40,7 @@ function fixture(uiCase: Case) {
     flags: Object.fromEntries([...common, ...flags[uiCase]].map(flag => [flag, true])),
     overlayPreview: uiCase === 'overlay' ? ['en', 'ru'].flatMap(language => previewNames.map(name => ({language, viewportWidth: 1280, viewportHeight: 800, name,
       layout: name.endsWith('strip') ? 'strip' : name.endsWith('card') ? 'card' : name, scale: name.startsWith('large-') ? '3' : '1',
-      width: 210, height: 320, outside: [] as string[], fitsScene: true, sections: [...previewSections],
+      width: 210, height: 320, outside: [] as string[], fitsScene: true, sections: name.endsWith('card') || name === 'cluster' ? [...previewSectionsHero] : [...previewSections],
       cardRows: name.endsWith('card') ? {count: 14, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
       ...size, screen, imageWidth: size.width, imageHeight: size.height, bytes: 600})))).concat(uiCase === 'settings' ? sizes.map(size => ({file: `ui-settings-read-only-en-${size.width}x${size.height}.png`, language: 'en', ...size, screen: 'read-only', imageWidth: size.width, imageHeight: size.height, bytes: 600})) : [])

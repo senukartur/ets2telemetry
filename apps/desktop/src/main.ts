@@ -1235,7 +1235,7 @@ function runApplication(profileError: unknown): void {
     if (overlayEdit.active) throw new Error('The overlay layout cannot change while its position is edited');
     return saveSettings(() => settingsStore.setOverlayLayout(layout));
   });
-  // Exactly one complete section record: the sixteen ids, booleans only, at least one enabled; stored as a fresh copy.
+  // Exactly one complete section record: the seventeen ids, booleans only, at least one enabled; stored as a fresh copy.
   ipcMain.handle('settings:set-overlay-sections', async (event, ...request: unknown[]) => {
     if (!trusted(event)) throw new Error('Untrusted settings request');
     const sections = request.length === 1 ? parseOverlaySections(request[0]) : undefined;

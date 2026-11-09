@@ -12,6 +12,8 @@ export * from './gear-labels';
 export * from './mandatory-break';
 // The cruise control set speed (ET-071).
 export * from './cruise-control';
+// The navigation speed limit (ET-084).
+export * from './speed-limit';
 export * from './derived';
 export * from './live-view';
 // Pure trip lifecycle and completeness reducer (ET-014); see docs/trips.md.

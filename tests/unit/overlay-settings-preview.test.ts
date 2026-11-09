@@ -11,7 +11,7 @@ import {getOverlayLayoutText, getOverlaySectionText, getStrings} from '../../app
 vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHeader: 'div', CardTitle: 'div'}));
 
 const escaped = (text: string) => renderToStaticMarkup(React.createElement(React.Fragment, null, text));
-const driving: OverlaySectionId[] = ['speed', 'gear', 'rpm', 'cruise-control', 'fuel', 'range'];
+const driving: OverlaySectionId[] = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range'];
 
 it.each(['en', 'ru'] as const)('shares enabled order, localized values and the fixed Hard Mode footer in every layout (%s)', language => {
   for (const layout of OVERLAY_LAYOUTS) {
@@ -29,6 +29,19 @@ it.each(['en', 'ru'] as const)('shares enabled order, localized values and the f
     expect(html.indexOf('data-testid="overlay-hard-mode"')).toBeGreaterThan(html.indexOf('data-testid="overlay-section-range"'));
     expect(html).toContain(escaped(language === 'ru' ? 'Пример данных · не текущая телеметрия' : 'Example data · not live telemetry'));
     expect(html).not.toMatch(/overlay-root|overlay-body|is-editing|latency-marker/);
+  }
+});
+
+// ET-084: the example shows a 90 km/h sign, the fixed circle of the ETS2 example, so the preview draws the real sign.
+it.each(['en', 'ru'] as const)('shows the speed limit sign in the example in every layout (%s)', language => {
+  for (const layout of OVERLAY_LAYOUTS) {
+    const settings = {...DEFAULT_OVERLAY_SETTINGS, layout};
+    expect(overlayView(overlayExample(settings, language, 'active')).items.find(item => item.id === 'speed-limit'), layout).toMatchObject({value: '90', unit: language === 'ru' ? 'км/ч' : 'km/h',
+      sign: {shape: 'circle', state: 'limit', number: '90', digits: 2, name: language === 'ru' ? 'Ограничение скорости: 90 км/ч' : 'Speed limit: 90 km/h'}});
+    const html = renderToStaticMarkup(React.createElement(OverlaySettingsPreview, {settings, language, scale: 1}));
+    expect(html.match(/data-testid="overlay-section-speed-limit"/g), layout).toHaveLength(1);
+    if (layout === 'hud') expect(html, layout).toContain('class="overlay-sign-glyph" data-shape="circle" data-state="limit"');
+    else expect(html, layout).toContain(`class="overlay-sign overlay-sign-${layout}" data-shape="circle" data-state="limit" data-digits="2"`);
   }
 });
 
