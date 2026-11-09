@@ -86,7 +86,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
         <RadioGroup aria-labelledby="overlay-layout-label" data-testid="overlay-layout" className="yu-layout-options" value={overlay.layout} disabled={locked || editing}
           onValueChange={value => {if (isOverlayLayout(value)) save(() => window.desktop.setOverlayLayout(value));}}>
           {OVERLAY_LAYOUTS.map(layout => <div key={layout} className="yu-layout-option" data-selected={overlay.layout === layout}>
-            <RadioGroupItem value={layout} id={`overlay-layout-${layout}`} /><Label htmlFor={`overlay-layout-${layout}`}><svg viewBox="0 0 160 75" aria-hidden="true" className={`yu-layout-preview yu-layout-preview-${layout}`}><rect className="yu-preview-window" x="1" y="1" width="158" height="73" rx="5" />
+            <RadioGroupItem value={layout} id={`overlay-layout-${layout}`} /><Label htmlFor={`overlay-layout-${layout}`}><svg viewBox="0 0 160 75" aria-hidden="true" className={`yu-layout-preview yu-layout-preview-${layout} yu-theme-dark`}><rect className="yu-preview-window" x="1" y="1" width="158" height="73" rx="5" />
               {layout === 'strip' ? <rect x="28" y="8" width="104" height="13" rx="3" /> : layout === 'card' ? <rect x="112" y="8" width="38" height="57" rx="4" /> : layout === 'hud' ? <><rect x="10" y="10" width="60" height="6" rx="2" /><rect x="10" y="22" width="44" height="6" rx="2" /><rect x="10" y="34" width="54" height="6" rx="2" /></> : <><circle cx="34" cy="48" r="19" /><rect x="58" y="41" width="58" height="25" rx="4" /></>}
             </svg><span>{getOverlayLayoutText(layout, language)}</span></Label>
           </div>)}

@@ -14,7 +14,7 @@ import {useWindowFocused} from './shell/use-window-focus';
 import {SidebarNav} from './shell/sidebar-nav';
 import {ShellSlotsProvider} from './shell/shell-slots';
 import {TopBar} from './shell/top-bar';
-import logo from './assets/logo.png';
+import {ThemedLogo} from './shell/themed-logo';
 import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
@@ -79,7 +79,7 @@ export default function App() {
   return <div className="yu-app" data-testid="shell.root">
     {/* ET-074: the title bar holds the app name and the native window buttons only; the logo is in the sidebar lockup. */}
     <div className="yu-titlebar" data-testid="shell.titlebar"><span>{CHANNEL.displayName}</span></div>
-    <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><img src={logo} alt="" /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
+    <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><ThemedLogo /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
       <SidebarNav route={route} language={language} onNavigate={setRoute} />
       <div className="yu-sidebar-footer"><TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
         <button type="button" className="yu-recording" data-testid="shell.sidebar.recording" aria-label={recording.testBadge ? `${recording.label}, ${recording.testBadge}` : recording.label}>

@@ -98,6 +98,8 @@ it('renders deterministic settings-only data and applies background opacity with
     expect(render()).toBe(render());
     expect(render()).toContain('--yu-ov-panel:rgba(11, 17, 32, 0.43)');
     expect(render()).toContain('data-scale="1.3"');
+    // ET-082: the preview scene carries the dark token scope, so it stays dark in the light theme.
+    expect(render()).toMatch(/class="yu-overlay-scene yu-theme-dark" data-testid="overlay-preview-scene"/);
     expect(overlayExample(settings, 'en', 'active')).toMatchObject({origin: 'none', editing: false, speed: '84', fuel: '620'});
   } finally {vi.unstubAllGlobals();}
 });

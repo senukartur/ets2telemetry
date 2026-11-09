@@ -7,6 +7,7 @@ import {ShellSlot, ShellSlotsProvider} from '../../apps/desktop/src/shell/shell-
 import {SidebarNav} from '../../apps/desktop/src/shell/sidebar-nav';
 import {TopBar} from '../../apps/desktop/src/shell/top-bar';
 import {SyncChip} from '../../apps/desktop/src/dashboard-upload/sync-chip';
+import {ThemedLogo} from '../../apps/desktop/src/shell/themed-logo';
 import {unavailableUploadUi} from '../../apps/desktop/src/dashboard-upload/ui-controller';
 import type {ShellRoute} from '../../apps/desktop/src/screens/desktop-ui-view';
 
@@ -71,4 +72,10 @@ it('gives a page a place at the end of the top bar, and renders a slot only once
   const content = React.createElement('span', null, 'Refresh');
   expect(renderToStaticMarkup(React.createElement(ShellSlot, {name: 'actions', children: content}))).toBe('');
   expect(renderToStaticMarkup(React.createElement(ShellSlotsProvider, {actions: null, subline: null, children: React.createElement(ShellSlot, {name: 'subline', children: content})}))).toBe('');
+});
+
+// ET-082: the logo picks its variant from the resolved theme by itself.
+it('renders the dark logo for the light theme and the white logo otherwise', () => {
+  const html = renderToStaticMarkup(React.createElement(ThemedLogo));
+  expect(html).toMatch(/^<picture><source media="\(prefers-color-scheme: light\)" srcSet="[^"]*logo-dark[^"]*"\/><img src="[^"]*logo\.png[^"]*" alt=""\/><\/picture>$/);
 });
