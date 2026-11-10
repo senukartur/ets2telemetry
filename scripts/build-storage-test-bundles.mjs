@@ -32,11 +32,10 @@ const entries = {'storage-worker': 'apps/desktop/src/storage-worker.ts', 'storag
 const directory = await mkdtemp(path.join(tmpdir(), 'ets2telemetry-storage-bundles-'));
 let code;
 try {
-  for (const [name, entry] of Object.entries(entries)) {
-    await build({configFile: false, root, logLevel: 'warn', build: {outDir: directory, emptyOutDir: false, minify: false,
-      lib: {entry: path.join(root, entry), formats: ['cjs'], fileName: () => `${name}.cjs`},
-      rollupOptions: {external, output: {paths: {'better-sqlite3': sqlite}}}}});
-  }
+  await build({configFile: false, root, logLevel: 'warn', build: {outDir: directory, emptyOutDir: false, minify: false,
+    lib: {entry: Object.fromEntries(Object.entries(entries).map(([name, entry]) => [name, path.join(root, entry)])), formats: ['cjs'],
+      fileName: (_format, entryName) => `${entryName}.cjs`},
+    rollupOptions: {external, output: {paths: {'better-sqlite3': sqlite}}}}});
   code = await new Promise(resolve => {
     const child = spawn(process.execPath, [path.join(root, 'scripts/run-electron-node.mjs'), script, ...rest],
       {stdio: 'inherit', env: {...process.env, ETS2TELEMETRY_STORAGE_TEST_BUNDLES: directory}, windowsHide: true});

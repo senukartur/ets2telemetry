@@ -17,8 +17,10 @@ console.log(`Storage suite runtime: Electron ${process.versions.electron}, Node 
  */
 const LONG_FIRST = [
   'tests/storage/trip-continuation.test.ts', 'tests/storage/journal-scale.test.ts', 'tests/storage/upload-queue.test.ts', 'tests/storage/upload-projection.test.ts',
-  'tests/storage/events-commit.test.ts', 'tests/storage/producer-loss.test.ts', 'tests/storage/trip-recorder-crash.test.ts',
-  'tests/storage/journal-export.test.ts', 'tests/storage/worker.test.ts', 'tests/storage/trip-recorder.test.ts', 'tests/storage/journal-reads.test.ts'
+  'tests/storage/trip-recorder-crash.test.ts', 'tests/storage/upload-projection-crash.test.ts', 'tests/storage/events-commit.test.ts', 'tests/storage/trip-recorder.test.ts',
+  'tests/storage/worker.test.ts', 'tests/storage/producer-loss.test.ts', 'tests/storage/stale-checkpoint.test.ts', 'tests/storage/history-refusal.test.ts',
+  'tests/storage/crash-recovery.test.ts', 'tests/storage/journal-export.test.ts', 'tests/storage/journal-reads.test.ts', 'tests/storage/trip-recorder-faults.test.ts',
+  'tests/storage/trip-effects.test.ts', 'tests/storage/trip-deletion.test.ts'
 ];
 /** The default order with LONG_FIRST moved to the front; sharding is inherited from BaseSequencer unchanged. */
 class LongFirstSequencer extends BaseSequencer {
