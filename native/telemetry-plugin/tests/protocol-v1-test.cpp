@@ -2,6 +2,7 @@
 #include "protocol-json.hpp"
 #include "capture-hello.hpp"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -10,6 +11,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <type_traits>
 
 // Reads the shared protocol v1 corpus (manifest.txt, streams.txt and the payload fixtures) that the Vitest suites read,
 // and must reproduce every accept/reject result and stream outcome. The minor-1 corpus (ET-050b) in the `minor1`
@@ -808,10 +810,28 @@ unsigned streams_minor1(const Fixtures& f1) {
   return count;
 }
 
-// Every stream's frames of one minor directory, in both directions, through the frame decoder at that directory's maxMinor. A byte-at-a-time pass cuts each
-// stream at every offset at once, and the client direction is also split in two at every offset. The server direction
-// is split in two at every offset within `edge_window` bytes of each frame edge (each split decodes the whole stream,
-// and the frozen v0 parser takes about 6 ms per checkpoint under ASan, within the 120 s ASan CTest timeout).
+bool same_wire(const Json& actual, const Json& expected) {
+  return std::visit([&](const auto& value) {
+    using Value = std::decay_t<decltype(value)>;
+    const auto* other = std::get_if<Value>(&expected.value);
+    if (!other) return false;
+    if constexpr (std::is_same_v<Value, double>) {
+      return std::isfinite(value) && value == *other && (value != 0.0 || std::signbit(value) == std::signbit(*other));
+    } else if constexpr (std::is_same_v<Value, Json::Object>) {
+      return std::equal(value.begin(), value.end(), other->begin(), other->end(), [](const auto& left, const auto& right) {
+        return left.first == right.first && same_wire(left.second, right.second);
+      });
+    } else if constexpr (std::is_same_v<Value, Json::Array>) {
+      return std::equal(value.begin(), value.end(), other->begin(), other->end(), same_wire);
+    } else {
+      return value == *other;
+    }
+  }, actual.value);
+}
+
+// Check each direction at the corpus's maximum minor. The byte-at-a-time pass covers every offset in one decode.
+// Each two-way split decodes the whole stream, so the server splits stay within `edge_window` bytes of each frame edge.
+// The client direction uses every two-way split. Compare those repeated decodes without serializing their wire values.
 unsigned framing_streams(const Fixtures& f1, std::size_t edge_window) {
   unsigned splits = 0;
   for (const auto& row : rows(read(f1.dir / "streams.txt"))) {
@@ -822,15 +842,16 @@ unsigned framing_streams(const Fixtures& f1, std::size_t edge_window) {
         auto m = sender == Sender::server ? f1.server(step.substr(2)) : f1.client(step.substr(2)); bytes = concat(bytes, encode_frame(m, f1.max_minor)); edges.push_back(bytes.size()); expected.push_back(std::move(m));
       }
       if (expected.empty()) continue;
-      const auto same = [&](const std::vector<Message>& found) {
-        if (found.size() != expected.size()) return false;
-        for (std::size_t i = 0; i < found.size(); ++i) if (found[i].minor != expected[i].minor || canonical(found[i].wire) != canonical(expected[i].wire)) return false;
-        return true;
+      const auto same = [&](const std::vector<Message>& found, const auto& compare_wire) {
+        return std::equal(found.begin(), found.end(), expected.begin(), expected.end(), [&](const Message& actual, const Message& wanted) {
+          return actual.minor == wanted.minor && compare_wire(actual.wire, wanted.wire);
+        });
       };
       const auto name = row[0] + (sender == Sender::server ? " server" : " client");
       std::vector<Message> one; FrameDecoder bytewise(sender, f1.max_minor);
       for (const auto& b : bytes) bytewise.push(&b, 1, [&](Message m) { one.push_back(std::move(m)); });
-      bytewise.end(); check(same(one), name + " byte at a time");
+      bytewise.end();
+      check(same(one, [](const Json& actual, const Json& wanted) { return canonical(actual) == canonical(wanted); }), name + " byte at a time");
       std::set<std::size_t> offsets;
       for (std::size_t at = 0; at <= bytes.size(); ++at) {
         const auto near = std::any_of(edges.begin(), edges.end(), [&](std::size_t edge) { return at + edge_window >= edge && at <= edge + edge_window; });
@@ -839,7 +860,7 @@ unsigned framing_streams(const Fixtures& f1, std::size_t edge_window) {
       for (const auto at : offsets) {
         std::vector<Message> found; FrameDecoder decoder(sender, f1.max_minor); const auto emit = [&](Message m) { found.push_back(std::move(m)); };
         decoder.push(bytes.data(), at, emit); decoder.push(bytes.data() + at, bytes.size() - at, emit); decoder.end();
-        check(same(found), name + " two-way split at " + std::to_string(at)); ++splits;
+        check(same(found, same_wire), name + " two-way split at " + std::to_string(at)); ++splits;
       }
       // A decoder below the directory's maximum (the default one at minor 0, and minor 1 for the minor-2 directory) emits
       // exactly the leading frames at or below its maximum and fails closed at the first frame above it.

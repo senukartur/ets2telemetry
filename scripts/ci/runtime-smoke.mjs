@@ -568,7 +568,8 @@ try {
     journalTarget = JOURNAL_TARGET;
     application = await launch(config.diagnosticsRestart);
     launcher = application.process(); phase('restart-launch-returned');
-    await application.context().tracing.start({screenshots: true, snapshots: true});
+    // Keep the action trace and DOM snapshots. The seeded journey also captures journal.png explicitly.
+    await application.context().tracing.start({screenshots: false, snapshots: true});
     tracing = true;
     const {dashboard} = await rendererPages(application);
     await waitForStartup(dashboard);
