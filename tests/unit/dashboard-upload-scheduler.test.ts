@@ -94,3 +94,13 @@ it('REG-005/010/011 persists a TLS configuration pause for the active attempt in
   const claim=vi.fn(()=>result({status:'claimed',attemptId,eventId,registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}));const db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='recordUploadAttemptOutcome'?outcome:Reflect.get(target,key);}});
   f.http.request=vi.fn(()=>Promise.resolve({ok:false as const,code:'TLS_CONFIGURATION' as const,statusCode:null,retryAfter:null}));const scheduler=new UploadScheduler(db,f.http,origin,'test',()=>{});await scheduler.activate(configuration,token,limits);await vi.advanceTimersByTimeAsync(1);expect(outcome).toHaveBeenCalledWith(expect.objectContaining({attemptId,kind:'configuration'}));expect(scheduler.status).toMatchObject({state:'paused',error:'CONFIGURATION'});await scheduler.stop();
 });
+it('passes verified contractMinor when freezing upload materializations',async()=>{
+  vi.useFakeTimers();const f=fixture(),workId=randomUUID();
+  const db={...f.db,readRetainedUploadMaterializations:vi.fn(()=>Promise.resolve({ok:true as const,value:{examined:1,unmanagedPins:0,items:[{workId,registrationId:registration.registrationId,state:'complete' as const}]}})),freezeUploadMaterialization:vi.fn(()=>Promise.resolve({ok:true as const,value:{workId,status:'frozen' as const,examined:0,eventId:randomUUID(),reason:null}})),releaseUploadMaterialization:vi.fn((input:{workId:string})=>Promise.resolve({ok:true as const,value:{workId:input.workId,status:'released' as const,examined:1,eventId:null,reason:null}}))} as UploadStorage;
+  const port=new Proxy(db,{get(target,key){return Reflect.get(target,key)??Reflect.get(f.db,key);}}),scheduler=new UploadScheduler(port,f.http,origin,'test',()=>{});
+  await scheduler.activate(configuration,token,limits,1);
+  await vi.advanceTimersByTimeAsync(300);
+  expect(db.freezeUploadMaterialization).toHaveBeenCalledWith(expect.objectContaining({workId,contractMinor:1}));
+  await scheduler.stop();
+});
+

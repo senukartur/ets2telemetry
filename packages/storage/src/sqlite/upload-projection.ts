@@ -13,6 +13,7 @@ import type {StorageConnection} from './connection';
 import {jobValues} from './journal';
 import {snapshot, type LogicalSnapshot} from './logical-snapshot';
 import {ACCOUNTING_PATH, encodeRow, decodeRow, type LogicalRow} from './logical-trips';
+import {deriveTripHardModeResult} from '../../../telemetry-core/src/hard-mode';
 
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
 const all = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as LogicalRow[];
@@ -75,7 +76,8 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
     revenue: money('revenue'), penalty: money('penalty'), moneyIncomplete: row._moneyIncomplete === true || snap.head !== null
       && !!get(db,`${ACCOUNTING_PATH} SELECT 1 FROM path WHERE cut_odometer_m IS NOT NULL OR depth=256 AND prefix_ref IS NOT NULL LIMIT 1`,{head:snap.head}),
     clockAnomaly: opening?.utcMs !== null && opening?.utcMs !== undefined && opening.utcMs !== n(row.started_utc_ms)
-      || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms)};
+      || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms),
+    hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n)};
 }
 
 const unproven=():RuleContext=>({version:2,status:'unproven',items:[],recordingLoss:false});

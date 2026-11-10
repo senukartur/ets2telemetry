@@ -1,9 +1,9 @@
 import {strictJson} from '../../../../packages/contracts/src/protocol-v0';
 import {uploadShape,uploadOne,uploadText,uploadSafe,uploadUuid,uploadRecord,type DashboardOwner} from '../../../../packages/contracts/src/dashboard-upload';
 export interface UploadLimits {maxEventBytes:number;maxDepth:number;eventsPerMinute:number;burst:number}
-export interface UploadConnection {contract:{major:1;minor:0};accountId:string;companyId:string;identityEpoch:string;limits:UploadLimits}
-export interface UploadServerRegistration {contract:{major:1;minor:0};installationId:string;bindingId:string;identityEpoch:string}
-const contract=uploadShape({major:uploadOne(1),minor:uploadOne(0)});
+export interface UploadConnection {contract:{major:1;minor:0|1};accountId:string;companyId:string;identityEpoch:string;limits:UploadLimits}
+export interface UploadServerRegistration {contract:{major:1;minor:0|1};installationId:string;bindingId:string;identityEpoch:string}
+const contract=uploadShape({major:uploadOne(1),minor:uploadOne(0,1)});
 // The Dashboard stores identityEpoch as an unsigned integer and sends a JSON number; the owner key keeps its decimal text.
 const identityEpoch=(v:unknown):string|undefined=>uploadSafe(v)?String(v):uploadText(v)?v:undefined;
 export function jsonBody(body:Uint8Array,limit:number):unknown {if(body.byteLength>limit)throw Error('INVALID_UPLOAD_RESPONSE');return strictJson(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(body));}

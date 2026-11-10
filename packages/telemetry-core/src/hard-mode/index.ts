@@ -68,6 +68,9 @@ export function qualifiesHardMode(counts: HardModeCounts, delivered = true): boo
   const known = BigInt(counts.passingChecks) + BigInt(counts.failingChecks);
   return delivered && known > 0n && BigInt(counts.passingChecks) * 100n >= known * 95n;
 }
+export function deriveTripHardModeResult(isHardMode: boolean): 'qualified' | 'not-qualified' {
+  return isHardMode ? 'qualified' : 'not-qualified';
+}
 export function newHardModeDetails(assessment: HardModeAssessment, binding: string | null): HardModeDetailsV2 {
   return {version: 2, binding, opening: assessment, latest: assessment, firstLoss: null, manualDelivery: null, ...emptyHardModeCounts(), checkpoint: null, firstDiagnostic: null, latestDiagnostic: null};
 }

@@ -13,9 +13,9 @@ function controlFailure(result:UploadHttpResult):DashboardUploadError {
 export class DashboardUploadService {
   readonly scheduler:UploadScheduler;#control=false;#stopped=false;#startup:Promise<void>;#abort=new AbortController();#controlEpoch=0;
   constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,private readonly origin:string,producerVersion:string,publish:(status:DashboardUploadStatus)=>void,time?:UploadClock){this.scheduler=new UploadScheduler(db,http,origin,producerVersion,publish,time);this.#startup=stored(db.getUploadConfiguration()).then(async configuration=>{if(configuration.purpose!=='history')throw Error('RECONCILIATION');await stored(db.recoverUploadAttempt({startup:true}));});this.#startup.catch(()=>undefined);}
-  async #verify(token:string):Promise<{owner:DashboardOwner;limits:UploadLimits}|DashboardUploadError>{
+  async #verify(token:string):Promise<{owner:DashboardOwner;limits:UploadLimits;contractMinor:number}|DashboardUploadError>{
     const result=await this.http.request('connection',token,undefined,this.#abort.signal);if(!result.ok||result.statusCode!==200)return controlFailure(result);
-    const value=connectionResponse(result.body);return value?{owner:{origin:this.origin,accountId:value.accountId,companyId:value.companyId,identityEpoch:value.identityEpoch},limits:value.limits}:'UNSUPPORTED_CONTRACT';
+    const value=connectionResponse(result.body);return value?{owner:{origin:this.origin,accountId:value.accountId,companyId:value.companyId,identityEpoch:value.identityEpoch},limits:value.limits,contractMinor:value.contract.minor}:'UNSUPPORTED_CONTRACT';
   }
   async execute(command:UploadServiceCommand):Promise<UploadServiceReply>{
     if(this.#stopped)return failure('RETIRED');if(this.#control)return failure('BUSY');this.#control=true;const epoch=this.#controlEpoch;
@@ -35,7 +35,7 @@ export class DashboardUploadService {
         const registered=await this.http.request('installations',command.token,new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:0},clientInstallationId:reg.clientInstallationId})),this.#abort.signal);
         if(!registered.ok||registered.statusCode!==200&&registered.statusCode!==201)return failure(controlFailure(registered));
         const response=registrationResponse(registered.body,verified.owner);if(!response||response.installationId!==reg.installationId||response.bindingId!==reg.bindingId)return failure('RECONCILIATION');
-        if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');await this.scheduler.activate(configuration,command.token,verified.limits);if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');return {ok:true,value:{kind:'settled',status:this.scheduler.status}};
+        if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');await this.scheduler.activate(configuration,command.token,verified.limits,verified.contractMinor);if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');return {ok:true,value:{kind:'settled',status:this.scheduler.status}};
       }
       if(!sameDashboardOwner(command.owner,verified.owner))return failure('RECONCILIATION');
       const installation=await stored(this.db.ensureUploadInstallation());if(installation.status!=='ready'||!installation.clientInstallationId)return failure('RECONCILIATION');

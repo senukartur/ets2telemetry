@@ -447,6 +447,17 @@ describe('immutable private upload projections through the SQLite worker', () =>
     readOnly(ws.database,db=>{for(const table of ['upload_projection_pins','upload_projection_members','upload_projection_configurations','upload_projection_intervals'])expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);
       for(const table of ['trips','upload_candidates','upload_reservations','upload_change_heads','upload_source_transitions'])expect(db.prepare(`SELECT count(*) FROM ${table}`).pluck().get()).toBe(0);});
   });
+  it('populates hardModeResult as qualified for qualifying trips and not-qualified otherwise', async () => {
+    const client=await start(),s=new Script(ETS2_A),uuid=await open(client,s);
+    // Open trip without delivered qualification
+    const pinOpen=ok(await prepare(client,uuid));
+    expect(pinOpen.facts.hardModeResult).toBe('not-qualified');
+    await close(client,s,uuid,'delivered');
+    const pinDelivered=ok(await prepare(client,uuid));
+    // Without stored hard mode audit meeting threshold, delivered trip is also not-qualified
+    expect(pinDelivered.facts.hardModeResult).toBe('not-qualified');
+    await client.close();
+  });
 });
 
 

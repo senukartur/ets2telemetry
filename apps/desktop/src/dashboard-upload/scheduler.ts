@@ -10,7 +10,7 @@ export type UploadStorage=Pick<StorageClient,UploadSyncName>;
 export async function stored<T>(result:Promise<Result<T>>):Promise<T>{const answer=await result;if(!answer.ok)throw Error('STORAGE_UNAVAILABLE');return answer.value;}
 export interface UploadClock {now():number;random():number;schedule(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const clock:UploadClock={now:Date.now,random:Math.random,schedule:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id as ReturnType<typeof setTimeout>)};
-interface Active {configuration:UploadActiveConfiguration;registration:UploadRegistration;token:string}
+interface Active {configuration:UploadActiveConfiguration;registration:UploadRegistration;token:string;contractMinor:number}
 /** Storage turns and HTTP have independent single flights; neither blocks recorder admission. */
 export class UploadScheduler {
   #active:Active|undefined;#stopped=false;#suspended=true;#background=false;#backgroundFlight:Promise<number>|undefined;#sending:Promise<void>|undefined;#timer:unknown;#generation=0;
@@ -22,9 +22,9 @@ export class UploadScheduler {
   #paused:UploadStoreStatus['paused']=null;#hintsReconciliation=false;#held:UploadSchedulingHints['held']=null;#sourceHeld=false;#unmanaged=false;#scopeReady=false;#retryError:DashboardUploadError|null=null;#retryEventId:string|null=null;
   constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,origin:string,private readonly producerVersion:string,private readonly publish:(status:DashboardUploadStatus)=>void,private readonly time:UploadClock=clock){this.#status=initialDashboardUploadStatus(origin);this.#rate=new UploadRate(60,10,time.now());}
   get status():DashboardUploadStatus{return structuredClone(this.#status);}
-  async activate(configuration:UploadActiveConfiguration,token:string,limits:UploadLimits):Promise<void>{
+  async activate(configuration:UploadActiveConfiguration,token:string,limits:UploadLimits,contractMinor = 0):Promise<void>{
     await this.suspend();if(this.#stopped||configuration.status!=='ready'||configuration.purpose!=='history'||!configuration.registration||!configuration.credentialGeneration)return;
-    const generation=this.#generation;this.#active={configuration,registration:configuration.registration,token};this.#rate.configure(limits.eventsPerMinute,limits.burst);const hints=await stored(this.db.getUploadSchedulingHints({registrationId:configuration.registration.registrationId})),owner=await stored(this.db.getUploadStoreStatus({registrationId:configuration.registration.registrationId}));
+    const generation=this.#generation;this.#active={configuration,registration:configuration.registration,token,contractMinor};this.#rate.configure(limits.eventsPerMinute,limits.burst);const hints=await stored(this.db.getUploadSchedulingHints({registrationId:configuration.registration.registrationId})),owner=await stored(this.db.getUploadStoreStatus({registrationId:configuration.registration.registrationId}));
     if(this.#stopped||generation!==this.#generation)return;this.#failureStreak=hints.failureStreak;this.#sendAfter=Math.max(this.time.now(),hints.retryAtMs??0);this.#generation++;this.#suspended=false;
     this.#phase='status';this.#runsAfter=null;this.#runPending=[];this.#pending=[];this.#emptyModes=0;this.#resetProgress();this.#status={...initialDashboardUploadStatus(configuration.registration.origin),state:'connected',owner:{origin:configuration.registration.origin,accountId:configuration.registration.accountId,companyId:configuration.registration.companyId,identityEpoch:configuration.registration.identityEpoch}};this.#retryError=null;this.#retryEventId=null;this.#unmanaged=false;this.#ownerState(owner,configuration);this.#hints(hints,configuration);this.#diagnostic();this.#emit();this.#wake(0);
   }
@@ -86,7 +86,7 @@ export class UploadScheduler {
     if(this.#maintenance){this.#maintenance=false;const inventory=await stored(this.db.readRetainedUploadMaterializations());if(generation!==this.#generation)return 1000;
       this.#retained=inventory.items;const ids=new Set(inventory.items.map(item=>item.workId));for(const id of this.#blocked.keys())if(!ids.has(id))this.#blocked.delete(id);this.#unmanaged=inventory.unmanagedPins>0;this.#diagnostic();return 10;}
     if(this.#retained.length){for(let n=0;n<this.#retained.length;n++){const item=this.#retained[this.#workCursor++%this.#retained.length];if((this.#blocked.get(item.workId)??0)>this.time.now())continue;
-        const result=item.state==='preparing'||item.state==='folding'?await stored(this.db.advanceUploadMaterialization({workId:item.workId})):item.state==='complete'?await stored(this.db.freezeUploadMaterialization({workId:item.workId,producerVersion:this.producerVersion,createdUtcMs:this.time.now()})):await stored(this.db.releaseUploadMaterialization({workId:item.workId}));
+        const result=item.state==='preparing'||item.state==='folding'?await stored(this.db.advanceUploadMaterialization({workId:item.workId})):item.state==='complete'?await stored(this.db.freezeUploadMaterialization({workId:item.workId,producerVersion:this.producerVersion,createdUtcMs:this.time.now(),contractMinor:active.contractMinor})):await stored(this.db.releaseUploadMaterialization({workId:item.workId}));
         if(result.status==='pressure')this.#blocked.set(item.workId,this.time.now()+2000);this.#maintenance=true;return 10;
       }}
     this.#maintenance=true;

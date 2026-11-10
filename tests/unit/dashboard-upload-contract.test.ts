@@ -44,9 +44,12 @@ describe('REG-010/012 closed Dashboard upload boundaries',()=>{
   it('validates actual pinned control responses and caps compatible limits',()=>{
     const response={contract:{major:1,minor:0},accountId:'a',companyId:'c',identityEpoch:'e',limits:{maxEventBytes:100000,maxDepth:20,eventsPerMinute:120,burst:30}};
     expect(connectionResponse(bytes(response))?.limits).toEqual({maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10});
-    for(const change of [{versions:[1]},{contract:{major:2,minor:0}},{limits:{...response.limits,maxEventBytes:65535}}])expect(connectionResponse(bytes({...response,...change}))).toBeUndefined();
+    expect(connectionResponse(bytes({...response,contract:{major:1,minor:1}}))?.limits).toEqual({maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10});
+    for(const change of [{versions:[1]},{contract:{major:2,minor:0}},{contract:{major:1,minor:2}},{limits:{...response.limits,maxEventBytes:65535}}])expect(connectionResponse(bytes({...response,...change}))).toBeUndefined();
     const owner={origin:'https://dashboard.example',accountId:'a',companyId:'c',identityEpoch:'e'},registered={contract:{major:1,minor:0},installationId:randomUUID(),bindingId:randomUUID(),identityEpoch:'e'};
-    expect(registrationResponse(bytes(registered),owner)).toEqual(registered);expect(registrationResponse(bytes({...registered,identityEpoch:'new'}),owner)).toBeUndefined();
+    expect(registrationResponse(bytes(registered),owner)).toEqual(registered);
+    expect(registrationResponse(bytes({...registered,contract:{major:1,minor:1}}),owner)).toEqual({...registered,contract:{major:1,minor:1}});
+    expect(registrationResponse(bytes({...registered,identityEpoch:'new'}),owner)).toBeUndefined();
   });
   it('accepts the Dashboard numeric identityEpoch as the owner key decimal text',()=>{
     const response={contract:{major:1,minor:0},accountId:'a',companyId:'c',identityEpoch:2,limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}};

@@ -51,7 +51,7 @@ export interface UploadSyncCommands {
   pageUploadDiscovery:{args:{input:{registrationId:string;after:string;limit:number}};value:UploadDiscoveryPage};
   beginUploadMaterialization:{args:{input:{workId:string;tripUuid:string;registrationId:string}};value:UploadWork};
   advanceUploadMaterialization:{args:{input:{workId:string}};value:UploadWork};
-  freezeUploadMaterialization:{args:{input:{workId:string;producerVersion:string;createdUtcMs:number}};value:UploadWork};
+  freezeUploadMaterialization:{args:{input:{workId:string;producerVersion:string;createdUtcMs:number;contractMinor?:number}};value:UploadWork};
   releaseUploadMaterialization:{args:{input:{workId:string}};value:UploadWork};
   claimUploadAttempt:{args:{input:{attemptId:string;registrationId:string;expectedVersion:string;mode:'live'|'backfill'|'any';nowMs:number}};value:UploadAttemptResult};
   recordUploadAttemptOutcome:{args:{input:{attemptId:string;kind:'retry'|'authentication'|'configuration'|'reconciliation'|'validation';retryAtMs:number;nowMs:number}};value:UploadAttemptResult};
@@ -75,7 +75,12 @@ const requestChecks:Record<UploadSyncName,Check>={
   pageUploadDiscovery:shape({registrationId:isUploadUuid,after:decimal,limit:v=>bounded(v)&&v!==0}),
   beginUploadMaterialization:shape({workId:isUploadUuid,tripUuid:isUploadUuid,registrationId:isUploadUuid}),
   advanceUploadMaterialization:shape({workId:isUploadUuid}),releaseUploadMaterialization:shape({workId:isUploadUuid}),
-  freezeUploadMaterialization:shape({workId:isUploadUuid,producerVersion:v=>text(v)&&Buffer.byteLength(v)<=64,createdUtcMs:safe}),
+  freezeUploadMaterialization:v=>{
+    if(!record(v))return false;
+    const {contractMinor,...rest}=v;
+    if(contractMinor!==undefined&&!one(0,1)(contractMinor))return false;
+    return shape({workId:isUploadUuid,producerVersion:v=>text(v)&&Buffer.byteLength(v)<=64,createdUtcMs:safe})(rest);
+  },
   claimUploadAttempt:shape({attemptId:isUploadUuid,registrationId:isUploadUuid,expectedVersion:decimal,mode:one('live','backfill','any'),nowMs:safe}),
   recordUploadAttemptOutcome:shape({attemptId:isUploadUuid,kind:one('retry','authentication','configuration','reconciliation','validation'),retryAtMs:safe,nowMs:safe}),
   recoverUploadAttempt:v=>shape({attemptId:isUploadUuid})(v)||shape({startup:one(true)})(v),commitUploadReceipt:shape({attemptId:isUploadUuid,statusCode:v=>safe(v)&&v<=599,body:v=>v instanceof Uint8Array&&v.byteLength<=4096}),

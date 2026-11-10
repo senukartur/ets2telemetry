@@ -98,7 +98,12 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     const outcome=mapping.summary.snapshot.outcome;
     if(bound.terminal===1n&&outcome==='open')return hold(db,work,'reconciliation-required');
     if((bound.http_revision as bigint)>=BigInt(Number.MAX_SAFE_INTEGER))return hold(db,work,'revision-exhausted');
-    const envelope:UploadEnvelope={...mapping.summary,contract:{major:1,minor:0},producer:{application:'ets2telemetry',version:input.producerVersion},eventId:randomUUID(),revision:Number(bound.http_revision)+1,
+    const minor = input.contractMinor === 1 ? 1 : 0;
+    const summary = structuredClone(mapping.summary);
+    if (minor === 0) {
+      delete summary.snapshot.hardModeResult;
+    }
+    const envelope:UploadEnvelope={...summary,contract:{major:1,minor},producer:{application:'ets2telemetry',version:input.producerVersion},eventId:randomUUID(),revision:Number(bound.http_revision)+1,
       installationId:String(registration.installation_id),bindingId:String(registration.binding_id),delivery:{mode:work.mode as 'live'|'backfill',syncRunId:String(work.run_ref)},
       type:bound.terminal===1n?'trip.corrected':outcome==='open'?'trip.started':outcome==='delivered'?'trip.completed':outcome==='cancelled'?'trip.cancelled':'trip.closed',createdUtcMs:input.createdUtcMs};
     const bytes=encodeUploadEnvelope(envelope);if(!bytes)return hold(db,work,'projection-invalid');
