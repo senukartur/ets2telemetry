@@ -48,7 +48,9 @@ export class UploadScheduler {
   stop():Promise<void>{this.#stopped=true;this.#status.state='stopping';this.#emit();return this.suspend();}
   #emit(){this.publish(this.status);}
   #wake(ms:number){if(this.#stopped||this.#suspended)return;this.time.cancel(this.#timer);this.#timer=this.time.schedule(()=>{this.#timer=undefined;void this.#tick();},Math.max(0,ms));}
-  #resetProgress(){this.#progressGeneration++;this.#sourceAfter=null;this.#receiptAfter=null;this.#sources=0;this.#delivered=0;this.#lastReceipt=null;this.#reconstruct=true;this.#nextRefresh=this.time.now()+5000;this.#status.progress.enumeration='changing';}
+  // A recount restarts only the private pass; published totals change atomically when a pass completes, so a delivered
+  // receipt or a periodic refresh never blanks a known result (ET-110).
+  #resetProgress(){this.#progressGeneration++;this.#sourceAfter=null;this.#receiptAfter=null;this.#sources=0;this.#delivered=0;this.#lastReceipt=null;this.#reconstruct=true;this.#nextRefresh=this.time.now()+5000;}
   async #tick(){if(this.#stopped||this.#suspended)return;const active=this.#active;if(!active)return;
     if(!this.#sending&&this.#scopeReady&&this.#paused===null&&!this.#hintsReconciliation&&this.time.now()>=this.#sendAfter){this.#sending=this.#send(active).catch(()=>{this.#status.error='STORAGE_UNAVAILABLE';this.#sendAfter=this.time.now()+2000;}).finally(()=>{this.#sending=undefined;this.#wake(10);});}
     if(this.#background)return;this.#background=true;const generation=this.#generation;let delay=10;
@@ -97,7 +99,7 @@ export class UploadScheduler {
         const capacity=`${status.queuedEvents}:${status.queuedBytes}`;if(this.#capacity!==undefined&&this.#capacity!==capacity)this.#blocked.clear();this.#capacity=capacity;this.#phase='hints';return 10;}
       case 'hints':{const hints=await stored(this.db.getUploadSchedulingHints({registrationId}));if(generation!==this.#generation)return 1000;this.#hints(hints,active.configuration);this.#diagnostic();this.#phase=this.#status.progress.pressure?'sources':'runs';return 10;}
       case 'runs':{const page=await stored(this.db.pageUploadScanRuns({registrationId,after:this.#runsAfter,limit:100}));this.#runsAfter=page.next;this.#runPending=page.items.filter(item=>item.phase!=='complete').map(item=>item.runId);this.#run=this.#runPending.shift()??null;this.#phase=this.#run?'scan':page.next?'runs':'discovery';return 10;}
-      case 'scan':{const result=await stored(this.db.advanceUploadScan({registrationId,runId:this.#run!}));this.#status.progress.enumeration='scanning';if(result.phase==='complete'){this.#run=this.#runPending.shift()??null;this.#phase=this.#run?'scan':'runs';}else this.#phase=result.phase==='pressure'?'sources':'scan';return 10;}
+      case 'scan':{const result=await stored(this.db.advanceUploadScan({registrationId,runId:this.#run!}));if(this.#status.progress.distinctSources===null)this.#status.progress.enumeration='scanning';if(result.phase==='complete'){this.#run=this.#runPending.shift()??null;this.#phase=this.#run?'scan':'runs';}else this.#phase=result.phase==='pressure'?'sources':'scan';return 10;}
       case 'discovery':{if(this.#status.progress.pressure){this.#phase='sources';return 1000;}const page=await stored(this.db.pageUploadDiscovery({registrationId,after:this.#discoveryAfter,limit:100}));this.#discoveryAfter=page.next;this.#pending=page.items.filter(item=>item.workId===null);this.#phase=this.#pending.length?'begin':'sources';return 10;}
       case 'begin':{const item=this.#pending.shift();if(item)await stored(this.db.beginUploadMaterialization({registrationId,tripUuid:item.tripUuid,workId:randomUUID()}));if(!this.#pending.length)this.#phase='sources';return 10;}
       case 'sources':{if(!this.#reconstruct&&this.time.now()<this.#nextRefresh){await stored(this.db.reclaimUploadPayloads({limit:100}));this.#phase='status';return 500;}
