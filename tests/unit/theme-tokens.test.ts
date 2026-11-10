@@ -137,4 +137,12 @@ describe('the shared files and the dark scope', () => {
     }
     expect(css).not.toMatch(/max-width:\s*1[0-9]{3}px/);
   });
+  // ET-110: a stopped sweep would leave an accent block that reads as a partial value; reduced motion shows even stripes instead.
+  it('shows the first upload count as even stripes, not a stopped sweep, under reduced motion', () => {
+    const css = stripComments(shell);
+    const rule = /@media \(prefers-reduced-motion: reduce\) \{ \.yu-account progress:not\(\[value\]\) \{([^}]+)\} \}/.exec(css);
+    if (!rule) throw new Error('Missing the reduced-motion rule for the indeterminate upload bar in shell.css');
+    expect(rule[1]).toMatch(/animation: none !important;/);
+    expect(rule[1]).toMatch(/background: repeating-linear-gradient\(90deg, var\(--yu-accent-light\) 0 6px, var\(--yu-border\) 6px 12px\);/);
+  });
 });

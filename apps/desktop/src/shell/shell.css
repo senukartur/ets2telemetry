@@ -480,8 +480,9 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-account progress:not([value]) { background: linear-gradient(90deg, transparent 0 35%, var(--yu-accent-light) 35% 65%, transparent 65%) 0 0 / 200% 100% no-repeat, var(--yu-border); animation: yu-account-count 1.4s ease-in-out infinite; }
 .yu-account progress:not([value])::-webkit-progress-bar { background: transparent; }
 @keyframes yu-account-count { from { background-position: 100% 0, 0 0; } to { background-position: -100% 0, 0 0; } }
-/* As for .yu-dot: the global reduced-motion rule would make the endless sweep flicker; stop it instead. */
-@media (prefers-reduced-motion: reduce) { .yu-account progress:not([value]) { animation: none !important; } }
+/* As for .yu-dot: the global reduced-motion rule would make the endless sweep flicker; stop it instead. A stopped sweep would
+   read as a partial value, so the bar shows even stripes along its whole length. */
+@media (prefers-reduced-motion: reduce) { .yu-account progress:not([value]) { animation: none !important; background: repeating-linear-gradient(90deg, var(--yu-accent-light) 0 6px, var(--yu-border) 6px 12px); } }
 .yu-account-problems { display: grid; padding: 0; list-style: none; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
 .yu-account-problems > li { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; padding: 10px 12px; }
 .yu-account-problems > li + li { border-top: 1px solid var(--yu-divider); }
