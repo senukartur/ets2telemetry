@@ -2,14 +2,18 @@
 #include "protocol-json.hpp"
 #include "capture-hello.hpp"
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <limits>
 #include <map>
 #include <set>
 #include <sstream>
+#include <type_traits>
+#include <utility>
 
 // Reads the shared protocol v1 corpus (manifest.txt, streams.txt and the payload fixtures) that the Vitest suites read,
 // and must reproduce every accept/reject result and stream outcome. The minor-1 corpus (ET-050b) in the `minor1`
@@ -808,10 +812,28 @@ unsigned streams_minor1(const Fixtures& f1) {
   return count;
 }
 
-// Every stream's frames of one minor directory, in both directions, through the frame decoder at that directory's maxMinor. A byte-at-a-time pass cuts each
-// stream at every offset at once, and the client direction is also split in two at every offset. The server direction
-// is split in two at every offset within `edge_window` bytes of each frame edge (each split decodes the whole stream,
-// and the frozen v0 parser takes about 6 ms per checkpoint under ASan, within the 120 s ASan CTest timeout).
+bool same_wire(const Json& actual, const Json& expected) {
+  return std::visit([&](const auto& value) {
+    using Value = std::decay_t<decltype(value)>;
+    const auto* other = std::get_if<Value>(&expected.value);
+    if (!other) return false;
+    if constexpr (std::is_same_v<Value, double>) {
+      return std::isfinite(value) && value == *other && (value != 0.0 || std::signbit(value) == std::signbit(*other));
+    } else if constexpr (std::is_same_v<Value, Json::Object>) {
+      return std::equal(value.begin(), value.end(), other->begin(), other->end(), [](const auto& left, const auto& right) {
+        return left.first == right.first && same_wire(left.second, right.second);
+      });
+    } else if constexpr (std::is_same_v<Value, Json::Array>) {
+      return std::equal(value.begin(), value.end(), other->begin(), other->end(), same_wire);
+    } else {
+      return value == *other;
+    }
+  }, actual.value);
+}
+
+// Check each direction at the corpus's maximum minor. The byte-at-a-time pass covers every offset in one decode.
+// Each two-way split decodes the whole stream, so the server splits stay within `edge_window` bytes of each frame edge.
+// The client direction uses every two-way split. Compare those repeated decodes without serializing their wire values.
 unsigned framing_streams(const Fixtures& f1, std::size_t edge_window) {
   unsigned splits = 0;
   for (const auto& row : rows(read(f1.dir / "streams.txt"))) {
@@ -822,15 +844,16 @@ unsigned framing_streams(const Fixtures& f1, std::size_t edge_window) {
         auto m = sender == Sender::server ? f1.server(step.substr(2)) : f1.client(step.substr(2)); bytes = concat(bytes, encode_frame(m, f1.max_minor)); edges.push_back(bytes.size()); expected.push_back(std::move(m));
       }
       if (expected.empty()) continue;
-      const auto same = [&](const std::vector<Message>& found) {
-        if (found.size() != expected.size()) return false;
-        for (std::size_t i = 0; i < found.size(); ++i) if (found[i].minor != expected[i].minor || canonical(found[i].wire) != canonical(expected[i].wire)) return false;
-        return true;
+      const auto same = [&](const std::vector<Message>& found, const auto& compare_wire) {
+        return std::equal(found.begin(), found.end(), expected.begin(), expected.end(), [&](const Message& actual, const Message& wanted) {
+          return actual.minor == wanted.minor && compare_wire(actual.wire, wanted.wire);
+        });
       };
       const auto name = row[0] + (sender == Sender::server ? " server" : " client");
       std::vector<Message> one; FrameDecoder bytewise(sender, f1.max_minor);
       for (const auto& b : bytes) bytewise.push(&b, 1, [&](Message m) { one.push_back(std::move(m)); });
-      bytewise.end(); check(same(one), name + " byte at a time");
+      bytewise.end();
+      check(same(one, [](const Json& actual, const Json& wanted) { return canonical(actual) == canonical(wanted); }), name + " byte at a time");
       std::set<std::size_t> offsets;
       for (std::size_t at = 0; at <= bytes.size(); ++at) {
         const auto near = std::any_of(edges.begin(), edges.end(), [&](std::size_t edge) { return at + edge_window >= edge && at <= edge + edge_window; });
@@ -839,7 +862,7 @@ unsigned framing_streams(const Fixtures& f1, std::size_t edge_window) {
       for (const auto at : offsets) {
         std::vector<Message> found; FrameDecoder decoder(sender, f1.max_minor); const auto emit = [&](Message m) { found.push_back(std::move(m)); };
         decoder.push(bytes.data(), at, emit); decoder.push(bytes.data() + at, bytes.size() - at, emit); decoder.end();
-        check(same(found), name + " two-way split at " + std::to_string(at)); ++splits;
+        check(same(found, same_wire), name + " two-way split at " + std::to_string(at)); ++splits;
       }
       // A decoder below the directory's maximum (the default one at minor 0, and minor 1 for the minor-2 directory) emits
       // exactly the leading frames at or below its maximum and fails closed at the first frame above it.
@@ -1520,24 +1543,33 @@ int main(int argc, char** argv) {
     delivery_units(f); clock_units(f); semantics(f); isolation_and_negotiation(f, v0_dir); framing(f); encoding_and_normalization(f); parser_depth(f);
     std::cout << fixtures << " shared payload fixtures; " << scenarios << " shared streams; C++ encoder worst cases: checkpoint " << worst_checkpoint
       << ", event " << worst_event << ", gap " << worst_gap << " bytes; delivery, clock, framing and normalization passed\n";
-    const Fixtures f1{f.dir / "minor1", 1}; std::size_t worst_minor1 = 0;
+    const Fixtures f1{f.dir / "minor1", 1}, f2{f.dir / "minor2", 2}, f3{f.dir / "minor3", 3}, f4{f.dir / "minor4", 4};
+    // Each framing pass reads its own corpus and builds its own decoders. Keep the remaining suites and summaries serial.
+    auto even_minor_framing = std::async(std::launch::async, [f2, f4] {
+      return std::pair{framing_streams(f2, 8), framing_streams(f4, 8)};
+    });
+    const auto minor1_splits = framing_streams(f1, 16);
+    const auto minor3_splits = framing_streams(f3, 8);
+    const auto [minor2_splits, minor4_splits] = even_minor_framing.get();
+
+    std::size_t worst_minor1 = 0;
     corpus_minor1(f1, f, worst_minor1); gearbox_semantics(f1); minor1_delivery(f1, f);
-    const auto minor1_streams = streams_minor1(f1); const auto minor1_splits = framing_streams(f1, 16);
+    const auto minor1_streams = streams_minor1(f1);
     std::cout << "minor 1: 48 payload fixtures; " << minor1_streams << " streams; " << minor1_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor1 << " bytes; negotiation, delivery and gearbox passed\n";
-    const Fixtures f2{f.dir / "minor2", 2}; std::size_t worst_minor2 = 0;
+    std::size_t worst_minor2 = 0;
     corpus_minor2(f2, f1, f, worst_minor2); break_semantics(f2); minor2_delivery(f2, f1, f);
-    const auto minor2_streams = streams_minor2(f2); const auto minor2_splits = framing_streams(f2, 8);
+    const auto minor2_streams = streams_minor2(f2);
     std::cout << "minor 2: 51 payload fixtures; " << minor2_streams << " streams; " << minor2_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor2 << " bytes; negotiation, delivery and mandatory break passed\n";
-    const Fixtures f3{f.dir / "minor3", 3}; std::size_t worst_minor3 = 0;
+    std::size_t worst_minor3 = 0;
     corpus_minor3(f3, f2, f1, f, worst_minor3); cruise_semantics(f3); minor3_delivery(f3, f2, f);
-    const auto minor3_streams = streams_minor3(f3); const auto minor3_splits = framing_streams(f3, 8);
+    const auto minor3_streams = streams_minor3(f3);
     std::cout << "minor 3: 45 payload fixtures; " << minor3_streams << " streams; " << minor3_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor3 << " bytes; negotiation, delivery and cruise control passed\n";
-    const Fixtures f4{f.dir / "minor4", 4}; std::size_t worst_minor4 = 0;
+    std::size_t worst_minor4 = 0;
     corpus_minor4(f4, f3, f2, f1, f, worst_minor4); limit_semantics(f4); minor4_delivery(f4, f3, f);
-    const auto minor4_streams = streams_minor4(f4); const auto minor4_splits = framing_streams(f4, 8);
+    const auto minor4_streams = streams_minor4(f4);
     std::cout << "minor 4: 47 payload fixtures; " << minor4_streams << " streams; " << minor4_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor4 << " bytes; negotiation, delivery and speed limit passed\n";
     return 0;

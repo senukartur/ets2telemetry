@@ -1003,13 +1003,18 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     expect((await read(r)).assessment.rules[3]).toMatchObject({values: [0], state: 'fail'});
   });
   it('supports the unique Cloud layout and rejects multiple matching accounts', async () => {
-    const steam = path.join(root, 'Steam'), remote = path.join(steam, 'userdata', '100', '227300', 'remote', 'profiles', id);
+    const steam = path.join(root, 'Steam'), userdata = path.join(steam, 'userdata');
+    const remote = path.join(userdata, '100', '227300', 'remote', 'profiles', id);
     const local = path.join(game, 'steam_profiles', id); await mkdir(remote, {recursive: true}); await mkdir(local, {recursive: true});
     await writeFile(path.join(remote, 'config.cfg'), HARD_MODE_CONFIG); await writeFile(path.join(local, 'config_local.cfg'), 'uset g_brake_intensity "0.75"');
     await writeFile(path.join(game, 'game.log.txt'), header + selection + save('steam'));
     const r = ownedReader({documents: path.join(root, 'Documents'), steamRoot: steam, process: processFacts});
     expect((await read(r)).assessment.source).toBe('cloud');
-    const duplicate = path.join(steam, 'userdata', '101', '227300', 'remote', 'profiles', id); await mkdir(duplicate, {recursive: true}); await writeFile(path.join(duplicate, 'config.cfg'), HARD_MODE_CONFIG);
+    const duplicate = path.join(userdata, '101', '227300', 'remote', 'profiles', id);
+    await metadataVisibleChange(userdata, async () => {
+      await mkdir(duplicate, {recursive: true});
+      await writeFile(path.join(duplicate, 'config.cfg'), HARD_MODE_CONFIG);
+    });
     await expect(read(r)).rejects.toThrow('ambiguous');
   });
   it('recovers a stable Cloud watch set after rejecting an account added between traversal and metadata',async()=>{
