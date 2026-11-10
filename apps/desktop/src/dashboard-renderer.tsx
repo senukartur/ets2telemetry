@@ -115,7 +115,7 @@ export default function App() {
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
         {route === 'journal' ? <JournalBoundary language={language}><Journal uploadStatus={upload.state.status} units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
-        {route === 'account' ? <AccountScreen state={upload.state} controller={upload.controller} language={language} /> : null}
+        {route === 'account' ? <AccountScreen state={upload.state} controller={upload.controller} language={language} onOpenJournal={() => setRoute('journal')} /> : null}
         <SettingsScreen hidden={route !== 'settings'} language={language} panel={panel} onPanel={setPanel} app={app} live={live} startup={startup} onSaved={saved}
           lastCard={lastCard} onRequest={setLastCard} languageController={languageController} pluginActions={pluginActions}
           onPlugins={plugins => setApp(current => current && {...current, plugins})} onSourceFailed={() => setStartup(strings.sourceSelectionFailed)} />

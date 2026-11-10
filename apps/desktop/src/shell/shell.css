@@ -1,8 +1,8 @@
 html, body, #root { margin: 0; min-height: 100%; background: var(--yu-bg-app); color: var(--yu-text); font-family: var(--yu-font); font-size: 13px; }
 * { box-sizing: border-box; }
 button, input, select { font: inherit; }
-button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint), [role="combobox"] { min-height: 32px; }
-button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint), select, input, [role="tab"] { border-radius: var(--yu-radius-control); }
+button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint):not(.yu-sync-chip), [role="combobox"] { min-height: 32px; }
+button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint):not(.yu-sync-chip), select, input, [role="tab"] { border-radius: var(--yu-radius-control); }
 button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
 /* The screen heading takes programmatic focus on each route change for screen readers; it is not a control, so no ring. */
@@ -410,73 +410,98 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-hard-mode-grid .yu-hard-mode-values p { margin: 0; }
 @container (max-width: 680px) { .yu-hard-mode-grid { grid-template-columns: minmax(0, 1fr); } }
 
+/* ET-110 Account & sync (mockups T7, T7a, T7b): an intro and at most two full-width cards; only the token field is capped. */
 .yu-account { font-size: 12px; line-height: 1.5; }
-.yu-account-grid { display: grid; grid-template-columns: minmax(0,1.62fr) minmax(0,1fr); gap: 14px; align-items: start; }
 .yu-account :is([data-slot="card"], [data-slot="card-content"], dl > div) { min-width: 0; }
 .yu-account [data-slot="card"] { border: 1px solid var(--yu-border); overflow: visible; font-size: 12px; }
 .yu-account [data-slot="card-header"] { padding: 10px 14px; border-radius: var(--yu-radius-card) var(--yu-radius-card) 0 0; background: var(--yu-bg-inset); }
 .yu-account [data-slot="card-title"] { border: 0; padding: 0; font-size: 13px; }
-.yu-account .yu-account-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.yu-account .yu-account-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
 .yu-account :is(h2,h3) { font-size: 13px; font-weight: 700; }
 .yu-account h2 { display: flex; align-items: center; gap: 7px; }
 .yu-account h2 svg { width: 16px; height: 16px; }
 .yu-account [data-slot="card-content"] { display: grid; gap: 12px; padding: 14px; }
-.yu-account :is(p,dl,ol,h2,h3) { margin: 0; }
+.yu-account :is(p,dl,ol,ul,h2,h3) { margin: 0; }
 .yu-account :is(p,dt,dd,strong,[data-slot="badge"]) { overflow-wrap: anywhere; }
 .yu-account [data-slot="badge"] { max-width: 100%; white-space: normal; border-radius: var(--yu-radius-badge); font-size: 11px; }
-.yu-account :is(.yu-account-metadata,.yu-account-owner) { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px 16px; }
-.yu-account .yu-account-metadata { grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); }
-.yu-account-owner > div:first-child { grid-column: 1 / -1; }
+.yu-account-owner { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 8px 16px; }
 .yu-account dt { color: var(--yu-text-muted); font-size: 11px; }
 .yu-account dd { margin: 3px 0 0; font-variant-numeric: tabular-nums; }
+.yu-account-origin, .yu-account-owner dd { font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+.yu-account-service { color: var(--yu-text-secondary); }
+/* A status icon tile beside a title and one line, as in the connection card and the upload result. */
+.yu-account-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px; }
+.yu-account-main { flex: 1 1 260px; min-width: 0; }
+.yu-account-main h2 { font-size: 14px; color: var(--yu-text-strong); }
+.yu-account-main h2:focus { outline: none; }
+.yu-account-tile { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--yu-radius-card); color: var(--yu-neutral-fg); background: var(--yu-bg-raised); }
+.yu-account-tile svg { width: 18px; height: 18px; }
+.yu-account-tile[data-tone="ok"] { color: var(--yu-ok-fg); background: var(--yu-ok-bg); }
+.yu-account-tile[data-tone="warn"] { color: var(--yu-warn-fg); background: var(--yu-warn-bg); }
+.yu-account-tile[data-tone="error"] { color: var(--yu-err-fg); background: var(--yu-err-bg); }
+.yu-account-tile[data-tone="info"] { color: var(--yu-accent-light); background: var(--yu-selected-bg); }
+.yu-account-result { font-size: 15px; font-weight: 700; color: var(--yu-text-strong); }
+.yu-account [data-slot="card-content"].yu-account-connection { gap: 0; padding: 0; }
+.yu-account-connection > * { padding: 14px 16px; }
+.yu-account-connection > :is(.yu-account-section, .yu-account-details) { border-top: 1px solid var(--yu-divider); }
+/* The inline disconnect confirmation (a group, not a dialog): the question, what stays, then the two actions. */
+.yu-account-connection > .yu-account-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin: 0 16px 14px; padding: 12px 14px; border: 1px solid var(--yu-err-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
+.yu-account-question { font-weight: 700; color: var(--yu-text-strong); }
+.yu-account-question:focus { outline: none; }
+.yu-account-details > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; min-height: 32px; color: var(--yu-text-secondary); }
+.yu-account-details > summary::-webkit-details-marker { display: none; }
+.yu-account-details > summary svg { width: 14px; height: 14px; transition: transform .15s; }
+.yu-account-details[open] > summary svg { transform: rotate(90deg); }
+.yu-account-details > dl { padding: 4px 0 0 20px; }
+.yu-account-connection > .yu-account-details { padding-block: 4px 10px; }
 .yu-account-form { display: grid; gap: 8px; }
 .yu-account .yu-account-form label { font-size: 12px; }
-.yu-account .yu-upload-token { position: relative; display: flex; min-width: 0; }
-.yu-account .yu-token-input { min-width: 0; width: 100%; min-height: 36px; border: 1px solid var(--yu-border-input); background: var(--yu-bg-input); color: var(--yu-text); padding: 7px 44px 7px 10px; }
+.yu-account-token-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.yu-account .yu-upload-token { position: relative; display: flex; flex: 1 1 320px; min-width: 0; max-width: 520px; }
+.yu-account .yu-token-input { min-width: 0; width: 100%; min-height: 36px; border: 1px solid var(--yu-border-input); background: var(--yu-bg-input); color: var(--yu-text); padding: 7px 44px 7px 10px; font-family: ui-monospace, Consolas, monospace; }
 .yu-account .yu-upload-token button { position: absolute; right: 2px; top: 2px; }
 .yu-account button { min-height: 32px; height: auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; font-size: 12px; }
 .yu-account .yu-upload-token button { height: 32px; width: 36px; }
 .yu-account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.yu-account [data-testid="account.confirmation"] { display: grid; gap: 12px; }
 .yu-account-notice, .yu-account-preview { padding: 10px 12px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
 .yu-account-notice[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
 .yu-account-notice[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
 .yu-account-notice p + p { margin-top: 8px; }
 .yu-account-feedback:has(> :only-child) { position: absolute; }
-.yu-account-local, .yu-account-footer { font-size: 11px; }
-.yu-account-local { border-top: 1px solid var(--yu-divider); padding-top: 12px; }
-.yu-account-steps { display: grid; gap: 16px; padding: 0; list-style: none; counter-reset: upload-step; }
-.yu-account-steps li { position: relative; padding-left: 32px; counter-increment: upload-step; }
-.yu-account-steps li::before { content: counter(upload-step); position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-badge); color: var(--yu-accent-text); background: var(--yu-bg-inset); font-variant-numeric: tabular-nums; }
-.yu-account-steps p { margin-top: 4px; color: var(--yu-text-muted); }
-.yu-account-metrics { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
-.yu-account-metrics > div { padding: 10px 12px; border-left: 1px solid var(--yu-divider); }
-.yu-account-metrics > div:first-child { border-left: 0; }
-.yu-account-metrics dd { font-size: 22px; color: var(--yu-text-strong); }
-.yu-account-metrics dd.yu-account-date { font-size: 12px; }
-.yu-account-metrics p { margin-top: 3px; font-size: 11px; color: var(--yu-text-muted); }
-.yu-account-delivered { font-weight: 500; }
-.yu-account progress { width: 100%; min-width: 0; height: 6px; accent-color: var(--yu-accent-light); }
-.yu-account progress[value] { appearance: none; border: 0; border-radius: var(--yu-radius-badge); overflow: hidden; background: var(--yu-border); color: var(--yu-accent-light); }
-.yu-account progress[value]::-webkit-progress-bar { background: var(--yu-border); border-radius: var(--yu-radius-badge); }
-.yu-account progress[value]::-webkit-progress-value { background: currentColor; border-radius: var(--yu-radius-badge); }
-.yu-account .yu-account-disconnect { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
-.yu-account-disconnect > div { flex: 1 1 300px; min-width: 0; }
-.yu-account-disconnect p { margin-top: 4px; }
-@media (max-width: 950px) { .yu-account-metrics { grid-template-columns: repeat(3,minmax(0,1fr)); } .yu-account-metrics > div { border: 0; } }
-@media (max-width: 760px) { .yu-account-grid { grid-template-columns: minmax(0,1fr); } .yu-account :is(.yu-account-owner,.yu-account-metadata) { grid-template-columns: minmax(0,1fr); } .yu-account-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+.yu-account-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 10px 16px; padding: 0; list-style: none; counter-reset: upload-step; color: var(--yu-text-secondary); }
+.yu-account-steps li { position: relative; padding-left: 28px; counter-increment: upload-step; }
+.yu-account-steps li::before { content: counter(upload-step); position: absolute; top: 0; left: 0; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; color: var(--yu-text); background: var(--yu-bg-raised); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* One bar: accent while sending, the OK graphic once everything is sent, subtle while paused; a sweep for a first count. */
+.yu-account progress { width: 100%; min-width: 0; height: 6px; appearance: none; border: 0; border-radius: var(--yu-radius-badge); overflow: hidden; background: var(--yu-border); color: var(--yu-accent-light); }
+.yu-account progress[data-fill="ok"] { color: var(--yu-ok-graphic); }
+.yu-account progress[data-fill="paused"] { color: var(--yu-text-subtle); }
+.yu-account progress::-webkit-progress-bar { background: var(--yu-border); border-radius: var(--yu-radius-badge); }
+.yu-account progress::-webkit-progress-value { background: currentColor; border-radius: var(--yu-radius-badge); }
+.yu-account progress:not([value]) { background: linear-gradient(90deg, transparent 0 35%, var(--yu-accent-light) 35% 65%, transparent 65%) 0 0 / 200% 100% no-repeat, var(--yu-border); animation: yu-account-count 1.4s ease-in-out infinite; }
+.yu-account progress:not([value])::-webkit-progress-bar { background: transparent; }
+@keyframes yu-account-count { from { background-position: 100% 0, 0 0; } to { background-position: -100% 0, 0 0; } }
+/* As for .yu-dot: the global reduced-motion rule would make the endless sweep flicker; stop it instead. A stopped sweep would
+   read as a partial value, so the bar shows even stripes along its whole length. */
+@media (prefers-reduced-motion: reduce) { .yu-account progress:not([value]) { animation: none !important; background: repeating-linear-gradient(90deg, var(--yu-accent-light) 0 6px, var(--yu-border) 6px 12px); } }
+.yu-account-problems { display: grid; padding: 0; list-style: none; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-control); background: var(--yu-bg-inset); }
+.yu-account-problems > li { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 10px; padding: 10px 12px; }
+.yu-account-problems > li + li { border-top: 1px solid var(--yu-divider); }
+.yu-account-problems > li > svg { flex: none; width: 16px; height: 16px; margin-top: 1px; color: var(--yu-text-secondary); }
+.yu-account-problems > li[data-tone="warn"] > svg { color: var(--yu-warn-fg); }
+.yu-account-problem { font-weight: 500; color: var(--yu-text); }
+.yu-account-problems [data-variant="link"] { flex: none; padding: 0 4px; color: var(--yu-accent-text); }
 .yu-sync-chip[data-tone="ok"] { color: var(--yu-ok-fg); border-color: var(--yu-ok-border); background: var(--yu-ok-bg); }
 .yu-sync-chip[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
 .yu-sync-chip[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
 
-/* ET-074: the site sync chip is 24 px tall like the other chips; its hit area extends to 32 px. */
+/* ET-074: the site sync chip is 24 px tall like the other chips; its hit area extends to 32 px. ET-110: the global button
+   rules above exclude it, because their 32 px minimum outranked this rule and made the chip taller than the others. */
 .yu-sync-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--yu-neutral-border); color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); max-width: 100%; text-align: left; }
 .yu-sync-chip svg { width: 13px; height: 13px; flex: none; }
-.yu-topbar button.yu-sync-chip { position: relative; height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.yu-topbar button.yu-sync-chip { position: relative; box-sizing: border-box; height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; line-height: 1; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .yu-topbar button.yu-sync-chip::after { content: ""; position: absolute; inset: -4px 0; }
 
-/* ET-074 Live page (mockup T1): one column up to 1100 px with 12 px gaps. */
-.yu-live-screen { max-width: 1100px; }
+/* ET-074 Live page (mockup T1): one column with 12 px gaps that fills the content width (ET-110). */
 .yu-live { display: grid; gap: 12px; min-width: 0; }
 .yu-connection { display: flex; gap: 14px; align-items: center; padding: 14px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
 .yu-connection-icon { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--yu-nav-active-bg); color: var(--yu-accent-light); }
@@ -567,8 +592,9 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-live-fields h3 { color: var(--yu-accent-text); padding-bottom: 6px; }
 @media (max-width: 900px) { .yu-live-fields { grid-template-columns: minmax(0, 1fr); } }
 
-/* ET-078 Settings (mockup T5): a 170 px sub-navigation beside the panel column, up to 1100 px; one column at 900 px and below. */
-.yu-settings { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 20px; align-items: start; max-width: 1100px; }
+/* ET-078 Settings (mockup T5): a 170 px sub-navigation beside the panel column, which fills the content width (ET-110), and
+   the Overlay panel with it; one column at 900 px and below. */
+.yu-settings { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 20px; align-items: start; }
 .yu-settings-nav { display: flex; flex-direction: column; gap: 1px; }
 .yu-settings-nav button { display: flex; align-items: center; min-height: 32px; padding: 0 10px; border: 0; border-radius: var(--yu-radius-control); background: transparent; color: var(--yu-text-secondary); font-size: 13px; line-height: 1.25; text-align: left; }
 .yu-settings-nav button:hover { background: var(--yu-hover-bg); }

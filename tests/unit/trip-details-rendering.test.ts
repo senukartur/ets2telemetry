@@ -62,7 +62,7 @@ describe('compact trip page (ET-077)', () => {
   it('keeps the site text free of acceptance wording for a state other than sent', () => {
     const html = renderToStaticMarkup(React.createElement(TripSite, {row: {...sentRow, state: 'held', reason: 'validation', lastDurableUploadUtcMs: null}, language: 'en'}));
     expect(html).not.toContain('trip.site.saved');
-    expect(html).toContain('A source needs validation.');
+    expect(html).toContain('A trip needs validation.');
   });
 
   it('names the latest evaluation by the outcome and counts the passing rules', () => {

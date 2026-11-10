@@ -59,7 +59,7 @@ Hard Mode checks whether the game's persisted profile settings meet twelve reali
 
 ### Account and synchronization
 
-Account & sync verifies a personal token, then asks the driver to confirm the exact Dashboard owner and all retained eligible game-trip summaries before upload. Existing owners remain attached to their trips. Status separates distinct-source delivery, enumeration, pending identities, holds and queued events; Journal badges require current material and durable receipt evidence. Upload is not company acceptance. When a deployment has no configured service origin, Account explains unavailable configuration and exposes no token controls or sync decorations. Local recording works throughout.
+Account & sync verifies a personal token, then asks the driver to confirm the exact Dashboard owner and all retained eligible game-trip summaries before upload. Existing owners remain attached to their trips. The page shows one connection card and one upload result counted in distinct trips, keeps the last complete totals through recounts and lists trips awaiting identity, held trips and queue pressure only when they occur; Journal badges require current material and durable receipt evidence. Upload is not company acceptance. When a deployment has no configured service origin, Account explains unavailable configuration and exposes no token controls or sync decorations. Local recording works throughout.
 
 ### Application
 
