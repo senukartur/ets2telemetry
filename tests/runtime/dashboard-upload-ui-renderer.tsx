@@ -7,6 +7,7 @@ import {SyncChip} from '../../apps/desktop/src/dashboard-upload/sync-chip';
 import {JournalSyncBadge} from '../../apps/desktop/src/dashboard-upload/journal-sync';
 import {useDashboardUpload} from '../../apps/desktop/src/dashboard-upload/use-dashboard-upload';
 import {t} from '../../apps/desktop/src/i18n';
+import {Badge} from '@/components/ui/badge';
 import '../../apps/desktop/src/index.css';
 
 const bridge = (window as unknown as {uploadUi: DashboardUploadBridge & {listJournalTrips(query: object): Promise<{ok: true; value: JournalTripPage}>}}).uploadUi;
@@ -46,7 +47,8 @@ function Fixture() {
       if (holdingConfirmationReply) confirmationReply.resolve(); else confirmationReply = deferred();
       setHoldingConfirmationReply(value => !value);
     }}>{holdingConfirmationReply ? 'Release confirmation reply' : 'Hold confirmation reply'}</button>
-  </nav></aside><div className="yu-column"><header className="yu-topbar"><span>{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</span><SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} /></header>
+  </nav></aside><div className="yu-column"><header className="yu-topbar"><span>{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</span>{/* ET-110: a production top-bar chip beside the sync button, so the smoke can compare their heights. */}
+    <span className="yu-status-chips"><Badge variant="neutral" className="yu-chip" data-testid="fixture.chip">Chip</Badge><SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} /></span></header>
     <main className="yu-content" data-testid="fixture.content"><div className="yu-page-header"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</h1></div>{route === 'account' ? <AccountScreen {...upload} language={language} onOpenJournal={() => setRoute('journal')} /> : <section data-testid="fixture.rows" className="yu-stack"><h2>{t('upload.column', undefined, language)}</h2>{page?.sync?.rows.map((row, index) => <div key={row.tripUuid}><span>Source {index + 1} </span><JournalSyncBadge row={row} language={language} /></div>)}</section>}</main>
   </div></div></div>;
 }
