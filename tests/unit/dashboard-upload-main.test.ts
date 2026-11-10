@@ -105,6 +105,18 @@ it('REG-010/012 does not present an uncommitted candidate as a connected owner a
   const failed = await f.controller.handle('confirm', [candidate.candidateId]); expect(failed).toMatchObject({state: 'paused', error: 'NETWORK', owner: null, candidateId: null}); expect(f.controller.journalReadScope).toBeUndefined(); f.controller.stop();
 });
 
+it.each([['verify', 'AUTHENTICATION'], ['confirm', 'NETWORK']] as const)('REG-010/012 keeps the failed %s reason visible after owner-free recovery settles', async (action, error) => {
+  const published: DashboardUploadStatus[] = [], recovered = deferred<void>();
+  const f = fixture(status => {published.push(status); if (status.state === 'disconnected' && status.error) recovered.resolve();}); await f.controller.attach(f.rpc); const original = f.rpc.call;
+  let candidateId: string | null = null;
+  if (action === 'confirm') candidateId = (await f.controller.handle('verify', [token])).candidateId;
+  f.rpc.call = command => command.action === (action === 'verify' ? 'verify' : 'prepare') ? Promise.resolve({ok: false, error}) : original(command);
+  try {
+    expect(await f.controller.handle(action, action === 'verify' ? [token] : [candidateId])).toMatchObject({state: 'paused', error, owner: null, candidateId: null});
+    await recovered.promise; expect(f.controller.status).toMatchObject({state: 'disconnected', error, owner: null, candidateId: null}); expect(published.at(-1)).toMatchObject({state: 'disconnected', error});
+    await new Promise(done => setTimeout(done, 0)); f.rpc.call = original; expect(await f.controller.handle('verify', [token])).toMatchObject({state: 'confirmation-required', error: null});
+  } finally {f.controller.stop();}
+});
 it.each([false, true])('REG-010/012 keeps reconciliation fail-closed and preserves credentials with disconnect intent=%s', async intent => {
   const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]); await f.controller.handle('confirm', [candidate.candidateId]);
   f.setConfiguration({...f.configuration(), status: 'reconciliation-required', ...(intent ? {version: '2', registration: {...f.configuration().registration as object, accountId: 'new-owner'}} : {})});

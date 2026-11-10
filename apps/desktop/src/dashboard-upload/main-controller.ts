@@ -13,6 +13,8 @@ export class UploadMainController {
   #candidate:{id:string;token:string;owner:DashboardOwner;epoch:number;generation:string}|undefined;
   #recoveryRequested=false;#recoveryTimer:ReturnType<typeof setTimeout>|undefined;#recoveryAttempts=0;#revalidationFailures=0;
   #connectionVersion:string|undefined;
+  // A failed user control schedules recovery; an owner-free result must still show why the control failed.
+  #controlError:DashboardUploadError|null=null;
   constructor(private readonly origin:string|null,private readonly channel:ReleaseChannel,private readonly createStore:()=>UploadCredentialStore,private readonly publish:(status:DashboardUploadStatus)=>void){this.#status=initialDashboardUploadStatus(origin);}
   get status(){return structuredClone(this.#status);}
   get journalReadScope():JournalUploadScope|undefined {
@@ -31,7 +33,7 @@ export class UploadMainController {
   #retireCandidate(){this.#connectionVersion=undefined;this.#epoch++;this.#abort.abort();this.#abort=new AbortController();this.#candidate=undefined;this.#status.candidateId=null;}
   acceptStatus(status:DashboardUploadStatus):void {if(this.origin&&status.origin===this.origin&&!this.#candidate&&this.#operations===0&&!this.#stopping){this.#status=status;this.#emit();}}
   stop():void {this.#stopping=true;this.#clearRecovery();this.#retireCandidate();this.#status.state='stopping';this.#emit();this.#rpc?.retire();this.#rpc=undefined;}
-  #clearRecovery(){clearTimeout(this.#recoveryTimer);this.#recoveryTimer=undefined;this.#recoveryRequested=false;this.#recoveryAttempts=0;this.#revalidationFailures=0;}
+  #clearRecovery(){clearTimeout(this.#recoveryTimer);this.#recoveryTimer=undefined;this.#recoveryRequested=false;this.#controlError=null;this.#recoveryAttempts=0;this.#revalidationFailures=0;}
   #recoveryFailure(error:unknown,rpc:UploadRpc,epoch:number,committed:boolean){
     if(this.#rpc!==rpc||epoch!==this.#epoch||this.#stopping)return;
     const code=this.#fixed(error);this.#error(code);
@@ -55,7 +57,7 @@ export class UploadMainController {
       await this.#removeCredentials(store);await store.clearDisconnect();this.#current(epoch,rpc);this.#status=initialDashboardUploadStatus(this.origin);this.#emit();return;
     }
     if(c.status!=='ready')throw Error('RECONCILIATION');
-    if(!c.registration){this.#status=initialDashboardUploadStatus(this.origin);this.#emit();return;}
+    if(!c.registration){this.#status={...initialDashboardUploadStatus(this.origin),error:this.#controlError};this.#emit();return;}
     if(c.registration.origin!==this.origin||!c.credentialGeneration)throw Error('RECONCILIATION');
     authority.committed=true;this.#status.owner={origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch};
     const context:CredentialContext={generation:c.credentialGeneration,channel:this.channel,owner:{origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch},registration:c.registration};const token=await store.load(context);this.#current(epoch,rpc);
@@ -86,7 +88,7 @@ export class UploadMainController {
       if(confirmed.kind!=='connection'||confirmed.connection.status!=='confirmed')throw Error('RECONCILIATION');this.#current(candidate.epoch,rpc);await store.activate(context);this.#current(candidate.epoch,rpc);
       const active=await this.#call({action:'activate',token:candidate.token,generation:context.generation,version:confirmed.connection.version});if(active.kind!=='settled')throw Error('RECONCILIATION');this.#current(candidate.epoch,rpc);
       this.#candidate=undefined;this.#activated(active.status,context.owner);this.#connectionVersion=confirmed.connection.version;await store.cleanup([context.generation],8);return this.status;
-    }catch(error){this.#candidate=undefined;if(['verify','confirm','disconnect'].includes(action))this.#recoveryRequested=true;if(this.#rpc!==rpc||operationEpoch!==this.#epoch)return {...this.status,candidateId:null,error:'RETIRED'};return this.#error(this.#fixed(error));}finally{this.#operations--;this.#drainRecovery();}
+    }catch(error){this.#candidate=undefined;if(['verify','confirm','disconnect'].includes(action))this.#recoveryRequested=true;if(this.#rpc!==rpc||operationEpoch!==this.#epoch)return {...this.status,candidateId:null,error:'RETIRED'};const code=this.#fixed(error);if(action==='verify'||action==='confirm')this.#controlError=code;return this.#error(code);}finally{this.#operations--;this.#drainRecovery();}
   }
   #fixed(error:unknown):DashboardUploadError {const code=error instanceof Error?error.message:'';return ['ENCRYPTION_UNAVAILABLE','CREDENTIAL_UNAVAILABLE','RETIRED','AUTHENTICATION','CONFIGURATION','RECONCILIATION','TIMEOUT','BUSY','NETWORK','UNSUPPORTED_CONTRACT','CANCELLED','STORAGE_UNAVAILABLE'].includes(code)?code as DashboardUploadError:'CREDENTIAL_UNAVAILABLE';}
 }
