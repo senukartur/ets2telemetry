@@ -14,7 +14,7 @@ import {promisify} from 'node:util';
  */
 /** `displayName` is the build channel's display name in the recording texts (ET-055 PR-4); production's by default. */
 export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; uiCase?: string; numbers?: 'int64'; mode?: string;
-  jobResult?: string; displayName?: string; stderrPath?: string};
+  jobResult?: string; displayName?: string; stderrPath?: string; elapsedMs?: number; deadlineMs?: number};
 export type RuntimeReceiptResult = {passed?: boolean; driverResultAvailable?: boolean; reason?: string | null; error?: string; failureSummary?: string};
 
 // Measured budgets for one batch; docs/ci.md#powershell-validator-test-budgets records the evidence.

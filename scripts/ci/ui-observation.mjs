@@ -5,7 +5,7 @@ import path from 'node:path';
 import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage, isolateDashboardPointer} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
-import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, zeroLiveObservation} from './renderer-observation.mjs';
+import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, waitForPartialLive, zeroLiveObservation} from './renderer-observation.mjs';
 import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
@@ -637,7 +637,7 @@ async function observeScaleRange({application, dashboard, overlay, language, siz
   }
   record.flags.scaleRange = true;
 }
-async function capture({page, application, config, record, name, language, size, overlay = false}) {
+async function capture({page, application, config, record, name, language, size, progress, overlay = false}) {
   const file = `ui-${config.uiCase}-${name}-${language}-${size.width}x${size.height}.png`;
   await settled(page);
   if (overlay) {
@@ -647,6 +647,7 @@ async function capture({page, application, config, record, name, language, size,
     });
     await writeFile(path.join(config.output, file), Buffer.from(png, 'base64'));
   } else await page.screenshot({path: path.join(config.output, file), timeout: 5000});
+  progress('screenshot-saved', file);
   const bytes = await readFile(path.join(config.output, file));
   assert.equal(bytes.subarray(1, 4).toString(), 'PNG'); assert.ok(bytes.length > 500);
   record.screenshots.push({file, language, width: size.width, height: size.height, screen: name,
@@ -920,10 +921,10 @@ async function observeMandatoryBreak({dashboard, sourceV1, language, record}) {
   await expectRow('restored', {value: en ? '1 h 35 min' : '1 ч 35 мин', reason: null, icon: true, badge: badge('soon', en ? 'Soon' : 'Скоро', 'warn')});
   record.flags.mandatoryBreak = true;
 }
-export async function runUiSmoke({application, dashboard, overlay, source, sourceV1, config, record}) {
+export async function runUiSmoke({application, dashboard, overlay, source, sourceV1, config, record, progress}) {
   assert.ok(UI_CASES.includes(config.uiCase));
   Object.assign(record, {case: config.uiCase, screenshots: [], languages: [], sizes, flags: {}});
-  const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, overlay: page === overlay});
+  const save = (name, language, size, page = dashboard) => capture({page, application, config, record, name, language, size, progress, overlay: page === overlay});
   // ET-067 (isolateDashboardPointer): the flag only records the call; the hover check under the desktop cursor below
   // shows its effect.
   const dashboardId = await isolateDashboardPointer(application, dashboard);
@@ -1057,15 +1058,15 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await save('paused', language, size);
         source.setPaused(false); await waitState(dashboard, 'connected'); source.hold();
         try {
-          await waitState(dashboard, 'stale'); assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—');
           // ET-074: v0 stopped while v1 still sends is partial: the banner says the connection is incomplete, v0's values are
           // dashes and nothing is marked stale.
-          await until(() => dashboard.getByTestId('live-telemetry').getAttribute('data-live-state'), value => value === 'partial', `UI_LIVE_STATE_PARTIAL_${language}`, 5000);
+          const partial = await waitForPartialLive(dashboard);
           const partialText = language === 'en' ? 'Game connection is incomplete. Waiting for the other telemetry stream.' : 'Подключение к игре неполное. Ожидание второго потока телеметрии.';
-          assert.equal(await dashboard.getByTestId('live.waiting').isVisible(), true, `UI_LIVE_PARTIAL_BANNER_${language}`);
-          assert.equal((await dashboard.getByTestId('live.waiting').innerText()).includes(partialText), true, `UI_LIVE_PARTIAL_TEXT_${language}`);
-          assert.equal(await dashboard.getByTestId('live.waiting').locator('strong').innerText(), language === 'en' ? 'Connection incomplete' : 'Подключение неполное', `UI_LIVE_PARTIAL_TITLE_${language}`);
-          assert.equal(await dashboard.getByTestId('live.stale').count(), 0, `UI_LIVE_PARTIAL_STALE_BADGE_${language}`);
+          assert.equal(partial.gauge, '—', `UI_LIVE_PARTIAL_GAUGE_${language}`);
+          assert.equal(partial.bannerVisible, true, `UI_LIVE_PARTIAL_BANNER_${language}`);
+          assert.equal(partial.text?.includes(partialText), true, `UI_LIVE_PARTIAL_TEXT_${language}`);
+          assert.equal(partial.title, language === 'en' ? 'Connection incomplete' : 'Подключение неполное', `UI_LIVE_PARTIAL_TITLE_${language}`);
+          assert.equal(partial.staleBadges, 0, `UI_LIVE_PARTIAL_STALE_BADGE_${language}`);
           // Both streams stopped: the stale state, with its badge in the instrument and without the waiting banner.
           sourceV1.hold();
           await until(() => dashboard.getByTestId('live-telemetry').getAttribute('data-live-state'), value => value === 'stale', `UI_LIVE_STATE_STALE_${language}`, 5000);
@@ -1342,7 +1343,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.locator('#gear-display-ets2-crawler').focus();
         await dashboard.getByTestId('gear-display-ets2-crawler-tooltip').waitFor({state: 'visible', timeout: 5000});
         assert.equal(await gearHintName('gear-display-ets2-crawler'), language === 'en' ? 'Crawler first' : 'С ползучей');
-        await dashboard.screenshot({path: path.join(config.output, `ui-${config.uiCase}-gear-display-hint-${language}.png`), timeout: 5000});
+        const gearHintFile = `ui-${config.uiCase}-gear-display-hint-${language}.png`;
+        await dashboard.screenshot({path: path.join(config.output, gearHintFile), timeout: 5000});
+        progress('screenshot-saved', gearHintFile);
         assert.equal((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2, 'automatic');
         await dashboard.keyboard.press('Escape');
         await dashboard.getByTestId('gear-display-ets2-crawler-tooltip').waitFor({state: 'hidden', timeout: 5000});
@@ -1537,7 +1540,9 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
   await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'}); await dashboard.mouse.move(0, 0);
   await indicator.focus(); await hint.waitFor({state: 'visible'});
   assert.equal((await hintHeadline())[0], headline);
-  await dashboard.screenshot({path: path.join(config.output, `ui-${config.uiCase}-recording-hint.png`), timeout: 5000});
+  const recordingHintFile = `ui-${config.uiCase}-recording-hint.png`;
+  await dashboard.screenshot({path: path.join(config.output, recordingHintFile), timeout: 5000});
+  progress('screenshot-saved', recordingHintFile);
   await dashboard.keyboard.press('Escape'); await hint.waitFor({state: 'hidden'});
   record.flags.recordingIndicator = true;
   // ET-055 UP10, UP11: the version line names this build in both languages, a staging build adds its badge, and the
@@ -1637,7 +1642,7 @@ async function observeScaleControl({dashboard, config, language, record}) {
 }
 
 /** Newer-version settings deliberately retain the existing EN fallback; there is no forced language override. */
-export async function runUiReadOnly({application, dashboard, config, record, settingsBytes}) {
+export async function runUiReadOnly({application, dashboard, config, record, settingsBytes, progress}) {
   const settings = (await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings;
   assert.equal(settings.state, 'newer-version'); assert.equal(settings.writable, false); assert.equal(settings.language, 'en');
   for (const size of sizes) {
@@ -1648,7 +1653,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     for (const game of ['ets2', 'ats']) for (const profile of ['metric', 'us-customary']) assert.equal(await dashboard.locator(`#units-${game}-${profile}`).isDisabled(), true);
     // ET-050: all four gear display radios are disabled while the settings are read-only.
     for (const game of ['ets2', 'ats']) for (const mode of ['automatic', 'manual', 'crawler']) assert.equal(await dashboard.locator(`#gear-display-${game}-${mode}`).isDisabled(), true);
-    await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size});
+    await capture({page: dashboard, application, config, record, name: 'read-only', language: 'en', size, progress});
     await settingsPanel(dashboard, 'overlay');
     const opacity = dashboard.getByRole('slider');
     assert.equal(await opacity.getAttribute('aria-disabled'), 'true');

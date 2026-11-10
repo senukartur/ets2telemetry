@@ -3,10 +3,10 @@ import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
-  clusterCentreProbe, clusterSpeedArcProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, SYNTHETIC_V0_HIDDEN_ROWS,
+  captureFailureScreenshot, clusterCentreProbe, clusterSpeedArcProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, partialLiveObservation, SYNTHETIC_V0_HIDDEN_ROWS,
   SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
   SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, stripNumberProbe, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
-  waitForNotCurrentLive, type RendererObservation
+  waitForNotCurrentLive, waitForPartialLive, type RendererObservation
 } from '../../scripts/ci/renderer-observation.mjs';
 
 const current = {gauge: {number: '90', unit: 'km/h', accessibleName: 'Speed: 90 km/h; Engine RPM: 600 rpm', visible: true}, status: 'connected: Validated current observation', speed: 'Speed: 90 km/h', fuel: 'Fuel: 73.0 L'};
@@ -101,6 +101,88 @@ function stubDocument(elements: Record<string, FakeElement[]>) {
   for (const [name, value] of Object.entries(fakeGlobals(elements))) vi.stubGlobal(name, value);
 }
 const one = (innerText: string, extra: Partial<FakeElement> = {}) => [{innerText, ...extra}];
+
+describe('coherent Live partial presentation', () => {
+  const title = 'Connection incomplete', copy = 'Game connection is incomplete. Waiting for the other telemetry stream.';
+  const text = title + '\n' + copy;
+  const frame = (status: string, state: string, change: Record<string, FakeElement[]> = {}) => fakeGlobals({
+    'telemetry-status': one(status), 'live-telemetry': one('', {attributes: {'data-live-state': state}}),
+    'live-speed-number': one('—'), 'live.waiting': one(text, {children: {strong: one(title)}}), ...change,
+  });
+  const read = (predicate: typeof partialLiveObservation, globals: ReturnType<typeof frame>) =>
+    runInNewContext(`(${predicate.toString()})()`, globals) as unknown;
+  it('captures partial once, even if v1 also expires before the driver reads the handle', async () => {
+    const frames = [
+      frame(current.status, 'partial', {'live-speed-number': one('90')}),
+      frame(stale.status, 'partial'),
+      frame(stale.status, 'stale', {'live.waiting': [], 'live.stale': one('Stale')}),
+    ];
+    const waitForFunction = vi.fn((predicate: typeof partialLiveObservation) => {
+      for (const sample of frames.slice(0, 2)) {
+        const value = read(predicate, sample);
+        if (value) return Promise.resolve({jsonValue: () => {
+          expect(read(predicate, frames[2])).toBe(false);
+          return Promise.resolve(value);
+        }, dispose});
+      }
+      return Promise.reject(new Error('partial observation not found'));
+    });
+    const dispose = vi.fn(() => Promise.resolve());
+    const page = {waitForFunction} as unknown as Page;
+    expect(await waitForPartialLive(page)).toEqual({gauge: '—', bannerVisible: true, title, text, staleBadges: 0});
+    expect(waitForFunction).toHaveBeenCalledExactlyOnceWith(partialLiveObservation, undefined, {timeout: 5000});
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+  it('requires v0 stale and partial together, excluding the reverse stream direction', () => {
+    expect(read(partialLiveObservation, frame(current.status, 'partial'))).toBe(false);
+    expect(read(partialLiveObservation, frame(stale.status, 'stale'))).toBe(false);
+  });
+  it('returns presentation defects to be asserted immediately', () => {
+    const broken = frame(stale.status, 'partial', {
+      'live-speed-number': one('90'), 'live.waiting': one('Wrong copy', {visibility: 'hidden', children: {strong: one('Wrong title')}}),
+      'live.stale': one('Stale'),
+    });
+    expect(read(partialLiveObservation, broken)).toEqual({
+      gauge: '90', bannerVisible: false, title: 'Wrong title', text: 'Wrong copy', staleBadges: 1,
+    });
+    expect(read(partialLiveObservation, frame(stale.status, 'partial', {'live.waiting': []}))).toMatchObject({
+      bannerVisible: false, title: null, text: null,
+    });
+  });
+});
+
+describe('optional failure screenshot', () => {
+  it('reports a saved PNG and clears the independent timer on prompt completion', async () => {
+    vi.useFakeTimers();
+    try {
+      const screenshot = vi.fn(() => Promise.resolve(Buffer.from('png')));
+      expect(await captureFailureScreenshot({screenshot}, 'failure.png')).toBe(true);
+      expect(screenshot).toHaveBeenCalledExactlyOnceWith({path: 'failure.png', timeout: 1000});
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {vi.useRealTimers();}
+  });
+  it.each(['completion', 'rejection'])('returns within the budget despite a stalled save and late %s', async outcome => {
+    vi.useFakeTimers();
+    try {
+      let finishWrite!: (bytes: Buffer) => void, failWrite!: (error: Error) => void;
+      const write = new Promise<Buffer>((resolve, reject) => {finishWrite = resolve; failWrite = reject;});
+      const screenshot = vi.fn(() => write);
+      const report = vi.fn();
+      const attempt = captureFailureScreenshot({screenshot}, 'failure.png').then(report);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(report).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(report).toHaveBeenCalledExactlyOnceWith(false);
+      expect(vi.getTimerCount()).toBe(0);
+      if (outcome === 'completion') finishWrite(Buffer.from('late png'));
+      else failWrite(new Error('late save failure'));
+      await vi.advanceTimersByTimeAsync(0);
+      await attempt;
+      expect(report).toHaveBeenCalledExactlyOnceWith(false);
+    } finally {vi.useRealTimers();}
+  });
+});
+
 // Every live row offscreen (top 900, below the 435 px viewport): rows need no viewport intersection (B6).
 const completeElements = (): Record<string, FakeElement[]> =>
   Object.fromEntries(SYNTHETIC_V0_LIVE_ROWS.map(([id, text]) => [id, one(text, {box: {width: 100, height: 20, top: 900}})]));

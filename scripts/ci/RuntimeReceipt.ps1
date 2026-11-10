@@ -1256,12 +1256,17 @@ function Format-RuntimeConsoleDetail {
 }
 
 function Format-RuntimeSmokeFailure {
-    param([string]$Reason, [int]$JobExitCode, [string]$EvidencePath, [object]$Driver, [string]$StderrPath)
+    param([string]$Reason, [int]$JobExitCode, [string]$EvidencePath, [object]$Driver, [string]$StderrPath,
+        [string]$Mode, [string]$Scenario, [string]$UiCase, [long]$ElapsedMs, [int]$DeadlineMs)
     $watchdog = switch ($JobExitCode) {
         124 { ' (watchdog deadline)' }
         125 { ' (watchdog killed remaining descendants)' }
     }
     $summary = "Runtime smoke failed: $Reason, Job exit $JobExitCode$watchdog; retained evidence: $EvidencePath"
+    if ($JobExitCode -eq 124) {
+        $shard = if ($UiCase) { " shard=$UiCase" } else { '' }
+        $summary += " | mode=$Mode scenario=$Scenario$shard elapsedMs=$ElapsedMs deadlineMs=$DeadlineMs"
+    }
     try {
         if ($Driver.passed -eq $false) {
             foreach ($field in @('failure','postconditionFailure','closeFailure','traceFailure','sourceCloseFailure','sourceV1CloseFailure',
