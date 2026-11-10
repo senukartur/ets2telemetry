@@ -3,7 +3,7 @@ import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
-  clusterCentreProbe, clusterSpeedArcProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, partialLiveObservation, SYNTHETIC_V0_HIDDEN_ROWS,
+  captureFailureScreenshot, clusterCentreProbe, clusterSpeedArcProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, partialLiveObservation, SYNTHETIC_V0_HIDDEN_ROWS,
   SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
   SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, stripNumberProbe, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
   waitForNotCurrentLive, waitForPartialLive, type RendererObservation
@@ -148,6 +148,38 @@ describe('coherent Live partial presentation', () => {
     expect(read(partialLiveObservation, frame(stale.status, 'partial', {'live.waiting': []}))).toMatchObject({
       bannerVisible: false, title: null, text: null,
     });
+  });
+});
+
+describe('optional failure screenshot', () => {
+  it('reports a saved PNG and clears the independent timer on prompt completion', async () => {
+    vi.useFakeTimers();
+    try {
+      const screenshot = vi.fn(() => Promise.resolve(Buffer.from('png')));
+      expect(await captureFailureScreenshot({screenshot}, 'failure.png')).toBe(true);
+      expect(screenshot).toHaveBeenCalledExactlyOnceWith({path: 'failure.png', timeout: 1000});
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {vi.useRealTimers();}
+  });
+  it.each(['completion', 'rejection'])('returns within the budget despite a stalled save and late %s', async outcome => {
+    vi.useFakeTimers();
+    try {
+      let finishWrite!: (bytes: Buffer) => void, failWrite!: (error: Error) => void;
+      const write = new Promise<Buffer>((resolve, reject) => {finishWrite = resolve; failWrite = reject;});
+      const screenshot = vi.fn(() => write);
+      const report = vi.fn();
+      const attempt = captureFailureScreenshot({screenshot}, 'failure.png').then(report);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(report).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(report).toHaveBeenCalledExactlyOnceWith(false);
+      expect(vi.getTimerCount()).toBe(0);
+      if (outcome === 'completion') finishWrite(Buffer.from('late png'));
+      else failWrite(new Error('late save failure'));
+      await vi.advanceTimersByTimeAsync(0);
+      await attempt;
+      expect(report).toHaveBeenCalledExactlyOnceWith(false);
+    } finally {vi.useRealTimers();}
   });
 });
 

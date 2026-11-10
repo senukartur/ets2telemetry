@@ -504,3 +504,15 @@ export function zeroLiveObservation(language) {
     read('[data-testid="fuel"]')?.innerText === (language === 'en' ? 'Fuel: 0.0 L' : 'Топливо: 0.0 л') &&
     read('.yu-gauge-number')?.textContent === '0' && !read('.yu-gauge-speed') && read('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'value' && !read('.yu-tank-unavailable') && read('.yu-tank i')?.style.height === '0%';
 }
+
+export async function captureFailureScreenshot(page, file) {
+  const timeout = 1000, started = performance.now();
+  let timer;
+  try {
+    // Playwright writes the PNG on the client after its timed capture, so bound both steps here.
+    const deadline = new Promise(resolve => {timer = setTimeout(() => resolve(false), timeout);});
+    const saved = page.screenshot({path: file, timeout}).then(() => performance.now() - started < timeout);
+    return await Promise.race([saved, deadline]);
+  } catch {return false;}
+  finally {clearTimeout(timer);}
+}

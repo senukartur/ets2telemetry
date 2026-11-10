@@ -44,7 +44,7 @@ export function uploadUiIsolationPlugin(config, checked = () => {}) {
   }};
 }
 /** Called only by ui:shell inside the existing bounded runtime Job, before the normal application/source starts. */
-export async function runDashboardUploadUiFixture(config) {
+export async function runDashboardUploadUiFixture(config, progress) {
   const inputs = uploadUiBuildInputs(config), {build} = await import('vite'), {default: tailwindcss} = await import('@tailwindcss/vite');
   const moduleGraphs = [], isolation = () => uploadUiIsolationPlugin(config, modules => moduleGraphs.push(modules));
   await mkdir(inputs.root); await writeFile(path.join(inputs.root, '.upload-ui-root'), 'ets2telemetry.dashboard-upload.ui.v1\n', {flag: 'wx'});
@@ -193,7 +193,9 @@ export async function runDashboardUploadUiFixture(config) {
           await page.getByTestId('fixture.content').evaluate(node => {node.scrollTop = 0;});
           if (screen === 'first-upload') await page.getByTestId('account.firstSync').scrollIntoViewIfNeeded();
           const file = `ui-upload-${screen}-${language}-${size.width}x${size.height}.png`;
-          await page.screenshot({path: path.join(config.output, file), timeout: 5000}); const bytes = await readFile(path.join(config.output, file));
+          await page.screenshot({path: path.join(config.output, file), timeout: 5000});
+          progress('screenshot-saved', file);
+          const bytes = await readFile(path.join(config.output, file));
           record.screenshots.push({file, screen, language, ...size, imageWidth: bytes.readUInt32BE(16), imageHeight: bytes.readUInt32BE(20), bytes: bytes.length, tokenCleared: true});
         }
         stage = `additional-states-${language}-${size.width}`;

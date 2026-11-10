@@ -53,3 +53,4 @@ export interface ClusterSpeedArcProbe {ok: boolean; reason?: string; layout: str
 export function clusterSpeedArcProbe(): ClusterSpeedArcProbe;
 
 export function zeroLiveObservation(language: string): boolean;
+export function captureFailureScreenshot(page: Pick<Page, 'screenshot'>, file: string): Promise<boolean>;

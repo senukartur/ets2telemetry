@@ -16,7 +16,7 @@ import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
 import {startLiveSmokeSourceV1} from './live-smoke-source-v1.mjs';
 import {
-  overlayOverflow, RECORDING_NOT_RECORDED_TEXT, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_BREAK_CUE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT,
+  captureFailureScreenshot, overlayOverflow, RECORDING_NOT_RECORDED_TEXT, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_BREAK_CUE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT,
   SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_STRIP_SECTIONS, SYNTHETIC_V1_VALUE_IDS,
   waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayBreakCue, waitForOverlayV1, waitForRecordingText, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
@@ -176,7 +176,7 @@ try {
   assert.equal(result.playwright, '1.64.0');
   if (config.scenario === 'ui' && (!UI_CASES.includes(config.uiCase) || config.mode === 'installed')) throw new Error('INVALID_UI_SHARD');
   if(config.scenario==='recording')result.uploadCredentials=await observeUploadCredentials(config);
-  if(config.scenario==='ui' && config.uiCase==='shell'){phase('upload-ui-fixture-started');result.uploadUi=await runDashboardUploadUiFixture(config);phase('upload-ui-fixture-completed');}
+  if(config.scenario==='ui' && config.uiCase==='shell'){phase('upload-ui-fixture-started');result.uploadUi=await runDashboardUploadUiFixture(config, uiProgress);phase('upload-ui-fixture-completed');}
   if (config.scenario === 'ui' && config.uiCase !== 'journal' || config.scenario === 'now-playing' || config.scenario === 'telemetry' || config.scenario === 'overlay' || config.scenario === 'lifecycle' || config.scenario === 'recording' || config.scenario === 'soak') {telemetrySource = await startLiveSmokeSource(config.checkout);if(config.scenario==='ui'&&config.uiCase==='shell')phase('telemetry-source-started');}
   if (config.scenario === 'telemetry' || config.scenario === 'ui' && ['live', 'overlay'].includes(config.uiCase)) telemetrySourceV1 = await startLiveSmokeSourceV1(config.checkout);
   if (config.scenario === 'hard-mode') hardModeSource = await startHardModeWorker(config);
@@ -659,8 +659,8 @@ try {
       if (dashboard) {
         const file = `ui-${config.uiCase}-failure.png`;
         uiProgress('failure-screenshot-requested');
-        await dashboard.screenshot({path: path.join(config.output, file), timeout: 1000});
-        uiProgress('failure-screenshot-saved', file);
+        if (await captureFailureScreenshot(dashboard, path.join(config.output, file))) uiProgress('failure-screenshot-saved', file);
+        else uiProgress('failure-screenshot-unavailable');
       }
     } catch {uiProgress('failure-screenshot-unavailable');}
   }
