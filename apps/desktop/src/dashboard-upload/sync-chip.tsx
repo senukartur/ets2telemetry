@@ -5,7 +5,7 @@ import {t} from '../i18n';
 import {uploadView} from './view';
 import type {UploadUiState} from './ui-controller';
 
-/** The site sync chip (ET-110): one word for the connection, or the sending count while trips are being sent. */
+/** The site sync chip (ET-110): one word for the connection, or the sending count while trips are being sent (only "Uploading" while new trips await the next count). */
 export function SyncChip({state, language, onOpen}: {state: UploadUiState; language: AppLanguage; onOpen: () => void}) {
   const view = uploadView(state, language);
   if (!view.available) return null;

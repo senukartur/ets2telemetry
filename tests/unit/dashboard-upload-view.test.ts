@@ -97,10 +97,27 @@ it('REG-009/010/014 words each upload state, chip and plural count from the dict
   expect(problems('ru', 21)).toEqual(['21 рейс ждёт подтверждения заказа', '21 рейс приостановлен']);
 });
 
+// pendingSources is read on every status cycle and the totals only when a count completes: a new or changed trip found after
+// the last count must not read as all sent. The totals cannot say how many remain, so no count is shown.
+it.each([
+  ['en', 'Uploading', 'Uploading new and changed trips', 'Runs in the background; you can keep driving.'],
+  ['ru', 'Отправка', 'Отправка новых и изменённых рейсов', 'Идёт в фоне — можно продолжать ездить.']
+] as const)('REG-009/010 never reads as all sent while trips are pending in %s (ET-110)', (language, chip, title, detail) => {
+  for (const counts of [{distinctSources: 6, deliveredSources: 6}, {distinctSources: 0, deliveredSources: 0}]) {
+    const view = uploadView(linked({enumeration: 'complete', ...counts, pendingSources: 2}), language);
+    expect(view).toMatchObject({chip, headline: language === 'en' ? 'Connected' : 'Подключено', tone: 'ok', sync: {kind: 'syncing', title, detail, bar: 'indeterminate', problems: []}});
+    const html = render(linked({enumeration: 'complete', ...counts, pendingSources: 2}), language);
+    expect(html).not.toContain(copy('sync.done', language)); expect(html).not.toContain(copy('sync.empty', language));
+    expect(html).toContain('data-kind="syncing"'); expect(html).not.toMatch(/<progress[^>]*value=/);
+  }
+  // Once the next count includes them, the counted line returns.
+  expect(uploadView(linked({enumeration: 'complete', distinctSources: 8, deliveredSources: 6, pendingSources: 2}), language).sync).toMatchObject({kind: 'syncing', counted: true, bar: {percent: 75}});
+});
+
 it.each(['en', 'ru'] as const)('REG-009/014 lists only real problems and links held trips to the Journal in %s', language => {
   const totals = {enumeration: 'complete' as const, distinctSources: 10, deliveredSources: 10};
-  expect(uploadView(linked({...totals, pendingSources: 4, queuedEvents: 900}), language).sync).toMatchObject({kind: 'done', problems: []});
-  const html = render(linked({...totals, pendingSources: 4, queuedEvents: 900}), language);
+  expect(uploadView(linked({...totals, pendingSources: 0, queuedEvents: 900}), language).sync).toMatchObject({kind: 'done', problems: []});
+  const html = render(linked({...totals, pendingSources: 0, queuedEvents: 900}), language);
   expect(html).not.toContain('data-testid="account.problems"'); expect(html).not.toContain('900');
   const ids = (progress: Progress, change?: Partial<DashboardUploadStatus>) => uploadView(linked({...totals, ...progress}, change), language).sync!.problems.map(problem => [problem.id, problem.journal]);
   expect(ids({identityPendingSources: 1})).toEqual([['identity', false]]);
