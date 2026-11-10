@@ -11,8 +11,9 @@ const workflow = async () => (await readFile('.github/workflows/windows-extended
 const job = (text: string) => text.split('\n  windows-extended:\n')[1].split(/\n {2}[a-z-]+:\n/)[0];
 
 interface Step { name?: string; id?: string; condition?: string; timeout?: number; body: string }
-// Each step item starts at six spaces; its own keys sit at eight, so the first line holds name: or uses:.
-const steps = (jobText: string): Step[] => jobText.split('\n    steps:\n')[1].split(/\n {6}- /).slice(1).map(body => {
+// Each step item starts at six spaces; its own keys sit at eight, so the first line holds name: or uses:. The leading
+// newline lets the first item split like the others.
+const steps = (jobText: string): Step[] => ('\n' + jobText.split('\n    steps:\n')[1]).split(/\n {6}- /).slice(1).map(body => {
   const timeout = /^ {8}timeout-minutes: (\d+)$/m.exec(body)?.[1];
   return {name: /^name: (.+)$/m.exec(body)?.[1], id: /^ {8}id: (.+)$/m.exec(body)?.[1], condition: /^ {8}if: (.+)$/m.exec(body)?.[1],
     timeout: timeout === undefined ? undefined : Number(timeout), body};
@@ -24,12 +25,14 @@ const NUMBER_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'sev
 
 it('bounds the job by the sum of its step budgets plus the documented 12-minute allowance', async () => {
   const jobText = job(await workflow());
-  const budgets = steps(jobText).flatMap(step => step.timeout === undefined ? [] : [step.timeout]);
+  const all = steps(jobText);
+  expect(all[0].body, 'the first parsed step is the checkout').toMatch(/^uses: actions\/checkout@/);
+  const budgets = all.flatMap(step => step.timeout === undefined ? [] : [step.timeout]);
   const sum = budgets.reduce((total, minutes) => total + minutes, 0);
   const jobTimeout = Number(/\n {4}timeout-minutes: (\d+)\n/.exec(jobText)?.[1]);
   // The comment above the job timeout spells out the same arithmetic.
   const comment = /\n {4}# Bounds the sum: the (\w+) step budgets below \(([\d + ]+) = (\d+) min\) plus (\d+) min\n/.exec(jobText);
-  expect(comment).not.toBeNull();
+  expect(comment, 'job comment "# Bounds the sum: the <n> step budgets below (a + b + ... = S min) plus 12 min" on one line').not.toBeNull();
   const [, count, terms, total, allowance] = comment as RegExpExecArray;
   expect(count).toBe(NUMBER_WORDS[budgets.length]);
   expect(terms.split(' + ').map(Number)).toEqual(budgets);
@@ -71,7 +74,7 @@ it('requires every fuzz step and reads exactly their JUnit files in the partitio
   });
   expect(new Set(outputs).size).toBe(outputs.length);
   const loop = /\n {10}foreach \(\$file in ((?:'[\w.-]+\.xml'(?:, )?)+)\) \{\n {12}foreach \(\$case in \(\[xml\]\(Get-Content -Raw -LiteralPath "\.local\/ci\/\$file"\)\)/.exec(check.body);
-  expect(loop).not.toBeNull();
+  expect(loop, `partition loop "foreach ($file in 'a.xml', 'b.xml', ...) {" followed by "foreach ($case in ([xml](Get-Content -Raw -LiteralPath ".local/ci/$file")).SelectNodes(...)"`).not.toBeNull();
   const listed = [...(loop as RegExpExecArray)[1].matchAll(/'([\w.-]+\.xml)'/g)].map(match => match[1]);
   expect(new Set(listed)).toEqual(new Set(outputs));
   expect(listed).toHaveLength(outputs.length);
