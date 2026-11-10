@@ -18,7 +18,7 @@ export class UploadScheduler {
   #retained:RetainedUploadMaterializations['items']=[];#workCursor=0;#blocked=new Map<string,number>();#maintenance=true;#capacity:string|undefined;
   #phase:'status'|'hints'|'runs'|'scan'|'discovery'|'begin'|'sources'|'receipts'='status';#runsAfter:string|null=null;#run:string|null=null;#runPending:string[]=[];#discoveryAfter='0';
   #pending:{tripUuid:string;workId:string|null}[]=[];#sourceAfter:string|null=null;#receiptAfter:string|null=null;#sources=0;#delivered=0;#lastReceipt:number|null=null;
-  #status:DashboardUploadStatus;#reconstruct=true;#nextRefresh=0;#progressGeneration=0;
+  #status:DashboardUploadStatus;#reconstruct=true;#passRunning=false;#stale=false;#nextRefresh=0;#progressGeneration=0;
   #paused:UploadStoreStatus['paused']=null;#hintsReconciliation=false;#held:UploadSchedulingHints['held']=null;#sourceHeld=false;#unmanaged=false;#scopeReady=false;#retryError:DashboardUploadError|null=null;#retryEventId:string|null=null;
   constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,origin:string,private readonly producerVersion:string,private readonly publish:(status:DashboardUploadStatus)=>void,private readonly time:UploadClock=clock){this.#status=initialDashboardUploadStatus(origin);this.#rate=new UploadRate(60,10,time.now());}
   get status():DashboardUploadStatus{return structuredClone(this.#status);}
@@ -48,9 +48,11 @@ export class UploadScheduler {
   stop():Promise<void>{this.#stopped=true;this.#status.state='stopping';this.#emit();return this.suspend();}
   #emit(){this.publish(this.status);}
   #wake(ms:number){if(this.#stopped||this.#suspended)return;this.time.cancel(this.#timer);this.#timer=this.time.schedule(()=>{this.#timer=undefined;void this.#tick();},Math.max(0,ms));}
-  // A recount restarts only the private pass; published totals change atomically when a pass completes, so a delivered
-  // receipt or a periodic refresh never blanks a known result (ET-110).
-  #resetProgress(){this.#progressGeneration++;this.#sourceAfter=null;this.#receiptAfter=null;this.#sources=0;this.#delivered=0;this.#lastReceipt=null;this.#reconstruct=true;this.#nextRefresh=this.time.now()+5000;}
+  // A pass counts sources, then receipts, privately; published totals change atomically when it completes, so a recount never
+  // blanks a known result. Only activation restarts a running pass. A delivered receipt marks it stale instead, and a stale
+  // pass is followed by the next one as soon as the cycle reaches the sources phase, without the 5 s refresh wait (ET-110).
+  #resetProgress(){this.#progressGeneration++;this.#sourceAfter=null;this.#receiptAfter=null;this.#sources=0;this.#delivered=0;this.#lastReceipt=null;this.#reconstruct=true;this.#passRunning=false;this.#stale=false;this.#nextRefresh=this.time.now()+5000;}
+  #recount(){if(this.#passRunning)this.#stale=true;else{this.#resetProgress();this.#phase='sources';}}
   async #tick(){if(this.#stopped||this.#suspended)return;const active=this.#active;if(!active)return;
     if(!this.#sending&&this.#scopeReady&&this.#paused===null&&!this.#hintsReconciliation&&this.time.now()>=this.#sendAfter){this.#sending=this.#send(active).catch(()=>{this.#status.error='STORAGE_UNAVAILABLE';this.#sendAfter=this.time.now()+2000;}).finally(()=>{this.#sending=undefined;this.#wake(10);});}
     if(this.#background)return;this.#background=true;const generation=this.#generation;let delay=10;
@@ -70,7 +72,7 @@ export class UploadScheduler {
     if(result.ok&&[200,202].includes(result.statusCode)){
       // A complete known ACK must reach SQLite even after rotation/disconnect/stop.
       const receipt=await stored(this.db.commitUploadReceipt({attemptId:attempt.attemptId!,statusCode:result.statusCode,body:result.body}));
-      if(receipt.status==='delivered'||receipt.status==='duplicate'){this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#resetProgress();this.#phase='sources';this.#diagnostic(true);}return;}
+      if(receipt.status==='delivered'||receipt.status==='duplicate'){this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#recount();this.#diagnostic(true);}return;}
     }
     if(!result.ok&&result.code==='ABORTED'){
       const recovered=await stored(this.db.recoverUploadAttempt({attemptId:attempt.attemptId!}));
@@ -103,9 +105,9 @@ export class UploadScheduler {
       case 'discovery':{if(this.#status.progress.pressure){this.#phase='sources';return 1000;}const page=await stored(this.db.pageUploadDiscovery({registrationId,after:this.#discoveryAfter,limit:100}));this.#discoveryAfter=page.next;this.#pending=page.items.filter(item=>item.workId===null);this.#phase=this.#pending.length?'begin':'sources';return 10;}
       case 'begin':{const item=this.#pending.shift();if(item)await stored(this.db.beginUploadMaterialization({registrationId,tripUuid:item.tripUuid,workId:randomUUID()}));if(!this.#pending.length)this.#phase='sources';return 10;}
       case 'sources':{if(!this.#reconstruct&&this.time.now()<this.#nextRefresh){await stored(this.db.reclaimUploadPayloads({limit:100}));this.#phase='status';return 500;}
-        if(!this.#reconstruct)this.#resetProgress();const progressGeneration=this.#progressGeneration,page=await stored(this.db.pageUploadSources({registrationId,phase:'sources',after:this.#sourceAfter,limit:100}));if(progressGeneration!==this.#progressGeneration||generation!==this.#generation)return 10;this.#sourceAfter=page.next;this.#sources+=page.sources.length;this.#delivered+=page.sources.filter(item=>item.state==='delivered').length;if(page.next===null)this.#phase='receipts';return 10;}
+        if(!this.#reconstruct)this.#resetProgress();this.#passRunning=true;const progressGeneration=this.#progressGeneration,page=await stored(this.db.pageUploadSources({registrationId,phase:'sources',after:this.#sourceAfter,limit:100}));if(progressGeneration!==this.#progressGeneration||generation!==this.#generation)return 10;this.#sourceAfter=page.next;this.#sources+=page.sources.length;this.#delivered+=page.sources.filter(item=>item.state==='delivered').length;if(page.next===null)this.#phase='receipts';return 10;}
       case 'receipts':{const progressGeneration=this.#progressGeneration,page=await stored(this.db.pageUploadSources({registrationId,phase:'receipts',after:this.#receiptAfter,limit:100}));if(progressGeneration!==this.#progressGeneration||generation!==this.#generation)return 10;this.#receiptAfter=page.next;for(const receipt of page.receipts)this.#lastReceipt=Math.max(this.#lastReceipt??0,receipt.firstReceivedUtcMs);
-        if(page.next===null){Object.assign(this.#status.progress,{enumeration:'complete',distinctSources:this.#sources,deliveredSources:this.#delivered,lastDurableUploadUtcMs:this.#lastReceipt});this.#reconstruct=false;this.#phase='status';}return 10;}
+        if(page.next===null){Object.assign(this.#status.progress,{enumeration:'complete',distinctSources:this.#sources,deliveredSources:this.#delivered,lastDurableUploadUtcMs:this.#lastReceipt});if(this.#stale)this.#resetProgress();else{this.#reconstruct=false;this.#passRunning=false;}this.#phase='status';}return 10;}
     }
   }
 }

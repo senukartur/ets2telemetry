@@ -122,3 +122,32 @@ it('REG-005/010/011 keeps one stable published result across delivered receipts,
     expect(scheduler.status.progress).toMatchObject({enumeration:'complete',distinctSources:6,deliveredSources:5,lastDurableUploadUtcMs:1003});
   }finally{await scheduler.stop();}
 });
+it('REG-005/010/011 completes multi-page counts while a delivered receipt lands between every page (ET-110)',async()=>{
+  vi.useFakeTimers();const f=fixture(),published:{status:import('../../packages/contracts/src/dashboard-upload').DashboardUploadStatus;commits:number}[]=[],trips=Array.from({length:260},()=>randomUUID()),claimsTotal=10;let commits=0,claims=0,exhausted=false,release:(()=>void)|null=null;
+  // Within the burst of 10 the rate does not delay sending; this gate does: every source or receipt page request releases
+  // the one waiting HTTP reply, so a durable receipt commits during every page of every pass until the claims run out.
+  const claim=vi.fn((input:{attemptId:string})=>!exhausted&&claims++<claimsTotal?result({status:'claimed',attemptId:input.attemptId,eventId:randomUUID(),registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}):result({status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null}));
+  f.http.request=vi.fn(()=>new Promise<UploadHttpResult>(resolve=>{release=()=>resolve({ok:true,statusCode:202,body:Buffer.from('{}'),retryAfter:null});}));
+  const commit=vi.fn(()=>{commits++;return result({status:'delivered',eventId:randomUUID(),receiptId:randomUUID()});});
+  const sources=vi.fn((input:{phase:'sources'|'receipts';after:string|null})=>{
+    const start=Number(input.after??0),next=input.phase==='sources'&&start+100<trips.length?String(start+100):null;
+    const page=result({phase:input.phase,after:input.after,next,examined:100,sources:input.phase==='sources'?trips.slice(start,start+100).map((tripUuid,index)=>({tripUuid,state:start+index<commits?'delivered' as const:'queued' as const,latestRevision:1,lastReceiptUtcMs:null})):[],receipts:input.phase==='receipts'&&commits>0?[{eventId:randomUUID(),firstReceivedUtcMs:1000+commits}]:[]});
+    const reply=release;release=null;reply?.();return page;});
+  const db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='commitUploadReceipt'?commit:key==='pageUploadSources'?sources:Reflect.get(target,key);}});
+  const scheduler=new UploadScheduler(db,f.http,origin,'test',status=>published.push({status,commits}),controlled);
+  try{
+    await scheduler.activate(configuration,token,limits);expect(published[0].status.progress).toMatchObject({distinctSources:null,deliveredSources:null});
+    await vi.advanceTimersByTimeAsync(3000);
+    const first=published.findIndex(entry=>entry.status.progress.enumeration==='complete');expect(first).toBeGreaterThan(0);
+    // The first count is published while receipts still arrive, not only once sending stops.
+    expect(published[first].commits).toBeLessThan(claimsTotal);
+    for(const {status} of published.slice(0,first))expect(status.progress).toMatchObject({distinctSources:null,deliveredSources:null});
+    const after=published.slice(first).map(entry=>entry.status.progress);
+    for(const progress of after)expect(progress).toMatchObject({enumeration:'complete',distinctSources:260,deliveredSources:expect.any(Number)});
+    const delivered=after.map(progress=>progress.deliveredSources!);for(let n=1;n<delivered.length;n++)expect(delivered[n]).toBeGreaterThanOrEqual(delivered[n-1]);
+    // Later passes complete too: the delivered count and the last durable upload advance through several published results.
+    expect(new Set(delivered).size).toBeGreaterThanOrEqual(3);expect(new Set(after.map(progress=>progress.lastDurableUploadUtcMs)).size).toBeGreaterThanOrEqual(3);
+    expect(commits).toBe(claimsTotal);await vi.advanceTimersByTimeAsync(1000);
+    expect(scheduler.status.progress).toMatchObject({enumeration:'complete',distinctSources:260,deliveredSources:claimsTotal,lastDurableUploadUtcMs:1000+claimsTotal});
+  }finally{exhausted=true;const reply=release as (()=>void)|null;release=null;reply?.();await scheduler.stop();}
+});
