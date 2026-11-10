@@ -53,7 +53,10 @@ export function uploadView(ui: UploadUiState, language: AppLanguage) {
   const text = (key: string, vars?: Record<string, string | number>) => t(`upload.${key}` as I18nKey, vars, language);
   const error = ui.error ?? status?.error;
   const busy = ui.phase !== 'idle';
-  const state = busy ? ui.phase : status?.state ?? 'loading';
+  // A connected or paused status without an owner is a first connection that failed (the main process drops the owner of a
+  // rejected token): setup is offered again, so it reads as not connected and the error is shown as a notice (ET-110).
+  const ownerless = !busy && !!status && !status.owner && ['connected', 'paused'].includes(status.state);
+  const state = busy ? ui.phase : ownerless ? 'disconnected' : status?.state ?? 'loading';
   const connected = !!status?.owner && ['connected', 'paused'].includes(status.state) && !status.candidateId;
   const sync = connected ? syncView(status, language) : null;
   const canEnterToken = canVerifyDashboardUpload(ui);
@@ -63,6 +66,7 @@ export function uploadView(ui: UploadUiState, language: AppLanguage) {
     : sync.kind === 'syncing' ? text('chip.syncing', {delivered: status!.progress.deliveredSources!, total: status!.progress.distinctSources!}) : text('state.connected');
   const headline = sync?.kind === 'syncing' && !busy ? text('state.connected') : chip;
   const tone: UploadTone = sync && !busy ? (sync.kind === 'auth' ? 'error' : sync.kind === 'offline' ? 'warn' : sync.kind === 'attention' ? (sync.tone === 'error' ? 'error' : 'warn') : 'ok')
+    : ownerless ? 'neutral'
     : error && !SOFT_ERRORS.includes(error) ? 'error'
     : (busy && ui.phase !== 'verifying') || error || status?.state === 'confirmation-required' || status?.state === 'connecting' ? 'warn' : 'neutral';
   const credential = status?.error === 'CREDENTIAL_UNAVAILABLE';
@@ -71,6 +75,8 @@ export function uploadView(ui: UploadUiState, language: AppLanguage) {
     error: error ? text(`error.${error}`) : null,
     // Every status error of a connection is shown as its state or a problem row; a refused action still needs its notice.
     showError: !!error && !!status?.origin && (!connected || (ui.error !== null && ui.error !== status.error)),
+    // The notice keeps the error's own severity when the state word is neutral, as for an ownerless status.
+    noticeTone: tone === 'error' || (ownerless && !!error && !SOFT_ERRORS.includes(error)) ? 'error' as const : 'warn' as const,
     canEnterToken,
     confirming: status?.state === 'confirmation-required' && !!status.candidateId && !ui.abandoned,
     connected,

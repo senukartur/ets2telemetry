@@ -82,6 +82,12 @@ it.each([
   });
 });
 
+it.each([['en', 'Not connected', 'Account &amp; sync: '], ['ru', 'Не подключено', 'Аккаунт и синхронизация: ']] as const)('words an ownerless paused upload as not connected on the sync chip in %s (ET-110)', (language, text, prefix) => {
+  const state = unavailableUploadUi(); state.status = {...initialDashboardUploadStatus('https://dashboard.example'), state: 'paused', error: 'AUTHENTICATION', owner: null};
+  const html = renderToStaticMarkup(React.createElement(SyncChip, {state, language, onOpen: () => undefined}));
+  expect(html).toContain('data-tone="neutral"'); expect(html).toContain(`aria-label="${prefix}${text}"`); expect(html).toMatch(new RegExp(`</svg>${text}</button>$`));
+});
+
 it('gives a page a place at the end of the top bar, and renders a slot only once the shell has mounted it (ET-076)', () => {
   const html = bar('journal', 'en');
   expect(html).toContain('<div class="yu-topbar-actions"></div>');

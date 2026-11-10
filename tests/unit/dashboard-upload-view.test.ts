@@ -38,6 +38,21 @@ it.each(['en', 'ru'] as const)('REG-009/010/014 distinguishes availability, cand
   for (const error of DASHBOARD_UPLOAD_ERRORS) {const state = uiState(); state.error = error; expect(uploadView(state, language).error).not.toMatch(/⟦|undefined|accepted|принят/);}
 });
 
+// A rejected first token leaves a paused (or connected) status without an owner: the page reads as not connected, never as a
+// paused upload, and the error stays visible as its own notice.
+it.each(['en', 'ru'] as const)('REG-010/012 words an ownerless connected or paused status as not connected in %s (ET-110)', language => {
+  const notConnected = t('upload.state.disconnected', undefined, language), paused = t('upload.state.paused', undefined, language);
+  for (const change of [{state: 'paused', error: 'AUTHENTICATION'}, {state: 'connected', error: null}] as const) {
+    const state = uiState(); state.status = {...state.status!, ...change, owner: null};
+    expect(uploadView(state, language)).toMatchObject({chip: notConnected, headline: notConnected, tone: 'neutral', connected: false, canEnterToken: true, sync: null,
+      showError: change.error !== null, ...(change.error ? {noticeTone: 'error', error: t('upload.error.AUTHENTICATION', undefined, language)} : {})});
+    const html = render(state, language);
+    expect(html).toMatch(new RegExp(`data-testid="account.phase"><svg[^>]*>.*?</svg>${notConnected}</span>`));
+    expect(html).not.toContain(paused); expect(html).toContain('data-testid="account.form"');
+    if (change.error) expect(html).toContain('data-tone="error" data-testid="account.error"'); else expect(html).not.toContain('account.error');
+  }
+});
+
 it.each(['en', 'ru'] as const)('REG-009/010 keeps the last known totals and percentage whatever the enumeration phase in %s (ET-110)', language => {
   const complete = uploadView(linked({enumeration: 'complete', distinctSources: 10, deliveredSources: 2}), language).sync!;
   expect(complete).toMatchObject({kind: 'syncing', bar: {percent: 20, fill: 'accent'}});

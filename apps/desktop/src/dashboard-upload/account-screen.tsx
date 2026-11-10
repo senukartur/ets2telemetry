@@ -62,7 +62,7 @@ export function AccountScreen({state, controller, language, onOpenJournal}: {sta
   const phase = <Badge variant={view.tone} data-testid="account.phase"><Cloud aria-hidden="true" />{view.headline}</Badge>;
   const commit = state.phase === 'confirming' || status?.state === 'connecting' ? <p className="yu-account-notice" data-tone="warn">{text('commit')}</p> : null;
   // One persistent live region for every layout: it announces the state word, never the sending count.
-  const feedback = <div role="status" aria-atomic="true" className="yu-account-feedback"><span className="sr-only">{text('status')}: {view.headline}</span>{view.showError ? <p className="yu-account-notice" data-tone={view.tone === 'error' ? 'error' : 'warn'} data-testid="account.error">{view.error}</p> : null}</div>;
+  const feedback = <div role="status" aria-atomic="true" className="yu-account-feedback"><span className="sr-only">{text('status')}: {view.headline}</span>{view.showError ? <p className="yu-account-notice" data-tone={view.noticeTone} data-testid="account.error">{view.error}</p> : null}</div>;
   let body: React.ReactNode;
   if (!status) body = <Card data-testid="account.token"><CardHeader className="yu-account-header"><CardTitle><h2><Cloud aria-hidden="true" />{text('connection')}</h2></CardTitle>{phase}</CardHeader><CardContent><p>{text('state.loading')}</p></CardContent></Card>;
   else if (!view.available) body = <Card><CardContent className="yu-account-row"><span className="yu-account-tile" data-tone="neutral" aria-hidden="true"><CloudOff /></span><p className="yu-account-main" data-testid="account.unconfigured">{text('unconfigured')}</p></CardContent></Card>;
