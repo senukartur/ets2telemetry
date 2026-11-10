@@ -21,9 +21,9 @@ jobs:
   windows-extended:
     name: Windows x64 extended campaigns
     runs-on: windows-2022
-    # Bounds the sum: the seven step budgets below (3 + 3 + 9 + 9 + 18 + 19 + 8 + 2 = 71 min) plus 12 min
+    # Bounds the sum: the eleven step budgets below (3 + 3 + 9 + 9 + 15 + 12 + 15 + 15 + 25 + 8 + 2 = 116 min) plus 12 min
     # for checkout, setup, npm ci, the native configure and build of three test targets, and the upload.
-    timeout-minutes: 83
+    timeout-minutes: 128
     defaults:
       run:
         shell: pwsh
@@ -39,8 +39,10 @@ jobs:
     # Step budgets: the local wall time on the implementer's machine x 3.0 x 1.5, rounded up to whole minutes, at least
     # 3 minutes. 3.0 covers the measured hosted slowdowns: protocol-fuzz.test.ts took 16.46 s in the tests job of hosted
     # main run 39214744965 against 7.42 s locally (2.2x), and the slow hosted run 39174985694 slowed single storage files
-    # 2.8-3.0x against a green hosted run (docs/validation/et-019.md, PR-10 step budgets). 1.5 is headroom. Each campaign
-    # step runs when its setup succeeded, even after an earlier campaign failed, so one failure does not hide the others.
+    # 2.8-3.0x against a green hosted run (docs/validation/et-019.md, PR-10 step budgets). 1.5 is headroom. The payload and
+    # frame fuzz steps instead use hosted seconds on run 42707759487 x 2.2 (the slowest/fastest runner spread, broker step
+    # 188/85 s across 38 runs) x 1.5, rounded up to whole minutes. Each campaign step runs when its setup succeeded, even
+    # after an earlier campaign failed, so one failure does not hide the others.
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -122,23 +124,49 @@ jobs:
         run: |
           npm run test:storage -- tests/storage/trip-recorder-crash.test.ts --reporter=default --reporter=junit --outputFile=.local/ci/vitest-recovery-extended.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # The protocol fuzz file runs in three steps, split by case name with -t, so that each step stays far below 30 minutes
-      # hosted. The step "Check the protocol fuzz partition" fails unless the three patterns ran every case exactly once.
+      # The protocol fuzz file runs in six steps of 200,000 inputs per case, split by case name with -t, so that each step
+      # stays far below 30 minutes hosted. The step "Check the protocol fuzz partition" fails unless the six patterns ran
+      # every case exactly once: a new v1 server payload reader matches no pattern and fails it until a pattern covers it;
+      # a new client payload or frame case joins its existing step, whose budget must then be rechecked.
       # Vitest starts through node, as npm test would, but without npm's cmd.exe shell, which would see the | of a pattern.
       # Every input also runs under the test's own 10 s hang guard.
-      # The seed check and the four payload decoders. Local 234 s x 4.5 = 1,053 s, so 18 minutes.
-      - name: Protocol fuzz campaign, payload decoders, 200,000 inputs per case
-        id: fuzz-payloads
+      # The seed check and the v0 and CAP0 payload decoders. Hosted 267.5 s x 3.3 = 883 s, so 15 minutes.
+      - name: Protocol fuzz campaign, payload decoders, v0 and CAP0
+        id: fuzz-payloads-v0-cap0
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        timeout-minutes: 18
+        timeout-minutes: 15
         run: |
-          node node_modules/vitest/vitest.mjs run tests/unit/protocol-fuzz.test.ts -t 'starts every campaign|rejects only with its protocol error' --reporter=default --reporter=junit --outputFile=.local/ci/vitest-fuzz-payloads.xml
+          node node_modules/vitest/vitest.mjs run tests/unit/protocol-fuzz.test.ts -t 'starts every campaign|protocol v0 decodePayload: rejects only|CAP0 decodeCap0Payload: rejects only' --reporter=default --reporter=junit --outputFile=.local/ci/vitest-fuzz-payloads-v0-cap0.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      # The four frame decoders. Local 242 s x 4.5 = 1,089 s, so 19 minutes.
+      # The five v1 client payload decoders. Hosted 213.8 s x 3.3 = 706 s, so 12 minutes.
+      - name: Protocol fuzz campaign, payload decoders, v1 client readers
+        id: fuzz-payloads-v1-client
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 12
+        run: |
+          node node_modules/vitest/vitest.mjs run tests/unit/protocol-fuzz.test.ts -t 'decodePayload \(client,' --reporter=default --reporter=junit --outputFile=.local/ci/vitest-fuzz-payloads-v1-client.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The v1 server payload decoders with the widest and the default reader. Hosted 267.0 s x 3.3 = 882 s, so 15 minutes.
+      - name: Protocol fuzz campaign, payload decoders, v1 server widest and default readers
+        id: fuzz-payloads-v1-server-wide
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          node node_modules/vitest/vitest.mjs run tests/unit/protocol-fuzz.test.ts -t 'decodePayload \(server, (maxMinor 4|default minor-0) reader\)' --reporter=default --reporter=junit --outputFile=.local/ci/vitest-fuzz-payloads-v1-server-wide.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The v1 server payload decoders with the maxMinor 1 to 3 readers. Hosted 269.5 s x 3.3 = 890 s, so 15 minutes.
+      - name: Protocol fuzz campaign, payload decoders, v1 server maxMinor 1 to 3 readers
+        id: fuzz-payloads-v1-server-narrow
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          node node_modules/vitest/vitest.mjs run tests/unit/protocol-fuzz.test.ts -t 'decodePayload \(server, maxMinor [1-3] reader\)' --reporter=default --reporter=junit --outputFile=.local/ci/vitest-fuzz-payloads-v1-server-narrow.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # All frame decoders. Hosted 438 s x 3.3 = 1,446 s, so 25 minutes.
       - name: Protocol fuzz campaign, frame decoders, 200,000 inputs per case
         id: fuzz-frames
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        timeout-minutes: 19
+        timeout-minutes: 25
         run: |
           node node_modules/vitest/vitest.mjs run tests/unit/protocol-fuzz.test.ts -t 'follows the documented framing' --reporter=default --reporter=junit --outputFile=.local/ci/vitest-fuzz-frames.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -153,11 +181,11 @@ jobs:
       # Vitest passes a -t pattern that matches nothing, so a renamed or added case would silently leave the campaign.
       # Each JUnit file lists every case of the file, the unselected ones as skipped.
       - name: Check the protocol fuzz partition
-        if: ${{ !cancelled() && steps.fuzz-payloads.outcome == 'success' && steps.fuzz-frames.outcome == 'success' && steps.fuzz-brokers.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.fuzz-payloads-v0-cap0.outcome == 'success' && steps.fuzz-payloads-v1-client.outcome == 'success' && steps.fuzz-payloads-v1-server-wide.outcome == 'success' && steps.fuzz-payloads-v1-server-narrow.outcome == 'success' && steps.fuzz-frames.outcome == 'success' && steps.fuzz-brokers.outcome == 'success' }}
         timeout-minutes: 2
         run: |
           $runs = @{}
-          foreach ($file in 'vitest-fuzz-payloads.xml', 'vitest-fuzz-frames.xml', 'vitest-fuzz-brokers.xml') {
+          foreach ($file in 'vitest-fuzz-payloads-v0-cap0.xml', 'vitest-fuzz-payloads-v1-client.xml', 'vitest-fuzz-payloads-v1-server-wide.xml', 'vitest-fuzz-payloads-v1-server-narrow.xml', 'vitest-fuzz-frames.xml', 'vitest-fuzz-brokers.xml') {
             foreach ($case in ([xml](Get-Content -Raw -LiteralPath ".local/ci/$file")).SelectNodes('//testcase')) {
               if (-not $runs.ContainsKey($case.name)) { $runs[$case.name] = 0 }
               if (-not $case.SelectSingleNode('skipped')) { $runs[$case.name] += 1 }
