@@ -126,7 +126,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # The protocol fuzz file runs in six steps of 200,000 inputs per case, split by case name with -t, so that each step
       # stays far below 30 minutes hosted. The step "Check the protocol fuzz partition" fails unless the six patterns ran
-      # every case exactly once, so a new reader such as maxMinor 5 must be added to a pattern here.
+      # every case exactly once: a new v1 server payload reader matches no pattern and fails it until a pattern covers it;
+      # a new client payload or frame case joins its existing step, whose budget must then be rechecked.
       # Vitest starts through node, as npm test would, but without npm's cmd.exe shell, which would see the | of a pattern.
       # Every input also runs under the test's own 10 s hang guard.
       # The seed check and the v0 and CAP0 payload decoders. Hosted 267.5 s x 3.3 = 883 s, so 15 minutes.
