@@ -572,8 +572,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake --build native/telemetry-plugin/build-asan --config Release --target protocol-v0-asan-test protocol-v1-asan-test v1-producer-asan-test sdk-adapter-asan-test game-mode-detector-asan-test event-channel-asan-test snapshot-transport-asan-test snapshot-transport-test-plugin snapshot-transport-hooked-test-plugin game-window-monitor-asan-test snapshot-transport-game-host-asan capture-cap0-asan-test v1-transport-asan-test --parallel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # ET-066 (docs/ci.md#job-layout): four cases at a time, one per runner core. Endpoint and event names carry the process
-          # identity, so parallel cases never share one; the per-test deadlines, selection and assertions are unchanged.
+          # ET-066 (docs/ci.md#job-layout): four CTest processor slots. The protocol v1 contract uses two for its framing
+          # threads. Endpoint and event names carry the process identity, so parallel cases never share them.
           ctest --test-dir native/telemetry-plugin/build-asan -C Release --output-on-failure -R asan-contract --parallel 4 --output-junit "$PWD/.local/ci/ctest-plugin-asan.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Media reader AddressSanitizer controls

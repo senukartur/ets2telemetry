@@ -5,6 +5,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -12,6 +13,7 @@
 #include <set>
 #include <sstream>
 #include <type_traits>
+#include <utility>
 
 // Reads the shared protocol v1 corpus (manifest.txt, streams.txt and the payload fixtures) that the Vitest suites read,
 // and must reproduce every accept/reject result and stream outcome. The minor-1 corpus (ET-050b) in the `minor1`
@@ -1541,24 +1543,33 @@ int main(int argc, char** argv) {
     delivery_units(f); clock_units(f); semantics(f); isolation_and_negotiation(f, v0_dir); framing(f); encoding_and_normalization(f); parser_depth(f);
     std::cout << fixtures << " shared payload fixtures; " << scenarios << " shared streams; C++ encoder worst cases: checkpoint " << worst_checkpoint
       << ", event " << worst_event << ", gap " << worst_gap << " bytes; delivery, clock, framing and normalization passed\n";
-    const Fixtures f1{f.dir / "minor1", 1}; std::size_t worst_minor1 = 0;
+    const Fixtures f1{f.dir / "minor1", 1}, f2{f.dir / "minor2", 2}, f3{f.dir / "minor3", 3}, f4{f.dir / "minor4", 4};
+    // Each framing pass reads its own corpus and builds its own decoders. Keep the remaining suites and summaries serial.
+    auto even_minor_framing = std::async(std::launch::async, [f2, f4] {
+      return std::pair{framing_streams(f2, 8), framing_streams(f4, 8)};
+    });
+    const auto minor1_splits = framing_streams(f1, 16);
+    const auto minor3_splits = framing_streams(f3, 8);
+    const auto [minor2_splits, minor4_splits] = even_minor_framing.get();
+
+    std::size_t worst_minor1 = 0;
     corpus_minor1(f1, f, worst_minor1); gearbox_semantics(f1); minor1_delivery(f1, f);
-    const auto minor1_streams = streams_minor1(f1); const auto minor1_splits = framing_streams(f1, 16);
+    const auto minor1_streams = streams_minor1(f1);
     std::cout << "minor 1: 48 payload fixtures; " << minor1_streams << " streams; " << minor1_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor1 << " bytes; negotiation, delivery and gearbox passed\n";
-    const Fixtures f2{f.dir / "minor2", 2}; std::size_t worst_minor2 = 0;
+    std::size_t worst_minor2 = 0;
     corpus_minor2(f2, f1, f, worst_minor2); break_semantics(f2); minor2_delivery(f2, f1, f);
-    const auto minor2_streams = streams_minor2(f2); const auto minor2_splits = framing_streams(f2, 8);
+    const auto minor2_streams = streams_minor2(f2);
     std::cout << "minor 2: 51 payload fixtures; " << minor2_streams << " streams; " << minor2_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor2 << " bytes; negotiation, delivery and mandatory break passed\n";
-    const Fixtures f3{f.dir / "minor3", 3}; std::size_t worst_minor3 = 0;
+    std::size_t worst_minor3 = 0;
     corpus_minor3(f3, f2, f1, f, worst_minor3); cruise_semantics(f3); minor3_delivery(f3, f2, f);
-    const auto minor3_streams = streams_minor3(f3); const auto minor3_splits = framing_streams(f3, 8);
+    const auto minor3_streams = streams_minor3(f3);
     std::cout << "minor 3: 45 payload fixtures; " << minor3_streams << " streams; " << minor3_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor3 << " bytes; negotiation, delivery and cruise control passed\n";
-    const Fixtures f4{f.dir / "minor4", 4}; std::size_t worst_minor4 = 0;
+    std::size_t worst_minor4 = 0;
     corpus_minor4(f4, f3, f2, f1, f, worst_minor4); limit_semantics(f4); minor4_delivery(f4, f3, f);
-    const auto minor4_streams = streams_minor4(f4); const auto minor4_splits = framing_streams(f4, 8);
+    const auto minor4_streams = streams_minor4(f4);
     std::cout << "minor 4: 47 payload fixtures; " << minor4_streams << " streams; " << minor4_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor4 << " bytes; negotiation, delivery and speed limit passed\n";
     return 0;
