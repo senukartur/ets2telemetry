@@ -48,6 +48,14 @@ describe('REG-010/012 closed Dashboard upload boundaries',()=>{
     const owner={origin:'https://dashboard.example',accountId:'a',companyId:'c',identityEpoch:'e'},registered={contract:{major:1,minor:0},installationId:randomUUID(),bindingId:randomUUID(),identityEpoch:'e'};
     expect(registrationResponse(bytes(registered),owner)).toEqual(registered);expect(registrationResponse(bytes({...registered,identityEpoch:'new'}),owner)).toBeUndefined();
   });
+  it('accepts the Dashboard numeric identityEpoch as the owner key decimal text',()=>{
+    const response={contract:{major:1,minor:0},accountId:'a',companyId:'c',identityEpoch:2,limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}};
+    expect(connectionResponse(bytes(response))).toMatchObject({accountId:'a',companyId:'c',identityEpoch:'2'});
+    for(const identityEpoch of [-1,1.5,2**53,'',null,true])expect(connectionResponse(bytes({...response,identityEpoch}))).toBeUndefined();
+    const owner={origin:'https://dashboard.example',accountId:'a',companyId:'c',identityEpoch:'2'},registered={contract:{major:1,minor:0},installationId:randomUUID(),bindingId:randomUUID(),identityEpoch:2};
+    expect(registrationResponse(bytes(registered),owner)).toEqual({...registered,identityEpoch:'2'});
+    for(const identityEpoch of [3,'3'])expect(registrationResponse(bytes({...registered,identityEpoch}),owner)).toBeUndefined();
+  });
   it('rejects duplicate keys, invalid UTF8, excessive depth and secret-bearing safe DTOs',()=>{
     for(const body of [Buffer.from('{"a":1,"a":2}'),Buffer.from([0xff]),Buffer.from('['.repeat(17)+'0'+']'.repeat(17))])expect(()=>jsonBody(body,16384)).toThrow();
     const status=initialDashboardUploadStatus(null);expect(isDashboardUploadStatus(status)).toBe(true);expect(isDashboardUploadStatus({...status,token})).toBe(false);
