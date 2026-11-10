@@ -115,4 +115,26 @@ describe('the shared files and the dark scope', () => {
     expect(decls.get('aspect-ratio')).toBe('1 / 1');
     expect(decls.get('border-radius')).toBe('50% !important');
   });
+  // ET-110: the 32 px button minimum (specificity 0,3,1) outranked the chip rule (0,2,1) and made the sync chip taller.
+  it('keeps the site sync chip at the 24 px chip height outside the global button rules', () => {
+    const css = stripComments(shell);
+    const globals = [...css.matchAll(/^button:not\(\[role="radio"\]\)[^{]*\{[^}]*\}/gm)].map(match => match[0]);
+    expect(globals).toHaveLength(2);
+    for (const rule of globals) expect(rule.slice(0, rule.indexOf(','))).toMatch(/:not\(\.yu-sync-chip\)$/);
+    const chip = /\.yu-topbar button\.yu-sync-chip \{([^}]+)\}/.exec(css);
+    if (!chip) throw new Error('Missing the top-bar sync chip rule in shell.css');
+    const decls = new Map([...chip[1].matchAll(/([a-z-]+)\s*:\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+    expect(Object.fromEntries(['height', 'min-height', 'box-sizing', 'line-height'].map(name => [name, decls.get(name)]))).toEqual({height: 'var(--yu-control-h-xs)', 'min-height': 'var(--yu-control-h-xs)', 'box-sizing': 'border-box', 'line-height': '1'});
+  });
+  // ET-110: compact page content fills the window; only individual controls such as the token field keep a cap.
+  it('sets no maximum width on the content column or a compact page root', () => {
+    const css = stripComments(shell);
+    for (const selector of ['.yu-content', '.yu-live-screen', '.yu-live', '.yu-settings', '.yu-journal', '.yu-trip', '.yu-account', '.yu-overlay-settings', '.yu-stack', '.yu-hard-mode']) {
+      // Every rule whose selector list names the class exactly, alone or with others.
+      const rules = [...css.matchAll(/(?<=^|\})\s*([^{}]+)\{([^}]*)\}/g)].filter(match => match[1].split(',').some(part => part.trim() === selector));
+      if (selector !== '.yu-live-screen' && selector !== '.yu-hard-mode') expect(rules.length, selector).toBeGreaterThan(0);
+      for (const rule of rules) expect(rule[2], selector).not.toMatch(/max-width/);
+    }
+    expect(css).not.toMatch(/max-width:\s*1[0-9]{3}px/);
+  });
 });

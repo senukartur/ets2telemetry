@@ -1,8 +1,8 @@
 html, body, #root { margin: 0; min-height: 100%; background: var(--yu-bg-app); color: var(--yu-text); font-family: var(--yu-font); font-size: 13px; }
 * { box-sizing: border-box; }
 button, input, select { font: inherit; }
-button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint), [role="combobox"] { min-height: 32px; }
-button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint), select, input, [role="tab"] { border-radius: var(--yu-radius-control); }
+button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint):not(.yu-sync-chip), [role="combobox"] { min-height: 32px; }
+button:not([role="radio"]):not([role="switch"]):not(.yu-info-hint):not(.yu-sync-chip), select, input, [role="tab"] { border-radius: var(--yu-radius-control); }
 button:not(:disabled), select:not(:disabled) { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
 /* The screen heading takes programmatic focus on each route change for screen readers; it is not a control, so no ring. */
@@ -493,14 +493,14 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-sync-chip[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
 .yu-sync-chip[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
 
-/* ET-074: the site sync chip is 24 px tall like the other chips; its hit area extends to 32 px. */
+/* ET-074: the site sync chip is 24 px tall like the other chips; its hit area extends to 32 px. ET-110: the global button
+   rules above exclude it, because their 32 px minimum outranked this rule and made the chip taller than the others. */
 .yu-sync-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--yu-neutral-border); color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); max-width: 100%; text-align: left; }
 .yu-sync-chip svg { width: 13px; height: 13px; flex: none; }
-.yu-topbar button.yu-sync-chip { position: relative; height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.yu-topbar button.yu-sync-chip { position: relative; box-sizing: border-box; height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; line-height: 1; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .yu-topbar button.yu-sync-chip::after { content: ""; position: absolute; inset: -4px 0; }
 
-/* ET-074 Live page (mockup T1): one column up to 1100 px with 12 px gaps. */
-.yu-live-screen { max-width: 1100px; }
+/* ET-074 Live page (mockup T1): one column with 12 px gaps that fills the content width (ET-110). */
 .yu-live { display: grid; gap: 12px; min-width: 0; }
 .yu-connection { display: flex; gap: 14px; align-items: center; padding: 14px; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
 .yu-connection-icon { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; background: var(--yu-nav-active-bg); color: var(--yu-accent-light); }
@@ -591,8 +591,9 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-live-fields h3 { color: var(--yu-accent-text); padding-bottom: 6px; }
 @media (max-width: 900px) { .yu-live-fields { grid-template-columns: minmax(0, 1fr); } }
 
-/* ET-078 Settings (mockup T5): a 170 px sub-navigation beside the panel column, up to 1100 px; one column at 900 px and below. */
-.yu-settings { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 20px; align-items: start; max-width: 1100px; }
+/* ET-078 Settings (mockup T5): a 170 px sub-navigation beside the panel column, which fills the content width (ET-110), and
+   the Overlay panel with it; one column at 900 px and below. */
+.yu-settings { display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 20px; align-items: start; }
 .yu-settings-nav { display: flex; flex-direction: column; gap: 1px; }
 .yu-settings-nav button { display: flex; align-items: center; min-height: 32px; padding: 0 10px; border: 0; border-radius: var(--yu-radius-control); background: transparent; color: var(--yu-text-secondary); font-size: 13px; line-height: 1.25; text-align: left; }
 .yu-settings-nav button:hover { background: var(--yu-hover-bg); }
