@@ -13,8 +13,9 @@ import {promisify} from 'node:util';
  * With `numbers: 'int64'` only that resource evidence is validated, with PowerShell 7's Int64 JSON integers.
  */
 /** `displayName` is the build channel's display name in the recording texts (ET-055 PR-4); production's by default. */
-export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; uiCase?: string; numbers?: 'int64'; mode?: string; jobResult?: string; displayName?: string};
-export type RuntimeReceiptResult = {passed?: boolean; driverResultAvailable?: boolean; reason?: string | null; error?: string};
+export type RuntimeReceiptCase = {receipt: string; code: number; scenario?: string; uiCase?: string; numbers?: 'int64'; mode?: string;
+  jobResult?: string; displayName?: string; stderrPath?: string};
+export type RuntimeReceiptResult = {passed?: boolean; driverResultAvailable?: boolean; reason?: string | null; error?: string; failureSummary?: string};
 
 // Measured budgets for one batch; docs/ci.md#powershell-validator-test-budgets records the evidence.
 // A separate process per case cost 0.44-0.67 s on hosted runners and pushed 46 cases past 30 s. Locally one batch

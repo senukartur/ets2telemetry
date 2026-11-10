@@ -1,9 +1,10 @@
 param([string]$Configuration)
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 . (Join-Path $PSScriptRoot '../../scripts/ci/RuntimeReceipt.ps1')
 # One Windows PowerShell 5.1 process validates every case: process startup, not validation, dominated the per-case cost.
 # Test-RuntimeReceipt keeps no state between calls; each case reads its own receipt file.
-$config = Get-Content -LiteralPath $Configuration -Raw | ConvertFrom-Json
+$config = Get-Content -LiteralPath $Configuration -Raw -Encoding UTF8 | ConvertFrom-Json
 $results = New-Object System.Collections.Generic.List[object]
 # PowerShell 7, which runs the CI steps, parses every JSON integer as Int64; Windows PowerShell 5.1 uses Int32.
 # An `int64` case retypes the parsed lifecycle receipt the way PowerShell 7 would before validating it. It reads the
@@ -74,11 +75,20 @@ foreach ($case in @($config.cases)) {
         # ET-055 PR-4: a case may name the build channel's display name; every earlier case expects production's default.
         $names = @{}
         if ($case.displayName) { $names.ExpectedDisplayName = [string]$case.displayName }
+        $matchedDriver = $null
         $output = @(Test-RuntimeReceipt -DriverResultPath $case.receipt -ExpectedCommit 'candidate' -ExpectedMode $mode `
-            -ExpectedScenario $case.scenario -ExpectedUiCase $case.uiCase -JobExitCode $case.code -JobResultPath $jobResult @names)
+            -ExpectedScenario $case.scenario -ExpectedUiCase $case.uiCase -JobExitCode $case.code -JobResultPath $jobResult `
+            -MatchedDriver ([ref]$matchedDriver) @names)
         # Exactly one result object per case, as when each case ran in its own process.
         if ($output.Count -ne 1) { $results.Add([ordered]@{error = "Expected one result, got $($output.Count)."}) }
-        else { $results.Add($output[0]) }
+        else {
+            $validation = $output[0]
+            if ($case.stderrPath -and !$validation.passed) {
+                $validation.failureSummary = Format-RuntimeSmokeFailure -Reason $validation.reason -JobExitCode $case.code `
+                    -EvidencePath (Split-Path -Parent $case.receipt) -Driver $matchedDriver -StderrPath $case.stderrPath
+            }
+            $results.Add($validation)
+        }
     } catch { $results.Add([ordered]@{error = $_.Exception.Message}) }
 }
 # ToArray: PS5.1 ConvertTo-Json rejects @() over a generic List with "Argument types do not match".

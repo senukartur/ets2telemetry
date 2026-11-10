@@ -938,6 +938,72 @@ it('requires an intact current driver receipt and normal Job exit without overwr
   } finally {await resources.dispose();}
 }, receiptBatchTimeout(cases.length) + 5000);
 
+const runtimeFailure = (extra: Record<string, unknown>) =>
+  JSON.stringify({passed: false, commit: 'candidate', mode: 'packaged', scenarioKind: 'hard-mode', ...extra});
+const primary = {message: 'HARD_MODE_HOVER_en_fuel within 5000 ms', stack: 'DRIVER_STACK_PRIVATE'};
+const stderr = 'Fallback stderr';
+const failureCases: {name: string; body?: string; stderr?: string; code: number; scenario?: string; uiCase?: string;
+  reason: string | null; driverPassed: boolean | null; detail?: string; watchdog?: string}[] = [
+  {name: 'primary driver error wins over postcondition, cleanup and stderr', code: 1, reason: 'JOB_FAILED', driverPassed: false, stderr,
+    body: runtimeFailure({failure: primary, postconditionFailure: {message: 'unfinished journey'}, closeFailure: {message: 'cleanup failed'}}),
+    detail: 'driver failure: ' + primary.message},
+  {name: 'non-string primary message permits postcondition detail', code: 0, reason: 'DRIVER_FAILED', driverPassed: false, stderr,
+    body: runtimeFailure({failure: {message: ['not a message']}, postconditionFailure: {message: 'Only postcondition failed'}}),
+    detail: 'driver postconditionFailure: Only postcondition failed'},
+  {name: 'valid driver detail stays available on watchdog drain failure', code: 125, reason: 'JOB_FAILED', driverPassed: false,
+    body: runtimeFailure({failure: primary}), detail: 'driver failure: ' + primary.message, watchdog: ' (watchdog killed remaining descendants)'},
+  {name: 'missing driver uses byte-bounded stderr on watchdog deadline', code: 124, reason: 'DRIVER_RESULT_MISSING', driverPassed: null,
+    stderr: 'BEFORE_BYTE_BOUND' + ' '.repeat(8192) + '\u001b[31mОшибка\u001b[0m\r\n::::warning:: keep\t##[error] inert\u202e\u0000',
+    detail: 'stderr tail: Ошибка : : : :warning: : keep # #[error] inert', watchdog: ' (watchdog deadline)'},
+  {name: 'mismatched commit cannot supply driver detail', code: 1, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH', driverPassed: false, stderr,
+    body: runtimeFailure({commit: 'older', failure: primary}), detail: 'stderr tail: ' + stderr},
+  {name: 'mismatched mode cannot supply driver detail', code: 1, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH', driverPassed: false, stderr,
+    body: runtimeFailure({mode: 'development', failure: primary}), detail: 'stderr tail: ' + stderr},
+  {name: 'mismatched scenario cannot supply driver detail', code: 1, reason: 'DRIVER_RESULT_SCENARIO_MISMATCH', driverPassed: false, stderr,
+    body: runtimeFailure({scenarioKind: 'journal', failure: primary}), detail: 'stderr tail: ' + stderr},
+  {name: 'mismatched observed UI shard cannot supply driver detail', code: 1, reason: 'JOB_FAILED', driverPassed: false, stderr,
+    scenario: 'ui', uiCase: 'live', body: runtimeFailure({scenarioKind: 'ui', ui: {case: 'overlay'}, failure: primary}), detail: 'stderr tail: ' + stderr},
+  {name: 'UI launch failure can precede any shard observation', code: 1, reason: 'JOB_FAILED', driverPassed: false, scenario: 'ui', uiCase: 'live',
+    body: runtimeFailure({scenarioKind: 'ui', failure: primary}), detail: 'driver failure: ' + primary.message},
+  {name: 'oversized receipt cannot supply driver detail', code: 1, reason: 'DRIVER_RESULT_MALFORMED', driverPassed: null, stderr,
+    body: runtimeFailure({failure: {...primary, stack: 'x'.repeat(524288)}}), detail: 'stderr tail: ' + stderr},
+  {name: 'malformed receipt and missing stderr keep the original failure', code: 1, reason: 'DRIVER_RESULT_MALFORMED', driverPassed: null,
+    body: '{invalid'},
+  {name: 'control-only driver detail and empty stderr keep the original failure', code: 1, reason: 'JOB_FAILED', driverPassed: false, stderr: '',
+    body: runtimeFailure({failure: {message: '\u001b[0m\u0000 \n'}})},
+  {name: 'driver detail strips terminal escapes and bounds a long message from the start', code: 1, reason: 'JOB_FAILED', driverPassed: false,
+    body: runtimeFailure({failure: {message: '\u001b]0;HIDDEN\u0007\u001b[31mPrimary\u001b[0m\r\n' + 'x'.repeat(1024), stack: primary.stack}}),
+    detail: 'driver failure: Primary ' + 'x'.repeat(501) + '...'},
+  {name: 'long stderr is shortened from the end', code: 1, reason: 'DRIVER_RESULT_MISSING', driverPassed: null,
+    stderr: 'HEAD' + 'x'.repeat(1024) + ' End', detail: 'stderr tail: ...' + 'x'.repeat(505) + ' End'},
+  {name: 'successful receipt emits no failure diagnostic', code: 0, reason: null, driverPassed: true, scenario: 'telemetry', stderr,
+    body: runtimeFailure({passed: true, scenarioKind: 'telemetry'})},
+];
+
+it('reports the actionable driver failure or safe stderr tail without changing validation or retained evidence', async () => {
+  const resources = await temporaryResources();
+  try {
+    const input = [];
+    for (const [index, testCase] of failureCases.entries()) {
+      const receipt = path.join(resources.directory, 'driver-' + index + '.json');
+      const stderrPath = path.join(resources.directory, 'stderr-' + index + '.log');
+      if (testCase.body !== undefined) await writeFile(receipt, testCase.body);
+      if (testCase.stderr !== undefined) await writeFile(stderrPath, testCase.stderr);
+      input.push({receipt, stderrPath, code: testCase.code, scenario: testCase.scenario ?? 'hard-mode', uiCase: testCase.uiCase});
+    }
+    const results = await validateRuntimeReceipts(resources.directory, input);
+    for (const [index, testCase] of failureCases.entries()) {
+      const summary = 'Runtime smoke failed: ' + testCase.reason + ', Job exit ' + testCase.code + (testCase.watchdog ?? '') +
+        '; retained evidence: ' + resources.directory + (testCase.detail ? ' | ' + testCase.detail : '');
+      expect(results[index], testCase.name).toEqual({passed: testCase.reason === null, reason: testCase.reason,
+        driverPassed: testCase.driverPassed, driverResultAvailable: testCase.driverPassed !== null,
+        ...(testCase.reason === null ? {} : {failureSummary: summary})});
+      if (testCase.body !== undefined) expect(await readFile(input[index].receipt, 'utf8'), testCase.name).toBe(testCase.body);
+      if (testCase.stderr !== undefined) expect(await readFile(input[index].stderrPath, 'utf8'), testCase.name).toBe(testCase.stderr);
+    }
+  } finally {await resources.dispose();}
+}, receiptBatchTimeout(failureCases.length) + 5000);
+
 function hardModeCases() {
   const hardMode = {unknown: true, fail: true, pass: true, hints: true, hover: true, inlineDetails: true, bilingual: true, languageHotChange: true, keyboard: true, refresh: true, belowThreshold: true, unknownExcluded: true, knownRatio: true, badge: true,
     export: true, overlayExcluded: true, persisted: true, osPointerIsolated: true, schemaVersion: 8, flags: [false, true], errors: []};

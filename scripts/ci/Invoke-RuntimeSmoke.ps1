@@ -127,9 +127,10 @@ if (Test-Path -LiteralPath $memoryFile -PathType Leaf) {
   durationSeconds=$durationSeconds;
   limits=$limits;
   descendantsNaturallyDrained=($code -eq 0); cpu=$cpu; memory=$memory} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'job-result.json') -Encoding utf8
+$matchedDriver = $null
 $validation = Test-RuntimeReceipt -DriverResultPath (Join-Path $output 'result.json') -ExpectedCommit $config.commit -ExpectedMode $Mode -ExpectedScenario $Scenario -ExpectedUiCase $UiCase -JobExitCode $code `
     -ExpectedDisplayName $built.displayName `
-    -JobResultPath (Join-Path $output 'job-result.json')
+    -JobResultPath (Join-Path $output 'job-result.json') -MatchedDriver ([ref]$matchedDriver)
 # ET-019 PR-11: the resource evidence beside the wrapper's own facts, copied only from a receipt that could be read.
 $resourceFacts = [ordered]@{jobMemory=$memory; coldLaunchOrigin=$null; coldLaunchMs=$null; processMemory=$null}
 if ($validation.driverResultAvailable -eq $true) {
@@ -207,4 +208,6 @@ if ($Scenario -eq 'soak' -and $null -ne $soakFacts.growth -and $null -ne $soakFa
     }
 }
 Write-Output "Runtime evidence: $output"
-if (!$validation.passed) { throw "Runtime smoke failed: $($validation.reason), Job exit $code; retained evidence: $output" }
+if (!$validation.passed) {
+    throw (Format-RuntimeSmokeFailure -Reason $validation.reason -JobExitCode $code -EvidencePath $output -Driver $matchedDriver -StderrPath $receipt.stderrPath)
+}

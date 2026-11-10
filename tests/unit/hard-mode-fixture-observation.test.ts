@@ -4,7 +4,7 @@ import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import type {HardModeStatus, HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
-import {evaluateHardMode, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardModeV2, evaluateHardMode, newHardModeDetails, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
 import {hardModeFixtureSnapshot, waitForHardModeFixture, type FixtureExpectation, type FixtureSnapshot, type FixtureRecord} from '../../scripts/ci/hard-mode-fixture-observation.mjs';
 import * as fixtureDiagnostics from '../../scripts/ci/hard-mode-fixture-observation.mjs';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
@@ -165,6 +165,34 @@ function snapshot(status: HardModeStatus = {assessment: failing(), trip: null}):
     hint: {count: 1, visible: true, lines: [...expected.rules[1].tooltip]},
     details: {count: 1, visible: true, rows: expected.rules.filter(rule => rule.state === 'fail').map(rule => ({id: rule.id, lines: [...rule.details]}))}};
 }
+it('waits within the fixture deadline for the v2 trip and both localized banners before hover', async () => {
+  const assessment = failing();
+  const openedTrip = newHardModeDetails(assessment, null);
+  const trip = advanceHardModeV2(openedTrip, {assessment, binding: null, pluginSessionId: null, sourceMonotonicNs: null});
+  const ratio = {count: 1, visible: true, text: 'Проверки рейса: 0/0 успешных (—%). Порог: ≥95%.'};
+  const diagnostic = {count: 1, visible: true, text: 'Подтверждённая настройка не соответствует правилу · 1970-01-01T00:00:00.000Z · Усталость: 0'};
+  const tripBanners = {ratio: /Порог: ≥95%/, diagnostic: /Подтверждённая настройка.* · Усталость: 0$/};
+  const absent = {count: 0, visible: false, text: ''};
+  const steps = [
+    {...snapshot(), tripBanners: {ratio, diagnostic}},
+    {...snapshot({assessment, trip: openedTrip}), tripBanners: {ratio, diagnostic}},
+    {...snapshot({assessment, trip}), tripBanners: {ratio: absent, diagnostic: absent}},
+    {...snapshot({assessment, trip}), tripBanners: {ratio, diagnostic: {...diagnostic, visible: false}}},
+    {...snapshot({assessment, trip}), tripBanners: {ratio: {...ratio, count: 2}, diagnostic}},
+    {...snapshot({assessment, trip}), tripBanners: {ratio, diagnostic: {...diagnostic, text: 'Verified setting does not meet the rule · Fatigue simulation: 0'}}},
+    {...snapshot({assessment, trip}), tripBanners: {ratio, diagnostic}}
+  ];
+  const record: FixtureRecord = {};
+  const pending = waitForHardModeFixture({refresh: () => Promise.resolve(), observe: () => Promise.resolve(steps[Math.floor(Date.now() / 100)]),
+    expected: {...expected, tripBanners}, record, message: 'HARD_MODE_RENDERED_FAIL_ru'});
+  await vi.advanceTimersByTimeAsync(599);
+  expect(record.phase).toBe('poll');
+  expect(record.lastSnapshot).toEqual(steps[5]);
+  await vi.advanceTimersByTimeAsync(1);
+  await expect(pending).resolves.toEqual(steps[6]);
+  expect(record.elapsedMilliseconds).toBe(600);
+  expect(vi.getTimerCount()).toBe(0);
+});
 it('waits for genuine same-source reacquisition and rendered source after the language is already ready', async () => {
   const source: SourceIdentity = {game: 'ets2', origin: 'synthetic', processId: 123, windowsSessionId: 1,
     processInstanceId: '10000000-0000-4000-8000-000000000001', pluginSessionId: '20000000-0000-4000-8000-000000000001'};
@@ -270,6 +298,19 @@ it.each([0, 1, 3])('bounds source facts from the actual snapshot collector with 
     document: {documentElement: {lang: 'en'}, querySelectorAll: (selector: string) => selector === '[data-testid="hard-mode-source"]' ? Array.from({length: count}, () => source) : []},
     getComputedStyle: () => ({visibility: 'visible'})}) as FixtureSnapshot;
   expect(observed.source).toEqual({count: Math.min(count, 2), visible: false, text: count ? 'x'.repeat(256) : ''});
+});
+it('collects bounded visibility and text facts for both trip banners in the browser snapshot', async () => {
+  const ratio = {getClientRects: () => [{}], innerText: 'x'.repeat(1000)};
+  const diagnostic = {getClientRects: () => [], innerText: 'Fatigue simulation: 0'};
+  const observed = await runInNewContext('(' + hardModeFixtureSnapshot.toString() + ')({tripBanners:true})', {
+    desktop: {getHardModeStatus: () => Promise.resolve({assessment: failing(), trip: null})},
+    document: {documentElement: {lang: 'en'}, querySelectorAll: (selector: string) => {
+      if (selector === '[data-testid="hard-mode-trip-ratio"]') return [ratio, ratio, ratio];
+      if (selector === '[data-testid="hard-mode-diagnostic"]') return [diagnostic];
+      return [];
+    }}, getComputedStyle: () => ({visibility: 'visible'})}) as FixtureSnapshot;
+  expect(observed.tripBanners).toEqual({ratio: {count: 2, visible: true, text: 'x'.repeat(256)},
+    diagnostic: {count: 1, visible: false, text: 'Fatigue simulation: 0'}});
 });
 it.each(['refresh','observe'] as const)('bounds a held %s and stops after late settlement', async phase => {
   let release!: () => void;

@@ -1004,7 +1004,9 @@ function Test-RuntimeReceipt {
     # ExpectedDisplayName: the build channel's display name inside the recording texts (ET-055; Invoke-RuntimeSmoke.ps1
     # passes the built one). Production's is the default, the name of every build before ET-055.
     param([string]$DriverResultPath, [string]$ExpectedCommit, [string]$ExpectedMode, [int]$JobExitCode,
-        [string]$ExpectedScenario, [string]$JobResultPath, [string]$ExpectedUiCase, [string]$ExpectedDisplayName = 'Yukon Union Telemetry')
+        [string]$ExpectedScenario, [string]$JobResultPath, [string]$ExpectedUiCase, [string]$ExpectedDisplayName = 'Yukon Union Telemetry',
+        [ref]$MatchedDriver)
+    if ($null -ne $MatchedDriver) { $MatchedDriver.Value = $null }
     $validation = [ordered]@{passed=$false; driverResultAvailable=$false; reason=$null; driverPassed=$null}
     if (!(Test-Path -LiteralPath $DriverResultPath -PathType Leaf)) {
         $validation.reason = 'DRIVER_RESULT_MISSING'; return $validation
@@ -1022,6 +1024,13 @@ function Test-RuntimeReceipt {
     }
     if ($ExpectedScenario -and $driver.scenarioKind -cne $ExpectedScenario) {
         $validation.reason = 'DRIVER_RESULT_SCENARIO_MISMATCH'; return $validation
+    }
+    # The diagnostic uses this same bounded parse and only borrows evidence with a matching identity.
+    # An early UI failure may precede the observation of its shard.
+    if ($null -ne $MatchedDriver -and $driver.commit -is [string] -and $driver.mode -is [string] -and
+        (!$ExpectedScenario -or $driver.scenarioKind -is [string]) -and
+        ($ExpectedScenario -cne 'ui' -or $null -eq $driver.ui.case -or ($driver.ui.case -is [string] -and $driver.ui.case -ceq $ExpectedUiCase))) {
+        $MatchedDriver.Value = $driver
     }
     if ($JobExitCode -ne 0) { $validation.reason = 'JOB_FAILED'; return $validation }
     if ($driver.passed -ne $true) { $validation.reason = 'DRIVER_FAILED'; return $validation }
@@ -1211,4 +1220,58 @@ function Test-RuntimeReceipt {
     }
     $validation.passed = $true
     return $validation
+}
+
+function Read-RuntimeStderrTail {
+    param([string]$Path)
+    $directory = Get-Item -LiteralPath (Split-Path -Parent $Path) -Force -ErrorAction Stop
+    if ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if ($item -isnot [IO.FileInfo] -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return }
+    $reader = [IO.BinaryReader]::new([IO.File]::OpenRead($item.FullName))
+    try {
+        $count = [int][math]::Min($reader.BaseStream.Length, 4096)
+        $null = $reader.BaseStream.Seek(-$count, [IO.SeekOrigin]::End)
+        return [Text.Encoding]::UTF8.GetString($reader.ReadBytes($count))
+    } finally { $reader.Dispose() }
+}
+
+function Format-RuntimeConsoleDetail {
+    param([object]$Message, [switch]$Tail)
+    if ($Message -isnot [string]) { return }
+    # Strip ANSI OSC and CSI sequences, then flatten whitespace and remove remaining control and format characters.
+    $plain = $Message -replace '(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c|$)', '' -replace '(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]', ''
+    $plain = $plain -replace '\x1b[ -/]*[@-Z\\-_]', '' -replace '\s+', ' ' -replace '[\p{Cc}\p{Cf}]', ''
+    # Neutralize both Actions command markers before printing diagnostic text.
+    $plain = ($plain -replace ':(?=:)', ': ' -replace '##\[', '# #[').Trim()
+    if ($plain.Length -le 512) { return $plain }
+    if ($Tail) {
+        $start = $plain.Length - 509
+        if ([char]::IsLowSurrogate($plain[$start])) { $start++ }
+        return ('...' + $plain.Substring($start))
+    }
+    $length = 509
+    if ([char]::IsHighSurrogate($plain[$length - 1])) { $length-- }
+    return ($plain.Substring(0, $length) + '...')
+}
+
+function Format-RuntimeSmokeFailure {
+    param([string]$Reason, [int]$JobExitCode, [string]$EvidencePath, [object]$Driver, [string]$StderrPath)
+    $watchdog = switch ($JobExitCode) {
+        124 { ' (watchdog deadline)' }
+        125 { ' (watchdog killed remaining descendants)' }
+    }
+    $summary = "Runtime smoke failed: $Reason, Job exit $JobExitCode$watchdog; retained evidence: $EvidencePath"
+    try {
+        if ($Driver.passed -eq $false) {
+            foreach ($field in @('failure','postconditionFailure','closeFailure','traceFailure','sourceCloseFailure','sourceV1CloseFailure',
+                    'recordingSourceFailure','soakSourceFailure')) {
+                $detail = Format-RuntimeConsoleDetail -Message $Driver.$field.message
+                if ($detail) { return "$summary | driver $($field): $detail" }
+            }
+        }
+        $detail = Format-RuntimeConsoleDetail -Message (Read-RuntimeStderrTail -Path $StderrPath) -Tail
+        if ($detail) { return "$summary | stderr tail: $detail" }
+    } catch { return $summary } # Diagnostic I/O must leave the validation failure intact.
+    return $summary
 }

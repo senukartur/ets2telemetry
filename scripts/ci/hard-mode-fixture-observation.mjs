@@ -185,7 +185,7 @@ export async function observeHardModeTooltip({record, phase, criterion, language
 }
 
 // Fail-fixture presentation only. This never supplies or preserves delivered-trip qualification evidence.
-export async function hardModeFixtureSnapshot({hint, details} = {}) {
+export async function hardModeFixtureSnapshot({hint, details, tripBanners} = {}) {
   const status = await globalThis.desktop.getHardModeStatus();
   const nodes = selector => [...globalThis.document.querySelectorAll(selector)];
   const visible = node => Boolean(node && node.getClientRects().length && globalThis.getComputedStyle(node).visibility === 'visible');
@@ -195,9 +195,12 @@ export async function hardModeFixtureSnapshot({hint, details} = {}) {
     return {id, state: row.getAttribute('data-state'), buttonCount: buttons.length,
       label: button?.getAttribute('aria-label'), name: button?.querySelector('span:last-child')?.textContent};
   });
-  const sources = nodes('[data-testid="hard-mode-source"]');
-  const snapshot = {status, language: globalThis.document.documentElement.lang, rows,
-    source: {count: Math.min(sources.length, 2), visible: visible(sources[0]), text: (sources[0]?.innerText ?? '').slice(0, 256)}};
+  const textFact = id => {
+    const [node, duplicate] = nodes(`[data-testid="${id}"]`);
+    return {count: duplicate ? 2 : node ? 1 : 0, visible: visible(node), text: (node?.innerText ?? '').slice(0, 256)};
+  };
+  const snapshot = {status, language: globalThis.document.documentElement.lang, rows, source: textFact('hard-mode-source')};
+  if (tripBanners) snapshot.tripBanners = {ratio: textFact('hard-mode-trip-ratio'), diagnostic: textFact('hard-mode-diagnostic')};
   if (hint) {
     const matches = nodes('[data-testid="hard-mode-hint-' + hint + '"]'), node = matches[0];
     snapshot.hint = {count: matches.length, visible: visible(node), lines: node ? [...node.querySelectorAll(':scope > p')].map(p => p.innerText) : []};
@@ -216,6 +219,14 @@ function matchesFixture(snapshot, expected) {
       snapshot.language !== expected.language || assessment.rules?.length !== 12 || snapshot.rows?.length !== 12 || expected.rules.length !== 12) return false;
   if (expected.sourceText && (!snapshot.source || snapshot.source.count !== 1 || !snapshot.source.visible ||
       !snapshot.source.text.match(expected.sourceText))) return false;
+  if (expected.tripBanners) {
+    const trip = snapshot.status.trip;
+    if (trip?.version !== 2 || trip.latestDiagnostic?.code !== 'rule-failed' || trip.latestDiagnostic.rule !== 'fatigue') return false;
+    for (const [name, text] of Object.entries(expected.tripBanners)) {
+      const banner = snapshot.tripBanners?.[name];
+      if (!banner || banner.count !== 1 || !banner.visible || !banner.text.match(text)) return false;
+    }
+  }
   for (const [index, rule] of expected.rules.entries()) {
     const backend = assessment.rules[index], rendered = snapshot.rows[index];
     if (backend.id !== rule.id || backend.state !== rule.state || backend.reason !== rule.reason || JSON.stringify(backend.values) !== JSON.stringify(rule.values) ||
