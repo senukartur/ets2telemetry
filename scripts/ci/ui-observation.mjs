@@ -672,6 +672,25 @@ const dashboardZoom = (application, zoom) => application.evaluate(({BrowserWindo
   BrowserWindow.getAllWindows().find(window => !window.webContents.getURL().endsWith('?view=overlay')).webContents.setZoomFactor(zoom);
 }, zoom);
 /**
+ * ET-110: compact pages fill the content column. At zoom 0.75 a 1280 px window is about 1707 CSS px wide, past the former
+ * Live (1100 px) and Settings caps, so each page root must span the content box of its container (shell.content unless
+ * named). Each entry opens its page while zoomed; the zoom returns to 1 even on failure.
+ */
+async function observeFullWidth({application, dashboard, label, pages}) {
+  await dashboardZoom(application, 0.75);
+  try {
+    await dashboard.waitForFunction(() => globalThis.innerWidth >= 1700, undefined, {timeout: 5000});
+    for (const {open, node, within = '[data-testid="shell.content"]'} of pages) {
+      if (open) await open();
+      const facts = await dashboard.evaluate(({node, within}) => new Promise(resolve => globalThis.requestAnimationFrame(() => {
+        const box = globalThis.document.querySelector(within), style = globalThis.getComputedStyle(box);
+        resolve({available: box.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), width: globalThis.document.querySelector(node).getBoundingClientRect().width, viewport: globalThis.innerWidth});
+      })), {node, within});
+      assert.ok(facts.available > 1100 && facts.width >= facts.available - 1, `UI_FULL_WIDTH_${label}_${node}: ${JSON.stringify(facts)}`);
+    }
+  } finally {await dashboardZoom(application, 1);}
+}
+/**
  * ET-082: the theme preference through the real nativeTheme path. The harness pins the dark scheme by emulation, so this
  * lifts it first; the settings window itself never reloads, which the sentinel proves.
  */
@@ -941,6 +960,16 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           await focusRoute(dashboard, route); await save(route, language, size);
           assert.equal(await dashboard.getByTestId('shell.breadcrumb').textContent(), SHELL_TEXT[language].crumbs[route], `UI_SHELL_BREADCRUMB_${language}_${route}`);
         }
+        if (size === sizes[0]) {
+          // The Settings panel survives route changes; the one shown before is restored after General and Overlay.
+          const settingsPanelBefore = await dashboard.locator('[data-testid^="settings.nav."][aria-current="page"]').getAttribute('data-testid');
+          const route = name => ({open: () => focusRoute(dashboard, name), node: `[data-testid="${name === 'live' ? 'live.screen' : name === 'journal' ? 'journal' : `${name}.screen`}"]`});
+          await observeFullWidth({application, dashboard, label: language, pages: [route('live'), route('hardMode'), route('journal'), route('account'),
+            {open: () => settingsPanel(dashboard, 'general'), node: '[data-testid="settings.screen"]'},
+            {open: () => settingsPanel(dashboard, 'overlay'), node: '[data-testid="settings.screen"]'},
+            {node: '[data-testid="overlay-settings"]', within: '.yu-settings-panels'}]});
+          await dashboard.getByTestId(settingsPanelBefore).click({timeout: 5000}); await focusRoute(dashboard, 'account');
+        }
         await observeCompactShell(dashboard, language, size, config.dashboardConfigured);
         assert.deepEqual(await dashboard.locator('.yu-sidebar nav button').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid'))), ['tab-live', 'tab-hardMode', 'tab-journal', 'tab-settings', 'tab-account']);
         if (config.dashboardConfigured) {
@@ -1174,6 +1203,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         });
         assert.ok(columns.sideLeft >= columns.mainRight && columns.sideWidth >= 260, `UI_TRIP_COLUMNS_${size.width}: ${JSON.stringify(columns)}`);
         assert.equal(columns.overflow, false, `UI_TRIP_CONTENT_OVERFLOW_${size.width}`);
+        if (size === sizes[0]) await observeFullWidth({application, dashboard, label: `trip_${language}`, pages: [{node: '[data-testid="journal-detail"]'}]});
         // The tabs follow the WAI-ARIA pattern: arrows, Home and End select a tab, and Tab moves into its panel.
         const tabSelected = id => dashboard.getByTestId(`journal-detail-tab-${id}`).getAttribute('aria-selected');
         await dashboard.getByTestId('journal-detail-tab-summary').focus();
