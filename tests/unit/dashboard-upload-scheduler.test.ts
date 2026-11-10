@@ -94,7 +94,7 @@ it('REG-005/010/011 persists a TLS configuration pause for the active attempt in
   const claim=vi.fn(()=>result({status:'claimed',attemptId,eventId,registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}));const db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='recordUploadAttemptOutcome'?outcome:Reflect.get(target,key);}});
   f.http.request=vi.fn(()=>Promise.resolve({ok:false as const,code:'TLS_CONFIGURATION' as const,statusCode:null,retryAfter:null}));const scheduler=new UploadScheduler(db,f.http,origin,'test',()=>{});await scheduler.activate(configuration,token,limits);await vi.advanceTimersByTimeAsync(1);expect(outcome).toHaveBeenCalledWith(expect.objectContaining({attemptId,kind:'configuration'}));expect(scheduler.status).toMatchObject({state:'paused',error:'CONFIGURATION'});await scheduler.stop();
 });
-it('REG-005/010/011 keeps one stable published result across delivered receipts and periodic recounts (ET-110)',async()=>{
+it('REG-005/010/011 keeps one stable published result across delivered receipts, periodic recounts and a new trip (ET-110)',async()=>{
   vi.useFakeTimers();const f=fixture(),published:import('../../packages/contracts/src/dashboard-upload').DashboardUploadStatus[]=[],trips=Array.from({length:5},()=>randomUUID());let commits=0,claims=0;
   // Five retained trips: two delivered before activation, one more for each of three durable receipts.
   const claim=vi.fn((input:{attemptId:string})=>claims++<3?result({status:'claimed',attemptId:input.attemptId,eventId:randomUUID(),registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}):result({status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null}));
@@ -109,9 +109,16 @@ it('REG-005/010/011 keeps one stable published result across delivered receipts 
     expect(commit).toHaveBeenCalledTimes(3);expect(sources.mock.calls.filter(([input])=>input.phase==='sources').length).toBeGreaterThanOrEqual(passes+3);
     const first=published.findIndex(status=>status.progress.enumeration==='complete');expect(first).toBeGreaterThan(0);
     for(const status of published.slice(0,first))expect(status.progress).toMatchObject({distinctSources:null,deliveredSources:null});
-    const after=published.slice(first);expect(after.length).toBeGreaterThan(10);
+    const counted=published.length,after=published.slice(first,counted);expect(after.length).toBeGreaterThan(10);
     for(const status of after)expect(status.progress).toMatchObject({enumeration:'complete',distinctSources:5});
     const delivered=after.map(status=>status.progress.deliveredSources!);for(let n=1;n<delivered.length;n++)expect(delivered[n]).toBeGreaterThanOrEqual(delivered[n-1]);
     expect(scheduler.status.progress).toMatchObject({enumeration:'complete',distinctSources:5,deliveredSources:5,lastDurableUploadUtcMs:1003});
+    // A sixth trip recorded after the complete count: the next completed recount replaces 5 with 6 in one step, never through null or 'changing'.
+    trips.push(randomUUID());await vi.advanceTimersByTimeAsync(10000);
+    const recounted=published.slice(counted),grown=recounted.findIndex(status=>status.progress.distinctSources===6);expect(grown).toBeGreaterThanOrEqual(0);
+    for(const status of recounted)expect(status.progress).toMatchObject({enumeration:'complete',distinctSources:expect.any(Number),deliveredSources:5});
+    for(const status of recounted.slice(0,grown))expect(status.progress.distinctSources).toBe(5);
+    for(const status of recounted.slice(grown))expect(status.progress.distinctSources).toBe(6);
+    expect(scheduler.status.progress).toMatchObject({enumeration:'complete',distinctSources:6,deliveredSources:5,lastDurableUploadUtcMs:1003});
   }finally{await scheduler.stop();}
 });
