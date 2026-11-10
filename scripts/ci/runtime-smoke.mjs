@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import {open, readFile, readdir, writeFile} from 'node:fs/promises';
-import {existsSync} from 'node:fs';
+import {existsSync, writeSync} from 'node:fs';
 import {performance} from 'node:perf_hooks';
 import {_electron as electron} from '@playwright/test';
 import {startLiveSmokeSource} from './live-smoke-source.mjs';
@@ -87,7 +87,19 @@ async function verifyUninstallNotInstalled(page, press) {
 result.phases = [];
 const checkpoint = config.scenario === 'now-playing' ? nowPlayingCheckpoints(path.join(config.output, 'now-playing-checkpoints.json'))
   : config.scenario === 'plugin' ? pluginCheckpoints(path.join(config.output, 'plugin-checkpoints.json')) : () => true;
-const phase = (name, observation) => {result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10}); if (!checkpoint(name, observation)) result.checkpointWriteFailed = true;};
+let latestUiScreenshot;
+function uiProgress(name, screenshot) {
+  if (config.scenario !== 'ui') return;
+  if (screenshot) latestUiScreenshot = screenshot;
+  const image = latestUiScreenshot ? ` screenshot=${latestUiScreenshot}` : '';
+  // The Job can kill the driver before an asynchronous stderr write or the receipt completes.
+  try {writeSync(2, `UI_PROGRESS phase=${name} elapsedMs=${Math.round(performance.now())}${image}\n`);} catch { /* Diagnostic only. */ }
+}
+const phase = (name, observation) => {
+  result.phases.push({phase: name, utc: new Date().toISOString(), monotonicMs: Math.round(performance.now() * 10) / 10});
+  if (!checkpoint(name, observation)) result.checkpointWriteFailed = true;
+  uiProgress(name);
+};
 const diagnosticEvents = async directory => (await readFile(path.join(directory, 'startup.jsonl'), 'utf8'))
   .trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
 // ET-013: one service run opens the history database once per service process (`created` per opening, in order),
@@ -156,6 +168,7 @@ const launchOptions = diagnostics => ({timeout: 20000, cwd: config.cwd, colorSch
     {args: [config.checkout, ...(config.forceRendererProcessReuse ? ['--renderer-process-limit=1'] : [])]}),
   env: environment(diagnostics)});
 try {
+  uiProgress('driver-started');
   assert.equal(process.platform, 'win32');
   assert.equal(process.arch, 'x64');
   assert.equal(process.versions.node, '24.19.0');
@@ -175,13 +188,18 @@ try {
   if (config.scenario === 'plugin') {assertNoGameRunning(); pluginFixture = await buildPluginFixture(config.output, smokeBuild(config).identity); pluginBefore = await snapshotPluginFixture(pluginFixture);}
   // ET-019 PR-7: the history path of the isolated LOCALAPPDATA holds a copy of the newer-schema fixture before the launch.
   if (config.scenario === 'refusal') await placeNewerHistory({config, record: result.refusal = {}});
-  if (config.scenario === 'ui' && config.uiCase === 'journal') {await seedJournalDatabase({config, record: result.uiSeed = {}}); journalTarget = JOURNAL_TARGET;}
+  if (config.scenario === 'ui' && config.uiCase === 'journal') {
+    uiProgress('journal-seeding');
+    await seedJournalDatabase({config, record: result.uiSeed = {}});
+    journalTarget = JOURNAL_TARGET;
+  }
   if (config.scenario === 'now-playing') await prepareNowPlayingSmoke(config);
   phase('launch-requested');
   application = await launch(config.diagnostics);
   launcher = application.process();
   phase('launch-returned');
-  await application.context().tracing.start({screenshots: true, snapshots: true});
+  // As in the seeded Journal smoke, the Journal shard keeps its explicit PNGs and action/DOM trace without the screencast.
+  await application.context().tracing.start({screenshots: !(config.scenario === 'ui' && config.uiCase === 'journal'), snapshots: true});
   tracing = true;
   phase('tracing-started');
   let {dashboard: window, overlay} = await rendererPages(application).catch(error => {
@@ -507,10 +525,13 @@ try {
     result.telemetry.v1DisconnectedHidden = true;
   }
   if (config.scenario === 'ui') {
-    await runUiSmoke({application, dashboard: window, overlay, source: telemetrySource, sourceV1: telemetrySourceV1, config, record: result.ui = {}});
+    uiProgress('ui-journey-started');
+    await runUiSmoke({application, dashboard: window, overlay, source: telemetrySource, sourceV1: telemetrySourceV1, config, record: result.ui = {}, progress: uiProgress});
     if (config.uiCase === 'settings') {
-      // Same 60-second Job: a normal first run, then an isolated newer-version read-only launch.
+      // The 120-second Job covers the normal first run and the isolated newer-version read-only launch.
+      uiProgress('ui-first-trace-export');
       await application.context().tracing.stop({path: path.join(config.output, 'ui-settings-first-trace.zip')}); tracing = false;
+      uiProgress('ui-first-close-requested');
       await observeExit({application, launcher, request: () => application.close(), requireRequest: true,
         record: result.ui.exitObservation = {}, message: 'APP_CLOSE_TIMEOUT_8_SECONDS'});
       result.ui.firstLauncherExit = launcher.exitCode;
@@ -520,7 +541,8 @@ try {
       application = await launch(config.diagnosticsRestart); launcher = application.process();
       await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;
       ({dashboard: window, overlay} = await rendererPages(application)); await waitForStartup(window);
-      await runUiReadOnly({application, dashboard: window, config, record: result.ui, settingsBytes});
+      uiProgress('ui-readonly-journey-started');
+      await runUiReadOnly({application, dashboard: window, config, record: result.ui, settingsBytes, progress: uiProgress});
       result.ui.readOnly.windows = await windowSecurity(application);
       await screen(window, 'live');
     }
@@ -625,14 +647,32 @@ try {
   result.processMemory = {run: ['now-playing', 'lifecycle', 'recording', 'journal', 'plugin'].includes(config.scenario) || config.scenario === 'ui' && config.uiCase === 'settings' ? 'restart' : 'first',
     ...await observeProcessMemory(application).catch(() => ({error: 'OBSERVATION_FAILED'}))};
   phase('journey-complete');
-  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal' && config.scenario !== 'soak') await window.screenshot({path: path.join(config.output, 'ready.png')});
-} catch (error) {result.failure = failure(error); phase('failed');}
+  if (config.scenario !== 'lifecycle' && config.scenario !== 'recording' && config.scenario !== 'journal' && config.scenario !== 'plugin' && config.scenario !== 'refusal' && config.scenario !== 'soak') {
+    await window.screenshot({path: path.join(config.output, 'ready.png')});
+    uiProgress('screenshot-saved', 'ready.png');
+  }
+} catch (error) {
+  result.failure = failure(error); phase('failed');
+  if (config.scenario === 'ui') {
+    try {
+      const dashboard = application?.windows().find(page => !page.isClosed() && page.url().startsWith('file:') && page.url().endsWith('/renderer/index.html'));
+      if (dashboard) {
+        const file = `ui-${config.uiCase}-failure.png`;
+        uiProgress('failure-screenshot-requested');
+        await dashboard.screenshot({path: path.join(config.output, file), timeout: 1000});
+        uiProgress('failure-screenshot-saved', file);
+      }
+    } catch {uiProgress('failure-screenshot-unavailable');}
+  }
+}
 finally {
+  uiProgress('source-cleanup-started');
   try {await hardModeSource?.stop();} catch (error) {result.sourceV1CloseFailure = failure(error);}
   try {await telemetrySource?.stop();} catch (error) {result.sourceCloseFailure = failure(error);}
   try {await telemetrySourceV1?.stop();} catch (error) {result.sourceV1CloseFailure = failure(error);}
   if (application) {
     if (tracing) {
+      uiProgress('trace-export-started');
       try {const stop = () => application.context().tracing.stop({path: path.join(config.output, 'trace.zip')}); if (config.scenario === 'now-playing') await nowPlayingStage('final-trace-stop', stop, checkpoint, 5000); else await stop();}
       catch (error) {result.traceFailure = failure(error);}
       phase('tracing-stopped');
@@ -657,6 +697,7 @@ finally {
     try {(result.soak ??= {}).source = await soakSource.stop({waitMs: 5000});} catch (error) {result.soakSourceFailure = failure(error);}
   }
   if (config.scenario === 'plugin' && result.plugin?.restartPhase !== 'STARTED') { (result.plugin ??= {}).restartPhase = 'NOT_REACHED'; phase('plugin-restart-not-reached'); }
+  uiProgress('postconditions-started');
   try {
     // Preserve lifecycle evidence even when a later cleanup assertion fails.
     result.mainEvents = await diagnosticEvents(config.diagnostics);
@@ -787,7 +828,9 @@ finally {
   result.finishedUtc = new Date().toISOString();
   // ET-019 PR-12b: a soak's logs can hold hundreds of rows; its receipt keeps the rows its checks name and counts the rest.
   if (config.scenario === 'soak') compactSoakEvents(result);
+  uiProgress('receipt-write-started');
   await writeFile(path.join(config.output, 'result.json'), JSON.stringify(result, null, 2) + '\n');
+  uiProgress('receipt-written');
 }
 // The external Job owns descendants even if launch, instrumentation or shutdown fails.
 process.exit(result.passed ? 0 : 1);

@@ -11,6 +11,9 @@ export function completeLiveObservation(expected: {rows: readonly LiveRow[]; hid
 export function notCurrentLiveObservation(expected: {values: readonly string[]; status: string; hidden: readonly string[]}): Record<string, string | undefined> | false;
 export function waitForCompleteLive(page: Page, rows?: readonly LiveRow[], hidden?: readonly string[]): Promise<Record<string, string>>;
 export function waitForNotCurrentLive(page: Page, values: readonly string[], status: string, hidden?: readonly string[]): Promise<Record<string, string | undefined>>;
+export type PartialLiveObservation = {gauge: string | null; bannerVisible: boolean; title: string | null; text: string | null; staleBadges: number};
+export function partialLiveObservation(): PartialLiveObservation | false;
+export function waitForPartialLive(page: Page): Promise<PartialLiveObservation>;
 export const SYNTHETIC_V1_LIVE_ROWS: readonly LiveRow[];
 export const SYNTHETIC_V1_VALUE_IDS: readonly string[];
 export const SYNTHETIC_V0V1_LIVE_ROWS: readonly LiveRow[];

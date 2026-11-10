@@ -76,6 +76,29 @@ export async function waitForNotCurrentLive(page, values, status, hidden = []) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
+// Only wait for the intended transition. Read its presentation in the same renderer turn so a v1 freshness change
+// cannot mix a partial banner with a stale badge. The caller asserts the presentation even if it is wrong.
+export function partialLiveObservation() {
+  const elements = id => globalThis.document.querySelectorAll(`[data-testid="${id}"]`);
+  const only = nodes => nodes.length === 1 ? nodes[0] : null;
+  if (!only(elements('telemetry-status'))?.innerText.startsWith('stale:') ||
+      only(elements('live-telemetry'))?.getAttribute('data-live-state') !== 'partial') return false;
+  const banner = only(elements('live.waiting'));
+  const bounds = banner?.getBoundingClientRect();
+  return {
+    gauge: only(elements('live-speed-number'))?.textContent ?? null,
+    bannerVisible: Boolean(bounds && bounds.width > 0 && bounds.height > 0 && globalThis.getComputedStyle(banner).visibility === 'visible'),
+    title: banner ? only(banner.querySelectorAll('strong'))?.innerText ?? null : null,
+    text: banner?.innerText ?? null,
+    staleBadges: elements('live.stale').length,
+  };
+}
+
+export async function waitForPartialLive(page) {
+  const handle = await page.waitForFunction(partialLiveObservation, undefined, {timeout: 5000});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
 // ET-010c protocol v1 rows. Expected texts are written by hand from tests/fixtures/protocol-v1/snapshot-live.json with
 // the job's cargo and destination city ids set to the v0 checkpoint's (cargo.logs, city.warszawa), as the v1 smoke source
 // serves it, in the ETS2 metric profile: 151000 m remaining, deadline minute 13000 at game minute 12345 (10 h 55 min),

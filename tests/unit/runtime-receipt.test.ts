@@ -942,7 +942,9 @@ const runtimeFailure = (extra: Record<string, unknown>) =>
   JSON.stringify({passed: false, commit: 'candidate', mode: 'packaged', scenarioKind: 'hard-mode', ...extra});
 const primary = {message: 'HARD_MODE_HOVER_en_fuel within 5000 ms', stack: 'DRIVER_STACK_PRIVATE'};
 const stderr = 'Fallback stderr';
+const uiProgress = 'UI_PROGRESS phase=trace-export-started elapsedMs=116000 screenshot=ready.png';
 const failureCases: {name: string; body?: string; stderr?: string; code: number; scenario?: string; uiCase?: string;
+  mode?: string; elapsedMs?: number; deadlineMs?: number; timeoutContext?: string;
   reason: string | null; driverPassed: boolean | null; detail?: string; watchdog?: string}[] = [
   {name: 'primary driver error wins over postcondition, cleanup and stderr', code: 1, reason: 'JOB_FAILED', driverPassed: false, stderr,
     body: runtimeFailure({failure: primary, postconditionFailure: {message: 'unfinished journey'}, closeFailure: {message: 'cleanup failed'}}),
@@ -953,8 +955,19 @@ const failureCases: {name: string; body?: string; stderr?: string; code: number;
   {name: 'valid driver detail stays available on watchdog drain failure', code: 125, reason: 'JOB_FAILED', driverPassed: false,
     body: runtimeFailure({failure: primary}), detail: 'driver failure: ' + primary.message, watchdog: ' (watchdog killed remaining descendants)'},
   {name: 'missing driver uses byte-bounded stderr on watchdog deadline', code: 124, reason: 'DRIVER_RESULT_MISSING', driverPassed: null,
+    elapsedMs: 60172, deadlineMs: 60000, timeoutContext: 'mode=packaged scenario=hard-mode elapsedMs=60172 deadlineMs=60000',
     stderr: 'BEFORE_BYTE_BOUND' + ' '.repeat(8192) + '\u001b[31mОшибка\u001b[0m\r\n::::warning:: keep\t##[error] inert\u202e\u0000',
     detail: 'stderr tail: Ошибка : : : :warning: : keep # #[error] inert', watchdog: ' (watchdog deadline)'},
+  {name: 'UI watchdog reports progress and the last saved PNG even after a long log line', code: 124, reason: 'DRIVER_RESULT_MISSING', driverPassed: null,
+    mode: 'development', scenario: 'ui', uiCase: 'journal', elapsedMs: 120328, deadlineMs: 120000,
+    timeoutContext: 'mode=development scenario=ui shard=journal elapsedMs=120328 deadlineMs=120000', watchdog: ' (watchdog deadline)',
+    stderr: 'x'.repeat(8192) + '\n' + uiProgress + '\n', detail: 'stderr tail: ...' + 'x'.repeat(508 - uiProgress.length) + ' ' + uiProgress},
+  {name: 'UI watchdog before any diagnostic still reports the deadline and shard', code: 124, reason: 'DRIVER_RESULT_MISSING', driverPassed: null,
+    scenario: 'ui', uiCase: 'journal', elapsedMs: 120119, deadlineMs: 120000,
+    timeoutContext: 'mode=packaged scenario=ui shard=journal elapsedMs=120119 deadlineMs=120000', watchdog: ' (watchdog deadline)'},
+  {name: 'unusable UI stderr preserves the malformed receipt reason and deadline', code: 124, reason: 'DRIVER_RESULT_MALFORMED', driverPassed: null,
+    body: '{invalid', stderr: '\u001b[0m\u0000 \r\n', scenario: 'ui', uiCase: 'live', elapsedMs: 120184, deadlineMs: 120000,
+    timeoutContext: 'mode=packaged scenario=ui shard=live elapsedMs=120184 deadlineMs=120000', watchdog: ' (watchdog deadline)'},
   {name: 'mismatched commit cannot supply driver detail', code: 1, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH', driverPassed: false, stderr,
     body: runtimeFailure({commit: 'older', failure: primary}), detail: 'stderr tail: ' + stderr},
   {name: 'mismatched mode cannot supply driver detail', code: 1, reason: 'DRIVER_RESULT_IDENTITY_MISMATCH', driverPassed: false, stderr,
@@ -965,6 +978,11 @@ const failureCases: {name: string; body?: string; stderr?: string; code: number;
     scenario: 'ui', uiCase: 'live', body: runtimeFailure({scenarioKind: 'ui', ui: {case: 'overlay'}, failure: primary}), detail: 'stderr tail: ' + stderr},
   {name: 'UI launch failure can precede any shard observation', code: 1, reason: 'JOB_FAILED', driverPassed: false, scenario: 'ui', uiCase: 'live',
     body: runtimeFailure({scenarioKind: 'ui', failure: primary}), detail: 'driver failure: ' + primary.message},
+  {name: 'UI exit 1 keeps the primary assertion ahead of failure screenshot and cleanup details', code: 1, reason: 'JOB_FAILED', driverPassed: false,
+    scenario: 'ui', uiCase: 'live', elapsedMs: 44808, deadlineMs: 120000,
+    stderr: 'UI_PROGRESS phase=failure-screenshot-saved elapsedMs=41000 screenshot=ui-live-failure.png',
+    body: runtimeFailure({scenarioKind: 'ui', ui: {case: 'live'}, failure: {message: 'UI_LIVE_PARTIAL_TITLE_en'}, traceFailure: {message: 'cleanup failed'}}),
+    detail: 'driver failure: UI_LIVE_PARTIAL_TITLE_en'},
   {name: 'oversized receipt cannot supply driver detail', code: 1, reason: 'DRIVER_RESULT_MALFORMED', driverPassed: null, stderr,
     body: runtimeFailure({failure: {...primary, stack: 'x'.repeat(524288)}}), detail: 'stderr tail: ' + stderr},
   {name: 'malformed receipt and missing stderr keep the original failure', code: 1, reason: 'DRIVER_RESULT_MALFORMED', driverPassed: null,
@@ -989,12 +1007,14 @@ it('reports the actionable driver failure or safe stderr tail without changing v
       const stderrPath = path.join(resources.directory, 'stderr-' + index + '.log');
       if (testCase.body !== undefined) await writeFile(receipt, testCase.body);
       if (testCase.stderr !== undefined) await writeFile(stderrPath, testCase.stderr);
-      input.push({receipt, stderrPath, code: testCase.code, scenario: testCase.scenario ?? 'hard-mode', uiCase: testCase.uiCase});
+      input.push({receipt, stderrPath, code: testCase.code, scenario: testCase.scenario ?? 'hard-mode', uiCase: testCase.uiCase,
+        mode: testCase.mode, elapsedMs: testCase.elapsedMs, deadlineMs: testCase.deadlineMs});
     }
     const results = await validateRuntimeReceipts(resources.directory, input);
     for (const [index, testCase] of failureCases.entries()) {
       const summary = 'Runtime smoke failed: ' + testCase.reason + ', Job exit ' + testCase.code + (testCase.watchdog ?? '') +
-        '; retained evidence: ' + resources.directory + (testCase.detail ? ' | ' + testCase.detail : '');
+        '; retained evidence: ' + resources.directory + (testCase.timeoutContext ? ' | ' + testCase.timeoutContext : '') +
+        (testCase.detail ? ' | ' + testCase.detail : '');
       expect(results[index], testCase.name).toEqual({passed: testCase.reason === null, reason: testCase.reason,
         driverPassed: testCase.driverPassed, driverResultAvailable: testCase.driverPassed !== null,
         ...(testCase.reason === null ? {} : {failureSummary: summary})});

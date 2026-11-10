@@ -85,7 +85,8 @@ foreach ($case in @($config.cases)) {
             $validation = $output[0]
             if ($case.stderrPath -and !$validation.passed) {
                 $validation.failureSummary = Format-RuntimeSmokeFailure -Reason $validation.reason -JobExitCode $case.code `
-                    -EvidencePath (Split-Path -Parent $case.receipt) -Driver $matchedDriver -StderrPath $case.stderrPath
+                    -EvidencePath (Split-Path -Parent $case.receipt) -Driver $matchedDriver -StderrPath $case.stderrPath `
+                    -Mode $mode -Scenario $case.scenario -UiCase $case.uiCase -ElapsedMs $case.elapsedMs -DeadlineMs $case.deadlineMs
             }
             $results.Add($validation)
         }
