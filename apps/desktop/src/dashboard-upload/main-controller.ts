@@ -13,7 +13,7 @@ export class UploadMainController {
   #candidate:{id:string;token:string;owner:DashboardOwner;epoch:number;generation:string}|undefined;
   #recoveryRequested=false;#recoveryTimer:ReturnType<typeof setTimeout>|undefined;#recoveryAttempts=0;#revalidationFailures=0;
   #connectionVersion:string|undefined;
-  // A failed user control schedules recovery; an owner-free result must still show why the control failed.
+  // A failed user control schedules recovery; an owner-free result must still show why the control failed (once).
   #controlError:DashboardUploadError|null=null;
   constructor(private readonly origin:string|null,private readonly channel:ReleaseChannel,private readonly createStore:()=>UploadCredentialStore,private readonly publish:(status:DashboardUploadStatus)=>void){this.#status=initialDashboardUploadStatus(origin);}
   get status(){return structuredClone(this.#status);}
@@ -57,9 +57,10 @@ export class UploadMainController {
       await this.#removeCredentials(store);await store.clearDisconnect();this.#current(epoch,rpc);this.#status=initialDashboardUploadStatus(this.origin);this.#emit();return;
     }
     if(c.status!=='ready')throw Error('RECONCILIATION');
-    if(!c.registration){this.#status={...initialDashboardUploadStatus(this.origin),error:this.#controlError};this.#emit();return;}
+    // The control reason is shown once; a recovery failure is newer and replaces it instead.
+    if(!c.registration){this.#status={...initialDashboardUploadStatus(this.origin),error:this.#controlError};this.#controlError=null;this.#emit();return;}
     if(c.registration.origin!==this.origin||!c.credentialGeneration)throw Error('RECONCILIATION');
-    authority.committed=true;this.#status.owner={origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch};
+    authority.committed=true;this.#controlError=null;this.#status.owner={origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch};
     const context:CredentialContext={generation:c.credentialGeneration,channel:this.channel,owner:{origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch},registration:c.registration};const token=await store.load(context);this.#current(epoch,rpc);
     const activated=await this.#call({action:'activate',token,generation:context.generation,version:c.version});if(activated.kind!=='settled')throw Error('RECONCILIATION');this.#current(epoch,rpc);await store.activate(context);this.#current(epoch,rpc);this.#activated(activated.status,context.owner);this.#connectionVersion=c.version;
   }

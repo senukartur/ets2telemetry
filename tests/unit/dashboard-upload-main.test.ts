@@ -117,6 +117,19 @@ it.each([['verify', 'AUTHENTICATION'], ['confirm', 'NETWORK']] as const)('REG-01
     await new Promise(done => setTimeout(done, 0)); f.rpc.call = original; expect(await f.controller.handle('verify', [token])).toMatchObject({state: 'confirmation-required', error: null});
   } finally {f.controller.stop();}
 });
+it.each(['busy-retry', 'reconciliation'] as const)('REG-010/012 pins verify-reason precedence against a newer recovery failure: %s', async boundary => {
+  vi.useFakeTimers(); const f = fixture(); const original = f.rpc.call; let probes = 0;
+  try {
+    await f.controller.attach(f.rpc);
+    f.rpc.call = command => command.action === 'verify' ? Promise.resolve({ok: false, error: 'AUTHENTICATION'}) : command.action === 'configuration' && ++probes === 1 ? Promise.resolve(boundary === 'busy-retry' ? {ok: false, error: 'BUSY'} : {ok: true, value: {kind: 'configuration', configuration: {...f.configuration(), status: 'reconciliation-required'} as never}}) : original(command);
+    await f.controller.handle('verify', [token]); await vi.advanceTimersByTimeAsync(0);
+    // The recovery failure is newer, so it is shown in place of the verify reason.
+    expect(f.controller.status).toMatchObject({state: 'paused', error: boundary === 'busy-retry' ? 'BUSY' : 'RECONCILIATION', owner: null});
+    await vi.advanceTimersByTimeAsync(300000);
+    // A bounded BUSY retry that settles owner-free shows the still-unconsumed reason once; fail-closed reconciliation is never retried or replaced.
+    expect(probes).toBe(boundary === 'busy-retry' ? 2 : 1); expect(f.controller.status).toMatchObject(boundary === 'busy-retry' ? {state: 'disconnected', error: 'AUTHENTICATION'} : {state: 'paused', error: 'RECONCILIATION'});
+  } finally {f.controller.stop(); vi.useRealTimers();}
+});
 it.each([false, true])('REG-010/012 keeps reconciliation fail-closed and preserves credentials with disconnect intent=%s', async intent => {
   const f = fixture(); await f.controller.attach(f.rpc); const candidate = await f.controller.handle('verify', [token]); await f.controller.handle('confirm', [candidate.candidateId]);
   f.setConfiguration({...f.configuration(), status: 'reconciliation-required', ...(intent ? {version: '2', registration: {...f.configuration().registration as object, accountId: 'new-owner'}} : {})});
