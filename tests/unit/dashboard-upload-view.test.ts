@@ -98,20 +98,21 @@ it('REG-009/010/014 words each upload state, chip and plural count from the dict
 });
 
 // pendingSources is read on every status cycle and the totals only when a count completes: a new or changed trip found after
-// the last count must not read as all sent. The totals cannot say how many remain, so no count is shown.
+// the last count must not read as all sent. A change may still compare equal and send nothing, so the card says the trips
+// are being prepared, without counts, and the chip stays the connected word.
 it.each([
-  ['en', 'Uploading', 'Uploading new and changed trips', 'Runs in the background; you can keep driving.'],
-  ['ru', 'Отправка', 'Отправка новых и изменённых рейсов', 'Идёт в фоне — можно продолжать ездить.']
+  ['en', 'Connected', 'Preparing new and changed trips', 'Runs in the background; you can keep driving.'],
+  ['ru', 'Подключено', 'Подготовка новых и изменённых рейсов', 'Идёт в фоне — можно продолжать ездить.']
 ] as const)('REG-009/010 never reads as all sent while trips are pending in %s (ET-110)', (language, chip, title, detail) => {
   for (const counts of [{distinctSources: 6, deliveredSources: 6}, {distinctSources: 0, deliveredSources: 0}]) {
     const view = uploadView(linked({enumeration: 'complete', ...counts, pendingSources: 2}), language);
-    expect(view).toMatchObject({chip, headline: language === 'en' ? 'Connected' : 'Подключено', tone: 'ok', sync: {kind: 'syncing', title, detail, bar: 'indeterminate', problems: []}});
+    expect(view).toMatchObject({chip, headline: chip, tone: 'ok', sync: {kind: 'preparing', title, detail, bar: 'indeterminate', problems: []}});
     const html = render(linked({enumeration: 'complete', ...counts, pendingSources: 2}), language);
     expect(html).not.toContain(copy('sync.done', language)); expect(html).not.toContain(copy('sync.empty', language));
-    expect(html).toContain('data-kind="syncing"'); expect(html).not.toMatch(/<progress[^>]*value=/);
+    expect(html).toContain('data-kind="preparing"'); expect(html).toContain(title); expect(html).not.toMatch(/<progress[^>]*value=/);
   }
-  // Once the next count includes them, the counted line returns.
-  expect(uploadView(linked({enumeration: 'complete', distinctSources: 8, deliveredSources: 6, pendingSources: 2}), language).sync).toMatchObject({kind: 'syncing', counted: true, bar: {percent: 75}});
+  // Once the next count includes them, the counted sending line and chip return.
+  expect(uploadView(linked({enumeration: 'complete', distinctSources: 8, deliveredSources: 6, pendingSources: 2}), language)).toMatchObject({chip: language === 'en' ? 'Uploading 6 of 8' : 'Отправка 6 из 8', sync: {kind: 'syncing', bar: {percent: 75}}});
 });
 
 it.each(['en', 'ru'] as const)('REG-009/014 lists only real problems and links held trips to the Journal in %s', language => {

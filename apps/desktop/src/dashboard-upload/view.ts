@@ -5,11 +5,11 @@ import {t, type I18nKey} from '../i18n';
 import {canVerifyDashboardUpload, type UploadUiState} from './ui-controller';
 
 type UploadTone = 'error' | 'warn' | 'ok' | 'neutral';
-export type UploadSyncKind = 'counting' | 'empty' | 'done' | 'syncing' | 'attention' | 'offline' | 'auth';
+export type UploadSyncKind = 'counting' | 'empty' | 'done' | 'preparing' | 'syncing' | 'attention' | 'offline' | 'auth';
 /** A known share with its fill colour, an indeterminate first count, or no bar at all. */
 export type UploadSyncBar = {percent: number; fill: 'accent' | 'ok' | 'paused'} | 'indeterminate' | null;
 export interface UploadProblem {id: 'identity' | 'held' | 'pressure' | 'error'; title: string; detail: string | null; journal: boolean}
-export interface UploadSyncView {kind: UploadSyncKind; tone: UploadTone | 'info'; title: string; detail: string; bar: UploadSyncBar; lastUpload: string; problems: UploadProblem[]; counted: boolean}
+export interface UploadSyncView {kind: UploadSyncKind; tone: UploadTone | 'info'; title: string; detail: string; bar: UploadSyncBar; lastUpload: string; problems: UploadProblem[]}
 
 const LOCALES: Record<AppLanguage, string> = {en: 'en-GB', ru: 'ru-RU'};
 const AUTH_ERRORS: readonly DashboardUploadError[] = ['AUTHENTICATION', 'CREDENTIAL_UNAVAILABLE'];
@@ -21,9 +21,9 @@ const SOFT_ERRORS: readonly string[] = ['UNCONFIGURED', 'CANCELLED', 'NETWORK', 
  * ET-110: the upload card shows one result. Known totals are the last complete count and stay until a newer count replaces
  * them, whatever the enumeration phase; only a first count without totals reads as counting. Priority: authentication,
  * then offline, then real problems, then counting, no trips, all sent and sending.
- * pendingSources is fresher than the totals: it counts bound trips whose new or changed material is not yet queued, and is
- * read on every status cycle. While it is above zero nothing is "all sent", and as the totals cannot say how many trips
- * remain, the card shows a sending line without counts.
+ * pendingSources is fresher than the totals: it counts bound trips whose new or changed material is not yet compared or
+ * queued, and is read on every status cycle. While it is above zero nothing is "all sent"; a change may still compare equal
+ * and send nothing, so the card says the trips are being prepared, without counts, and the chip stays "Connected".
  */
 function syncView(status: DashboardUploadStatus, language: AppLanguage): UploadSyncView {
   const p = status.progress, error = status.error;
@@ -40,13 +40,13 @@ function syncView(status: DashboardUploadStatus, language: AppLanguage): UploadS
   if (error && !auth && !offline) problems.push({id: 'error', title: text(`error.${error}`), detail: null, journal: false});
   const lastUpload = p.lastDurableUploadUtcMs === null ? text('never')
     : text('lastUpload', {time: new Intl.DateTimeFormat(LOCALES[language], {dateStyle: 'medium', timeStyle: 'short'}).format(p.lastDurableUploadUtcMs)});
-  const view = (kind: UploadSyncKind, tone: UploadSyncView['tone'], title: string, detail: string, bar: UploadSyncBar, counted = true): UploadSyncView => ({kind, tone, title, detail, bar, lastUpload, problems, counted});
+  const view = (kind: UploadSyncKind, tone: UploadSyncView['tone'], title: string, detail: string, bar: UploadSyncBar): UploadSyncView => ({kind, tone, title, detail, bar, lastUpload, problems});
   if (auth) return view('auth', 'error', text('sync.auth'), known ? text('sync.authNote', counts) : text('sync.authUnknown'), share('paused'));
   if (offline) return view('offline', 'warn', text('sync.offline'), known ? text('sync.offlineNote', counts) : text('sync.offlineUnknown'), share('paused'));
   if (problems.length) return view('attention', error && SEVERE_ERRORS.includes(error) ? 'error' : 'warn', known ? plural('sync.attention', total, counts) : text('chip.attention'),
     known && total > delivered ? plural('sync.remaining', total - delivered, {n: total - delivered}) : text('sync.attentionNote'), share('accent'));
   if (!known) return view('counting', 'neutral', text('sync.counting'), text('sync.countingNote'), 'indeterminate');
-  if (delivered >= total && p.pendingSources > 0) return view('syncing', 'info', text('sync.updating'), text('sync.syncingNote'), 'indeterminate', false);
+  if (delivered >= total && p.pendingSources > 0) return view('preparing', 'info', text('sync.preparing'), text('sync.syncingNote'), 'indeterminate');
   if (total === 0) return view('empty', 'ok', text('sync.empty'), text('sync.emptyNote'), null);
   if (delivered === total) return view('done', 'ok', text('sync.done'), text('sync.doneNote', counts), share('ok'));
   return view('syncing', 'info', plural('sync.syncing', total, counts), text('sync.syncingNote'), share('accent'));
@@ -67,7 +67,7 @@ export function uploadView(ui: UploadUiState, language: AppLanguage) {
   // The chip and the live region name the state; only the chip repeats the sending count, so progress is never re-announced.
   const stateText = text(`state.${state}`);
   const chip = busy || !sync ? stateText : sync.kind === 'auth' ? text('chip.auth') : sync.kind === 'offline' ? text('chip.offline') : sync.kind === 'attention' ? text('chip.attention')
-    : sync.kind === 'syncing' ? (sync.counted ? text('chip.syncing', {delivered: status!.progress.deliveredSources!, total: status!.progress.distinctSources!}) : text('chip.updating')) : text('state.connected');
+    : sync.kind === 'syncing' ? text('chip.syncing', {delivered: status!.progress.deliveredSources!, total: status!.progress.distinctSources!}) : text('state.connected');
   const headline = sync?.kind === 'syncing' && !busy ? text('state.connected') : chip;
   const tone: UploadTone = sync && !busy ? (sync.kind === 'auth' ? 'error' : sync.kind === 'offline' ? 'warn' : sync.kind === 'attention' ? (sync.tone === 'error' ? 'error' : 'warn') : 'ok')
     : ownerless ? 'neutral'

@@ -10,7 +10,7 @@ import {t, type I18nKey} from '../i18n';
 import {uploadView, type UploadSyncKind} from './view';
 import type {DashboardUploadUiController, UploadUiState} from './ui-controller';
 
-const SYNC_ICONS: Record<UploadSyncKind, typeof Cloud> = {counting: Hourglass, empty: Cloud, done: CircleCheck, syncing: CloudUpload, attention: TriangleAlert, offline: CloudOff, auth: KeyRound};
+const SYNC_ICONS: Record<UploadSyncKind, typeof Cloud> = {counting: Hourglass, empty: Cloud, done: CircleCheck, preparing: Hourglass, syncing: CloudUpload, attention: TriangleAlert, offline: CloudOff, auth: KeyRound};
 
 /**
  * ET-110 Account & sync (mockups T7, T7a, T7b): an intro and at most two cards. A connection shows its card and the upload
