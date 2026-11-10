@@ -47,7 +47,7 @@ function Fixture() {
       setHoldingConfirmationReply(value => !value);
     }}>{holdingConfirmationReply ? 'Release confirmation reply' : 'Hold confirmation reply'}</button>
   </nav></aside><div className="yu-column"><header className="yu-topbar"><span>{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</span><SyncChip state={upload.state} language={language} onOpen={() => setRoute('account')} /></header>
-    <main className="yu-content" data-testid="fixture.content"><div className="yu-page-header"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</h1></div>{route === 'account' ? <AccountScreen {...upload} language={language} /> : <section data-testid="fixture.rows" className="yu-stack"><h2>{t('upload.column', undefined, language)}</h2>{page?.sync?.rows.map((row, index) => <div key={row.tripUuid}><span>Source {index + 1} </span><JournalSyncBadge row={row} language={language} /></div>)}</section>}</main>
+    <main className="yu-content" data-testid="fixture.content"><div className="yu-page-header"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{t(route === 'account' ? 'nav.account' : 'nav.journal', undefined, language)}</h1></div>{route === 'account' ? <AccountScreen {...upload} language={language} onOpenJournal={() => setRoute('journal')} /> : <section data-testid="fixture.rows" className="yu-stack"><h2>{t('upload.column', undefined, language)}</h2>{page?.sync?.rows.map((row, index) => <div key={row.tripUuid}><span>Source {index + 1} </span><JournalSyncBadge row={row} language={language} /></div>)}</section>}</main>
   </div></div></div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture />);

@@ -65,6 +65,23 @@ it('shows the site sync chip last and only when synchronization is configured', 
   expect([...html.matchAll(/data-testid="(shell\.status\.[a-zA-Z]+)"/g)].map(match => match[1]).at(-1)).toBe('shell.status.sync');
 });
 
+// ET-110: the sync chip names the connection in one or two words; only sending adds the count. Texts from en.ts and ru.ts.
+it.each([
+  ['en', [['Connected', 'ok', 'lucide-cloud'], ['Uploading 4 of 6', 'ok', 'lucide-cloud'], ['No network', 'warn', 'lucide-cloud-off'], ['New token needed', 'error', 'lucide-cloud'], ['Needs attention', 'warn', 'lucide-cloud']], 'Account &amp; sync: '],
+  ['ru', [['Подключено', 'ok', 'lucide-cloud'], ['Отправка 4 из 6', 'ok', 'lucide-cloud'], ['Нет сети', 'warn', 'lucide-cloud-off'], ['Нужен новый токен', 'error', 'lucide-cloud'], ['Нужно внимание', 'warn', 'lucide-cloud']], 'Аккаунт и синхронизация: ']
+] as const)('words the site sync chip by the upload state in %s', (language, expected, prefix) => {
+  const owner = {origin: 'https://dashboard.example', accountId: 'a', companyId: 'c', identityEpoch: 'e'};
+  const base = initialDashboardUploadStatus(owner.origin), progress = {...base.progress, enumeration: 'complete' as const, distinctSources: 6, deliveredSources: 6};
+  const states = [{progress}, {progress: {...progress, deliveredSources: 4}}, {state: 'paused' as const, error: 'NETWORK' as const, progress}, {state: 'paused' as const, error: 'AUTHENTICATION' as const, progress}, {progress: {...progress, heldSources: 1}}];
+  states.forEach((change, index) => {
+    const state = unavailableUploadUi(); state.status = {...base, state: 'connected', owner, ...change};
+    const html = renderToStaticMarkup(React.createElement(SyncChip, {state, language, onOpen: () => undefined}));
+    const [text, tone, icon] = expected[index];
+    expect(html).toContain(`data-tone="${tone}"`); expect(html).toContain(`aria-label="${prefix}${text}"`);
+    expect(html).toMatch(new RegExp(`<svg[^>]*${icon}[ "][^>]*aria-hidden="true"[^>]*>.*?</svg>${text}</button>$`));
+  });
+});
+
 it('gives a page a place at the end of the top bar, and renders a slot only once the shell has mounted it (ET-076)', () => {
   const html = bar('journal', 'en');
   expect(html).toContain('<div class="yu-topbar-actions"></div>');

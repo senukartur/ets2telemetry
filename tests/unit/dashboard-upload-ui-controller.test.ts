@@ -64,9 +64,14 @@ it('REG-010/012 cancels only the returned confirmation UUID and restores authori
   await f.controller.confirm(); expect(f.bridge.confirmDashboardUpload).not.toHaveBeenCalled(); expect(f.bridge.cancelDashboardUpload).toHaveBeenCalledExactlyOnceWith(candidate.candidateId);
   f.cancel.resolve(connected); await pending; expect(f.controller.getSnapshot()).toMatchObject({phase: 'idle', abandoned: false, status: connected});
 });
-it.each(['unavailable', 'disconnected', 'verifying', 'confirmation-required', 'connecting', 'connected', 'paused', 'stopping'] as const)('REG-010/012 aligns form and controller admission for %s', async state => {
-  const f = fixture(), status = {...initialDashboardUploadStatus(origin), state, ...(state === 'connected' ? {owner} : state === 'confirmation-required' ? {owner, candidateId: candidate.candidateId} : {})};
-  f.notify(status); const allowed = state === 'disconnected' || state === 'connected' || state === 'paused';
+// ET-110: a token is entered only without a working one; a connection with a usable token admits no replacement.
+it.each([
+  ['unavailable', null], ['disconnected', null], ['verifying', null], ['confirmation-required', null], ['connecting', null], ['connected', null], ['paused', null], ['stopping', null],
+  ['paused', 'AUTHENTICATION'], ['paused', 'CREDENTIAL_UNAVAILABLE'], ['connected', 'CREDENTIAL_UNAVAILABLE'], ['paused', 'NETWORK'], ['paused', 'RECONCILIATION'], ['paused', 'VALIDATION']
+] as const)('REG-010/012 aligns form and controller admission for %s with error %s', async (state, error) => {
+  const f = fixture(), connection = state === 'connected' || (state === 'paused' && error !== null);
+  const status = {...initialDashboardUploadStatus(origin), state, error, ...(connection ? {owner} : state === 'confirmation-required' ? {owner, candidateId: candidate.candidateId} : {})};
+  f.notify(status); const allowed = state === 'disconnected' || (state === 'paused' && error === null) || error === 'AUTHENTICATION' || error === 'CREDENTIAL_UNAVAILABLE';
   expect(uploadView(f.controller.getSnapshot(), 'en').canEnterToken).toBe(allowed);
   const result = f.controller.verify(token);
   if (allowed) {f.verify.resolve(initialDashboardUploadStatus(origin)); expect(await result).toBe(true); expect(f.bridge.verifyDashboardUploadToken).toHaveBeenCalledExactlyOnceWith(token);}

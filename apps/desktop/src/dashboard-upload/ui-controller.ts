@@ -2,9 +2,15 @@ import {initialDashboardUploadStatus, isDashboardToken, type DashboardUploadBrid
 
 export type UploadUiPhase = 'idle' | 'verifying' | 'confirming' | 'cancelling' | 'cancel-failed' | 'disconnecting';
 export interface UploadUiState {status: DashboardUploadStatus | null; phase: UploadUiPhase; error: DashboardUploadError | 'INVALID_TOKEN' | null; abandoned: boolean}
-/** Shared admission for the rendered form and a submit racing a newer service notification. */
+/**
+ * Shared admission for the rendered form and a submit racing a newer service notification. A token is entered only without
+ * a working one: while disconnected, or for a connection whose saved token failed authentication or cannot be used (ET-110).
+ */
 export function canVerifyDashboardUpload(ui: UploadUiState): boolean {
-  return ui.phase === 'idle' && !ui.status?.candidateId && !!ui.status?.origin && ['disconnected', 'connected', 'paused'].includes(ui.status.state);
+  const status = ui.status;
+  if (ui.phase !== 'idle' || !status?.origin || status.candidateId) return false;
+  if (status.state === 'disconnected') return true;
+  return ['connected', 'paused'].includes(status.state) && (!status.owner || status.error === 'AUTHENTICATION' || status.error === 'CREDENTIAL_UNAVAILABLE');
 }
 /** Dashboard-lifetime coordinator. No token is retained in its state or exposed to subscribers. */
 export class DashboardUploadUiController {
