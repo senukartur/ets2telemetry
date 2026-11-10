@@ -4,15 +4,17 @@ export function hardModeTooltipDiagnostics(input: TooltipPhase & {action: 'start
 export function observeHardModeTooltip<T>(input: TooltipPhase & {record: Record<string, unknown>; start: () => Promise<unknown>;
   stop: () => Promise<unknown>; action: () => Promise<T>; native: () => Promise<unknown>}): Promise<T>;
 export interface FixtureRule extends HardModeRule {label: string; name: string; tooltip: string[]; details: string[]}
-export interface FixtureExpectation {language: string; rules: FixtureRule[]; hint?: string; details?: boolean; sourceText?: RegExp}
+export interface FixtureExpectation {language: string; rules: FixtureRule[]; hint?: string; details?: boolean; sourceText?: RegExp; tripBanners?: {ratio: RegExp; diagnostic: RegExp}}
+interface TextFact {count: number; visible: boolean; text: string}
 export interface FixtureSnapshot {
   status: HardModeStatus; language: string;
   rows: {id: string; state: string; buttonCount: number; label: string; name: string}[];
-  source: {count: number; visible: boolean; text: string};
+  source: TextFact;
+  tripBanners?: {ratio: TextFact; diagnostic: TextFact};
   hint?: {count: number; visible: boolean; lines: string[]};
   details?: {count: number; visible: boolean; rows: {id: string; lines: string[]}[]};
 }
 export interface FixtureRecord {lastSnapshot?: FixtureSnapshot; phase?: string; refreshRequests?: number; elapsedMilliseconds?: number; observedUtcMs?: number}
-export function hardModeFixtureSnapshot(options?: {hint?: string; details?: boolean}): Promise<FixtureSnapshot>;
+export function hardModeFixtureSnapshot(options?: {hint?: string; details?: boolean; tripBanners?: boolean}): Promise<FixtureSnapshot>;
 export function waitForHardModeFixture(input: {refresh: () => Promise<unknown>; observe: () => Promise<FixtureSnapshot>;
   expected: FixtureExpectation; record: FixtureRecord; message: string; timeoutMs?: number}): Promise<FixtureSnapshot>;

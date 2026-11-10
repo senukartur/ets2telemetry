@@ -191,12 +191,16 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
     const renderedFixture = (message, options = {}) => {
       const observation = {message}; (record.fixtureWaits ??= []).push(observation);
       return waitForHardModeFixture({refresh: () => dashboard.evaluate(() => globalThis.desktop.refreshHardMode()),
-        observe: () => dashboard.evaluate(hardModeFixtureSnapshot, {hint: options.hint, details: options.details}),
+        observe: () => dashboard.evaluate(hardModeFixtureSnapshot, {hint: options.hint, details: options.details, tripBanners: Boolean(options.tripBanners)}),
         expected: {language: lang, rules: fixtureRules, ...options}, record: observation, message});
     };
     if (lang === 'en') englishFixture = renderedFixture;
     assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
-    await renderedFixture('HARD_MODE_RENDERED_FAIL_' + lang);
+    // Journal opening can precede the dashboard poll that inserts the banners above the rule triggers.
+    const tripBanners = lang === 'en'
+      ? {ratio: /Required: ≥95%/, diagnostic: /^Verified setting does not meet the rule · .* · Fatigue simulation: 0$/}
+      : {ratio: /Порог: ≥95%/, diagnostic: /^Подтверждённая настройка не соответствует правилу · .* · Усталость: 0$/};
+    await renderedFixture('HARD_MODE_RENDERED_FAIL_' + lang, {tripBanners});
     await dashboard.getByTestId('hard-mode-name-fuel').focus(); await dashboard.keyboard.press('Shift+Tab');
     for (const [id] of expected) {
       const trigger = dashboard.getByTestId(`hard-mode-name-${id}`), hint = dashboard.getByTestId(`hard-mode-hint-${id}`);
