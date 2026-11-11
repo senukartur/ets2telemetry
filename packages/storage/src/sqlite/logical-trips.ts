@@ -4,7 +4,8 @@ import {gameDistanceStep} from '../../../telemetry-core/src/trips/game-distance'
 import {matchesSavedEndpoint, savedEndpointLimits} from '../../../telemetry-core/src/trips/saved-endpoint';
 import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
-import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationIdentityFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
+import {decideMembership, type MembershipCandidate} from '../../../telemetry-core/src/trips/membership';
 import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
 import type {CapturedEndpoint, CapturedRunning, SampleInput, TripEffect} from '../api';
 import {fail} from '../errors';
@@ -43,7 +44,10 @@ export function admittedProfile(proof: ProfileObservation | undefined, source: {
   return proof.game === source.game && proof.pluginSessionId === source.pluginSessionId && proof.processInstanceId === source.processInstanceId
     && proof.sourceClockId === clock && BigInt(at) >= BigInt(proof.afterMonotonicNs) ? proof : undefined;
 }
-/** Bounded unresolved slot lookup; migrated history and already decided recordings never participate. */
+/**
+ * Bounded unresolved slot lookup; migrated history and already decided recordings never participate. Candidates share the
+ * segment's game, profile scope and job fingerprint; decideMembership owns the rules.
+ */
 export function associate(db: Database.Database, row: LogicalRow, proof: ProfileObservation | undefined, currentJob: JobConfiguration): bigint {
   if(syncEnabled(db))uploadCandidate(db,row.id);
   createGroup(db, row);
@@ -58,15 +62,23 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     else db.prepare('UPDATE logical_trips SET retired=1 WHERE id=?').run(id);
     return id;
   }
-  const fingerprint = continuationFingerprint(currentJob);
-  const canonical=learned!==null && compatibleContinuation(recordedJob,currentJob);
-  const candidates = db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
-    .all(row.game, proof.scope, id) as LogicalRow[];
-  const candidate = candidates.length === 1 ? candidates[0] : undefined;
-  let pendingCoverage: LogicalCoverage | undefined;
-  const candidateRecorded=candidate?learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints,recordedJob):null;
-  const combined = candidateRecorded===null?null:learnContinuationConstraints(candidateRecorded,currentJob);
-  if (canonical && fingerprint !== null && candidate && candidate.fingerprint === fingerprint && combined !== null && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)) {
+  const fingerprint = continuationIdentityFingerprint(currentJob);
+  // The logical_candidates index bounds the lookup; two matching rows already make the segment ambiguous.
+  const rows = fingerprint === null ? [] : db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
+    .all(row.game, proof.scope, fingerprint, id) as LogicalRow[];
+  const combinedFor = (candidate: LogicalRow) => {
+    const candidateRecorded = learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints, recordedJob);
+    return candidateRecorded === null ? null : learnContinuationConstraints(candidateRecorded, currentJob);
+  };
+  const candidates: MembershipCandidate<LogicalRow>[] = rows.map(candidate => ({ref: candidate,
+    compatible: rows.length === 1 && combinedFor(candidate) !== null && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)}));
+  const decision = decideMembership({profileVerified: true, recordedJob, currentJob, consistent: learned !== null, candidates});
+  // Missing evidence retires nothing; a later proof-bearing reading of this open raw trip decides again.
+  if (decision.state === 'pending') return id;
+  let pendingCoverage: LogicalCoverage | undefined, combined: ContinuationConstraints | null = null;
+  if (decision.state === 'joined') {
+    const candidate = decision.target;
+    combined = combinedFor(candidate);
     redirectReservation(db,row.id,candidate.id);
     // Keep the public UUID of the original recording. Never change a raw trip's session or event identity.
     db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(candidate.id, id, row.id);
@@ -86,13 +98,15 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     revise(db,abandonedGroup);
     if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), sampleResumePending:false, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
       window: {session: String(row.plugin_session_ref), opened: row.opened_event_ref === null ? null : (row.opened_event_ref as bigint).toString()}};
-  } else {
-    // Conflicting/ambiguous candidates are retired permanently; their outcome remains unknown.
+  } else if (decision.interrupt) {
+    // Complete verified evidence of another, conflicting or ambiguous job replaces the other unresolved trips of the profile
+    // permanently; their outcome remains unknown.
+    const previous = db.prepare('SELECT id FROM logical_trips WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ? ORDER BY id').pluck().all(row.game, proof.scope, id) as bigint[];
     db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 1 WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ?').run(row.game, proof.scope, id);
-    for (const previous of candidates) revise(db, previous.id as bigint);
+    for (const ref of previous) revise(db, ref);
   }
   db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), row.id);
-  db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,canonical?fingerprint:null,JSON.stringify(candidate && id===candidate.id ? combined : learned ?? recorded ?? known),id);
+  db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,decision.fingerprint,JSON.stringify(decision.state === 'joined' ? combined : learned ?? recorded ?? known),id);
   if (pendingCoverage) revise(db, id, pendingCoverage);
   return id;
 }
