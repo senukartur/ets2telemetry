@@ -183,4 +183,22 @@ describe('ET-112b2a raw close markers and profile boundaries', () => {
     expect(decisions(db)).toEqual([row(1, 1, 'pending', 'profile-unverified', 1), row(2, 2, 'pending', 'profile-unverified', null)]);
     expect(boundaries(db)).toEqual([]);
   });
+  it('keeps a boundary the reducer continued through below the later delivery close; only a boundary after the close crosses it', async () => {
+    const {storage, db} = await openDirect(), script = new Script(ETS2_A), uuid = openTrip(storage, script);
+    // A reload-checked save load: the reducer continues the trip, so the regression carries no trip.close.
+    const regression = script.event(r.regression(script.gameTime.minutes, '100')), delivered = script.event(r.delivered());
+    expect([regression, delivered].map(m => m.data.eventSeq)).toEqual(['2', '3']);
+    ok(storage.commitEvent({message: regression}));
+    ok(storage.commitEvent({message: delivered, effects: [{kind: 'trip.close', tripUuid: uuid, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event',
+      recordingCompleteness: 'partial', endedUtcMs: 3000}]}));
+    expect((db.prepare('SELECT id, closed_by_session_ref = plugin_session_ref AS own FROM trips').all() as Record<string, unknown>[]).map(plain)).toEqual([{id: 1, own: 1}]);
+    expect(decisions(db)).toEqual([row(1, 1, 'pending', 'profile-unverified', 3)]);
+    expect(boundaries(db)).toEqual([{plugin_session_ref: 1, through_event_seq: key(2)}]);
+    const crossed = () => plain(db.prepare(`SELECT b.through_event_seq >= d.raw_closed_event_seq AS crossed FROM logical_membership_decisions d
+      JOIN session_profile_boundaries b ON b.plugin_session_ref = d.plugin_session_ref WHERE d.trip_ref = 1`).get() as Record<string, unknown>).crossed;
+    expect(crossed()).toBe(0);
+    ok(storage.commitEvent({message: script.event(r.timersRestart())}));
+    expect(boundaries(db)).toEqual([{plugin_session_ref: 1, through_event_seq: key(4)}]);
+    expect(crossed()).toBe(1);
+  });
 });
