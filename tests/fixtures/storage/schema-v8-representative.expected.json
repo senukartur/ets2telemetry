@@ -1,0 +1,36 @@
+{
+  "provenance": "Synthetic schema 8 history for ET-112b2, written on 2026-11-11 with the storage commands of base 529ef0ca on the frozen migrations 0001-0008 (purpose and origin synthetic), dumped to schema-v8-representative.sql and rebuilt from that text; the database UUID was set by hand. Five plugin sessions, one trip each, every trip opened at its job.configured event (eventSeq 1). The profile scope and binding are constant synthetic hex; no real path, profile name or account ID.",
+  "schemaVersion": 8,
+  "databaseUuid": "f0000000-0000-4000-8000-000000000008",
+  "sessions": ["10000000-0000-4000-8000-000000008001", "10000000-0000-4000-8000-000000008002", "10000000-0000-4000-8000-000000008003",
+    "10000000-0000-4000-8000-000000008004", "10000000-0000-4000-8000-000000008005"],
+  "trips": [
+    {"id": 1, "trip_uuid": "d48a4c37-f781-dd42-5768-27b0398c18b6", "session": "10000000-0000-4000-8000-000000008001", "outcome": "delivered", "close_reason": "outcome",
+      "recording_completeness": "complete", "closed_by": "10000000-0000-4000-8000-000000008001", "closed_by_event_seq": "00000000000000000002"},
+    {"id": 2, "trip_uuid": "3473a873-5e6b-b486-c372-aa76f7c20e08", "session": "10000000-0000-4000-8000-000000008002", "outcome": "none", "close_reason": "restart",
+      "recording_completeness": "partial", "closed_by": "10000000-0000-4000-8000-000000008003", "closed_by_event_seq": "00000000000000000001"},
+    {"id": 3, "trip_uuid": "60550d0e-d22b-7d0c-596f-afcb9168c7ce", "session": "10000000-0000-4000-8000-000000008003", "outcome": "none", "close_reason": "restart",
+      "recording_completeness": "partial", "closed_by": "10000000-0000-4000-8000-000000008004", "closed_by_event_seq": "00000000000000000001"},
+    {"id": 4, "trip_uuid": "9bec0d1c-45a4-595f-c71c-5030c478c1b2", "session": "10000000-0000-4000-8000-000000008004", "outcome": "delivered", "close_reason": "outcome",
+      "recording_completeness": "partial", "closed_by": "10000000-0000-4000-8000-000000008004", "closed_by_event_seq": "00000000000000000002"},
+    {"id": 5, "trip_uuid": "7203d1a0-9072-5fa8-a3cc-cdecb58ed012", "session": "10000000-0000-4000-8000-000000008005", "outcome": "open", "close_reason": null,
+      "recording_completeness": "complete", "closed_by": null, "closed_by_event_seq": null}
+  ],
+  "memberships": [
+    {"trip_ref": 1, "logical_ref": 1, "previous_logical_ref": null, "proof": 1},
+    {"trip_ref": 2, "logical_ref": 2, "previous_logical_ref": null, "proof": 1},
+    {"trip_ref": 3, "logical_ref": 2, "previous_logical_ref": 3, "proof": 1},
+    {"trip_ref": 4, "logical_ref": 4, "previous_logical_ref": null, "proof": 0},
+    {"trip_ref": 5, "logical_ref": 5, "previous_logical_ref": null, "proof": 0}
+  ],
+  "logicalTrips": [
+    {"id": 1, "latest_trip_ref": 1, "member_count": 1, "retired": 1, "interrupted": 0, "scoped": 1},
+    {"id": 2, "latest_trip_ref": 3, "member_count": 2, "retired": 0, "interrupted": 0, "scoped": 1},
+    {"id": 3, "latest_trip_ref": 3, "member_count": 1, "retired": 1, "interrupted": 0, "scoped": 0},
+    {"id": 4, "latest_trip_ref": 4, "member_count": 1, "retired": 1, "interrupted": 0, "scoped": 0},
+    {"id": 5, "latest_trip_ref": 5, "member_count": 1, "retired": 0, "interrupted": 0, "scoped": 0}
+  ],
+  "journalRoots": ["d48a4c37-f781-dd42-5768-27b0398c18b6", "3473a873-5e6b-b486-c372-aa76f7c20e08", "9bec0d1c-45a4-595f-c71c-5030c478c1b2", "7203d1a0-9072-5fa8-a3cc-cdecb58ed012"],
+  "rowCounts": {"plugin_sessions": 5, "events": 7, "job_configurations": 5, "job_deliveries": 2, "event_amounts": 2, "event_attributions": 7, "trips": 5, "samples": 15,
+    "logical_trips": 5, "logical_memberships": 5, "schema_migrations": 8}
+}

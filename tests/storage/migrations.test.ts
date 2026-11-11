@@ -7,6 +7,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS as CURRENT_MIGRATIONS, openStorage, type Migration} from '../../packages/storage/src/index';
 import {SCHEMA_V1} from '../../packages/storage/src/sqlite/schema-v1';
 import {SCHEMA_V2} from '../../packages/storage/src/sqlite/schema-v2';
+import {job, r, Script} from '../shared/trip-messages';
 import {digestOf, expectMigratedFromVersion1, expectRepresentative, failed, files, ok, readOnly, readVersion1, REPRESENTATIVE, sha256, workspace} from './helpers';
 
 // These historical ET-016 cases freeze versions 1/2. ET-026 migration 3 is covered in hard-mode-migrations.test.ts.
@@ -183,12 +184,12 @@ describe('REG-013/REG-017 installer history contract', () => {
   it('accepts the actual version 1 to current migration and rejects corrupted upgrade evidence', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), original = readVersion1(copy);
     const storage = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(storage.summary).toMatchObject({schemaVersion: 8, created: false, migratedFrom: 1});
+    expect(storage.summary).toMatchObject({schemaVersion: 9, created: false, migratedFrom: 1});
     expectMigratedFromVersion1(storage, copy, original, path.join(ws.backups, storage.summary.backupFileName!));
     const facts = collectHistory(Database, copy, ws.backups);
     expect(() => assertHistoryFacts(facts, '0.1.0-test')).not.toThrow();
     const reopened = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(reopened.summary).toMatchObject({schemaVersion: 8, created: false});
+    expect(reopened.summary).toMatchObject({schemaVersion: 9, created: false});
     expect(reopened.summary.migratedFrom).toBeUndefined();
     reopened.close();
     expect(() => assertHistoryFacts(collectHistory(Database, copy, ws.backups), '0.1.0-test')).not.toThrow();
@@ -230,7 +231,7 @@ it('REG-013 migrates frozen schema4 additively and preserves every existing tabl
   const copy=ws.copyFixture('schema-v4-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").pluck().all()) as string[];
   const rows=readOnly(copy,db=>Object.fromEntries(tables.map(table=>[table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:8,migratedFrom:4});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:9,migratedFrom:4});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
   readOnly(copy,db=>{
     for(const table of tables.filter(t=>t!=='schema_migrations'))expect(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(),table).toEqual(rows[table]);
@@ -243,7 +244,7 @@ it('REG-006/013 migrates frozen schema5 additively after a verified backup witho
   const copy=ws.copyFixture('schema-v5-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:8,migratedFrom:5});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:9,migratedFrom:5});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);
   const ready=ok(storage.getUploadProjectionPreparation('80000000-0000-4000-8000-000000000001'));expect(ready.state).toBe('ready');
   storage.close();readOnly(copy,db=>{
@@ -258,7 +259,7 @@ it('REG-006/013 migrates schema6 without rewriting frozen upload bytes, receipts
   const copy=ws.copyFixture('schema-v6-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:8,migratedFrom:6});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:9,migratedFrom:6});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
   readOnly(copy,db=>{expect(tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())).toEqual(rows);
     expect(db.prepare('SELECT * FROM trailer_baselines').all()).toEqual([]);expect(db.pragma('foreign_key_check')).toEqual([]);});
@@ -267,4 +268,85 @@ it('REG-007/013 rolls back failed schema7 DDL without modifying schema6 uploads 
   const copy=ws.copyFixture('schema-v6-representative.sqlite'),before=digestOf(copy),real=CURRENT_MIGRATIONS[6];
   failed(await openStorage(ws.options({path:copy,migrations:[...CURRENT_MIGRATIONS.slice(0,6),{...real,up(db){real.up(db);throw new Error('injected schema7 failure');}}]})),'MIGRATION_FAILED');
   expect(digestOf(copy)).toEqual(before);
+});
+
+// ET-112b2 M15: migration 0009 adds the decision and boundary tables without a backfill (D1, D6). The expected rows are
+// written by hand from schema-v8-representative.sql: trips 1-4 are closed legacy rows, trip 5 is open without proof.
+describe('REG-013 schema 9 membership decisions (M15)',()=>{
+  const V8='schema-v8-representative.sqlite',S5='10000000-0000-4000-8000-000000008005',T5='7203d1a0-9072-5fa8-a3cc-cdecb58ed012';
+  const atNs=(ms:number)=>(1_000_000_000_000n+BigInt(ms)*1_000_000n).toString();
+  const absent={available:false,reason:'not-observed'} as const;
+  const tablesOf=(file:string)=>readOnly(file,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
+  const rowsOf=(file:string,tables:string[])=>readOnly(file,db=>Object.fromEntries(tables.map(table=>[table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
+  const decisions=(file:string)=>readOnly(file,db=>db.prepare('SELECT * FROM logical_membership_decisions ORDER BY trip_ref').all());
+  const boundaries=(file:string)=>readOnly(file,db=>db.prepare('SELECT * FROM session_profile_boundaries ORDER BY plugin_session_ref').all());
+  const script5=()=>{const script=new Script(S5,'ets2',{utcMs:1_791_676_800_000});script.next=2n;return script;};
+  /** A proof-less reading of the open legacy trip 5 after its last stored reading at 4,000 ms. */
+  function readOpenLegacyTrip(storage:Awaited<ReturnType<typeof ws.open>>){
+    const script=script5();
+    ok(storage.appendSamples(S5,[{tripUuid:T5,utcMs:1_791_676_805_000,sourceClockId:script.clockId,monotonicNs:atNs(5000),odometer:{available:true,value:950_040},
+      fuel:{available:true,value:419.5},speed:{available:true,value:0},gameTime:null,position:absent,averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,
+      recording:{job:job({cargoId:{available:true,value:'synthetic_fixture_cargo_z'}}),truck:'synthetic-truck',processInstanceId:script.welcome().source.processInstanceId,
+        previous:{tripUuid:T5,sourceClockId:script.clockId,monotonicNs:atNs(4000)}}}],{uniqueSeconds:true}));
+  }
+  /** The restart that closes trip 5, eventSeq 2 of its session. */
+  const restartClose=()=>({message:script5().event(r.timersRestart()),effects:[{kind:'trip.close' as const,tripUuid:T5,outcome:'none' as const,closeReason:'restart' as const,
+    recordingCompleteness:'partial' as const,endedUtcMs:1_791_676_806_000}]});
+  it('migrates the frozen schema8 copy after a verified backup, keeps every row and writes no decision or boundary row',async()=>{
+    const copy=ws.copyFixture(V8),before=digestOf(copy),tables=tablesOf(copy),rows=rowsOf(copy,tables);
+    const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});
+    expect(storage.summary).toMatchObject({schemaVersion:9,created:false,migratedFrom:8,databaseUuid:'f0000000-0000-4000-8000-000000000008'});
+    const backupName=storage.summary.backupFileName!;
+    expect(digestOf(path.join(ws.backups,backupName))).toEqual(before);storage.close();
+    expect(rowsOf(copy,tables)).toEqual(rows);
+    expect(tablesOf(copy)).toEqual([...tables,'logical_membership_decisions','session_profile_boundaries'].sort());
+    expect(decisions(copy)).toEqual([]);expect(boundaries(copy)).toEqual([]);
+    expect(readOnly(copy,db=>db.prepare('SELECT version,name,backup_file_name FROM schema_migrations WHERE version=9').get())).toEqual({version:9,name:'0009-membership-decisions',backup_file_name:backupName});
+    expect(readOnly(copy,db=>[db.pragma('foreign_key_check'),db.pragma('integrity_check',{simple:true})])).toEqual([[],'ok']);
+    // A new database runs the same frozen statements, so its schema equals the migrated one.
+    (await ws.open({migrations:CURRENT_MIGRATIONS})).close();expect(schemaOf(copy)).toEqual(schemaOf(ws.database));
+  });
+  it('gives only the open proof-less legacy trip a decision row, lazily, and never moves the closed legacy rows',async()=>{
+    const copy=ws.copyFixture(V8);
+    (await ws.open({path:copy,migrations:CURRENT_MIGRATIONS})).close();
+    const legacy=rowsOf(copy,['logical_trips','logical_memberships']) as Record<string,Record<string,unknown>[]>;
+    const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});readOpenLegacyTrip(storage);storage.close();
+    const pending={trip_ref:5,game:'ets2',plugin_session_ref:5,rule_version:1,state:'pending',reason:'profile-unverified',raw_closed_event_seq:null,target_logical_ref:null,decided_revision:null};
+    expect(decisions(copy)).toEqual([pending]);
+    const reopened=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});ok(reopened.commitEvent(restartClose()));reopened.close();
+    expect(decisions(copy)).toEqual([{...pending,raw_closed_event_seq:'00000000000000000002'}]);
+    expect(boundaries(copy)).toEqual([{plugin_session_ref:5,through_event_seq:'00000000000000000002'}]);
+    const after=rowsOf(copy,['logical_trips','logical_memberships']) as Record<string,Record<string,unknown>[]>;
+    const closed=(rows:Record<string,unknown>[])=>rows.filter(row=>row.id!==5&&row.trip_ref!==5);
+    expect(closed(after.logical_trips)).toEqual(closed(legacy.logical_trips));expect(closed(after.logical_memberships)).toEqual(closed(legacy.logical_memberships));
+  });
+  it('rolls back an injected 0009 failure, names the verified backup and reuses it on the next open',async()=>{
+    const copy=ws.copyFixture(V8),before=digestOf(copy),real=CURRENT_MIGRATIONS[8];
+    const error=failed(await openStorage(ws.options({path:copy,migrations:[...CURRENT_MIGRATIONS.slice(0,8),{...real,up(db){real.up(db);throw new Error('injected schema9 failure');}}]})),'MIGRATION_FAILED');
+    expect(digestOf(copy)).toEqual(before);
+    expect(error.backupFileName).toMatch(/^telemetry-f0000000-v8-.*\.sqlite$/);expect(existsSync(path.join(ws.backups,error.backupFileName!))).toBe(true);
+    const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});
+    expect(storage.summary).toMatchObject({schemaVersion:9,migratedFrom:8,backupFileName:error.backupFileName});storage.close();
+  });
+  it('is refused with SCHEMA_NEWER by a schema8 build without changing the file',async()=>{
+    const copy=ws.copyFixture(V8);(await ws.open({path:copy,migrations:CURRENT_MIGRATIONS})).close();
+    const hash=sha256(copy),listing=files(path.dirname(copy));
+    failed(await openStorage(ws.options({path:copy,migrations:CURRENT_MIGRATIONS.slice(0,8)})),'SCHEMA_NEWER');
+    expect(sha256(copy)).toBe(hash);expect(files(path.dirname(copy))).toEqual(listing);
+  });
+  it('includes both schema9 tables in the logical digest and in a later verified backup',async()=>{
+    const copy=ws.copyFixture(V8),storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});
+    readOpenLegacyTrip(storage);ok(storage.commitEvent(restartClose()));storage.close();
+    const before=digestOf(copy);
+    expect(before.rowCounts).toMatchObject({logical_membership_decisions:1,session_profile_boundaries:1});
+    const testV10:Migration={version:10,name:'0010-test',up:db=>{db.exec('CREATE TABLE test_v10 (id INTEGER PRIMARY KEY)');}};
+    const upgraded=await ws.open({path:copy,migrations:[...CURRENT_MIGRATIONS,testV10]});
+    expect(upgraded.summary).toMatchObject({schemaVersion:10,migratedFrom:9});upgraded.close();
+    const backup=path.join(ws.backups,upgraded.summary.backupFileName!);
+    expect(digestOf(backup)).toEqual(before);
+    expect(JSON.parse(readFileSync(backup.replace(/\.sqlite$/,'.json'),'utf8'))).toMatchObject({fromVersion:9,logicalDigest:before.logicalDigest,
+      rowCounts:{logical_membership_decisions:1,session_profile_boundaries:1}});
+    expect(readOnly(backup,db=>[db.prepare('SELECT trip_ref,state FROM logical_membership_decisions').all(),db.prepare('SELECT * FROM session_profile_boundaries').all()]))
+      .toEqual([[{trip_ref:5,state:'pending'}],[{plugin_session_ref:5,through_event_seq:'00000000000000000002'}]]);
+  });
 });
