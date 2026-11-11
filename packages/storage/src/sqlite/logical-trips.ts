@@ -233,11 +233,12 @@ export function resolvePendingInSession(db: Database.Database, sessionRef: bigin
 }
 /**
  * Schema 9: a new plugin session of the game ends every earlier process, so at most `limit` closed pending segments of
- * other sessions become separate/process-ended, oldest session first. Open pending trips are left to their own rules.
+ * earlier sessions (lower ids, in first-seen order) become separate/process-ended, oldest session first; a late commit of an
+ * older session never finalizes a newer one. Open pending trips are left to their own rules.
  */
 export function finalizePending(db: Database.Database, game: string, currentSessionRef: bigint, limit: number): number {
   if (!decisionsEnabled(db)) return 0;
-  const refs = db.prepare(`SELECT trip_ref FROM logical_membership_decisions WHERE game = ? AND state = 'pending' AND plugin_session_ref <> ? AND raw_closed_event_seq IS NOT NULL
+  const refs = db.prepare(`SELECT trip_ref FROM logical_membership_decisions WHERE game = ? AND state = 'pending' AND plugin_session_ref < ? AND raw_closed_event_seq IS NOT NULL
     ORDER BY plugin_session_ref, trip_ref LIMIT ?`).pluck().all(game, currentSessionRef, limit) as bigint[];
   for (const ref of refs) {
     recordDecision(db, ref, 'separate', 'process-ended', null);

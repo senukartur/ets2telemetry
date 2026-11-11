@@ -346,6 +346,14 @@ describe('ET-112b2b profile-switch boundaries and retroactive decisions', () => 
     ok(storage.commitEvent({message: b.event(r.fined())}));
     expect(states()).toEqual([{state: 'separate', n: 65}]);
   });
+  it('never finalizes a newer session\'s closed pending segment from a late commit of an older session', async () => {
+    const {storage, db} = await openDirect(), a = new Script(ETS2_A), b = new Script(ETS2_B);
+    openTrip(storage, a);
+    const later = openTrip(storage, b);
+    deliver(storage, b, later);
+    ok(storage.commitEvent({message: a.event(r.fined())}));
+    expect(decisions(db)).toEqual([row(1, 1, 'pending', 'profile-unverified', null), row(2, 2, 'pending', 'profile-unverified', 2)]);
+  });
   it('finalizes a trip closed by the restart of the next session as process-ended and never resolves it', async () => {
     const {storage, db} = await openDirect(), a = new Script(ETS2_A), b = new Script(ETS2_B), uuid = openTrip(storage, a);
     ok(storage.upsertSession({message: b.welcome()}));
