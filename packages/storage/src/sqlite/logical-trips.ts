@@ -27,8 +27,8 @@ function pendingDecision(db: Database.Database, row: LogicalRow): void {
     VALUES (?, ?, ?, 1, 'pending', 'profile-unverified', ?)`).run(row.id, row.game, row.plugin_session_ref, row.closed_by_event_seq ?? null);
 }
 /**
- * Records a final decision of a still pending row. `decided_revision` is the logical revision watermark when the decision
- * committed; a decided row never changes (I3).
+ * Records a final decision of a still pending row. `decided_revision` is the highest logical revision id when the decision
+ * row is written; a decided row never changes (I3).
  */
 function recordDecision(db: Database.Database, trip: unknown, state: 'joined' | 'root', reason: string, target: unknown): void {
   db.prepare(`UPDATE logical_membership_decisions SET state = ?, reason = ?, target_logical_ref = ?, decided_revision = (SELECT coalesce(max(id), 0) FROM logical_revisions)
