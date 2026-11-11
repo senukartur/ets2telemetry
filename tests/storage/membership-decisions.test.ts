@@ -185,7 +185,7 @@ describe('ET-112b2a raw close markers and profile boundaries', () => {
   });
   it('keeps a boundary the reducer continued through below the later delivery close; only a boundary after the close crosses it', async () => {
     const {storage, db} = await openDirect(), script = new Script(ETS2_A), uuid = openTrip(storage, script);
-    // A reload-checked save load: the reducer continues the trip, so the regression carries no trip.close.
+    // Hand-written effects: a gameTime.regression the reducer continues through (no trip.close), as onRegression does for a same-job reload; only the event type and the absence of a close matter here.
     const regression = script.event(r.regression(script.gameTime.minutes, '100')), delivered = script.event(r.delivered());
     expect([regression, delivered].map(m => m.data.eventSeq)).toEqual(['2', '3']);
     ok(storage.commitEvent({message: regression}));
