@@ -58,7 +58,7 @@ In a single worker transaction resolve current membership, reject superseded/emp
 | Source state | Publication rule |
 | --- | --- |
 | Current root's membership points to itself and its profile proof is committed | Ready; root identity cannot subsequently move under the existing association rules |
-| Current self-root is retired, or its original raw trip is closed and its membership decision is not `pending` | Ready even without profile proof; absence of proof stays uncertainty, not a fabricated driver identity |
+| Current self-root is retired or its original raw trip is closed, and its membership decision is not `pending` | Ready even without profile proof; absence of proof stays uncertainty, not a fabricated driver identity |
 | Current self-root is open, unretired and proof is absent, or its schema 9 membership decision is `pending` | `identity-pending`; retain discovery/opening-owner context, but allocate no permanent source binding, HTTP revision, event ID or frozen envelope yet |
 | A provisional member now points to an older root | Redirect only its unmaterialized work to that root; do not publish its retired former singleton. The target root must independently pass readiness |
 | Stored publication metadata contradicts current membership | `reconciliation-required`; preserve frozen keys/bytes/receipts, stop affected publication and expose the inconsistency. No replacement IDs, silent rebind or remote merge |
