@@ -449,14 +449,24 @@ export class HardModeReader {
     const root = await realpath(process.homeDirectory ?? (override ? override[1] ?? override[2] : path.join(this.options.documents, source.game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator')));
     this.generation(work);
     if (bound?.process === processKey && bound.root !== root) this.invalidate();
-    stage = 'PROFILE_LOG_GENERATION';
+    // A log admitted for this lifetime is bound to it: failing to read its continuation is a change, not a new generation.
+    const previous = this.previous;
+    stage = previous?.process === processKey ? 'PROFILE_LOG_CHANGED' : 'PROFILE_LOG_GENERATION';
     if (this.tail?.process !== processKey) this.tail = {process: processKey, value: new ProfileLogTail()};
     const log = this.options.file ? await this.file(path.join(root, 'game.log.txt'), LOG_BYTES, signal) : await this.tail.value.read(path.join(root, 'game.log.txt'), signal);
     this.generation(work);
-    if (!Number.isFinite(logCreation(log.text)) || Math.abs(logCreation(log.text) - process.createdUtcMs) > 5000) throw new Error('Stale log generation');
+    stage = 'PROFILE_LOG_GENERATION';
+    // The header is local wall-clock time truncated to whole seconds, written once the game has started; startup can take
+    // any time and the utility can attach hours later. One second absorbs only the truncation; there is no upper delay bound.
+    const created = logCreation(log.text);
+    if (!Number.isFinite(created) || created <= process.createdUtcMs - 1000 || created > atUtcMs) {
+      // No latch: a rejected header is parsed again from offset 0, so a log rewritten in place can still be admitted.
+      this.tail = undefined;
+      throw new Error('Stale log generation');
+    }
     stage = 'PROFILE_LOG_CHANGED';
-    const previous = this.previous;
-    if (this.options.file && previous?.process === processKey && (previous.identity !== log.identity || !log.text.startsWith(previous.text))) throw new Error('Log replaced or truncated');
+    // Stale and replaced logs stay apart: only an admitted log binds the lifetime, and a replacement stays rejected until it ends.
+    if (previous?.process === processKey && (previous.identity !== log.identity || !log.text.startsWith(previous.text))) throw new Error('Log replaced or truncated');
     stage = 'PROFILE_SELECTION_UNPROVEN';
     const profile = 'profile' in log ? log.profile : profileFromLog(log.text);
     if (!profile) throw new Error('Current profile unproven');
