@@ -287,7 +287,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const detail=ok(await client.journalTrip(original));expect(detail.trip.outcome).toBe('delivered');expect(ok(await client.listTrips()).trips).toHaveLength(3);
       if(scenario==='before-first-start')expect(detail.trip).toMatchObject({isHardMode:true,hardModeDetails:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(ok(await client.listSamples({tripUuid:original},{afterId:oldSnapshot,includeExcluded:true}))).toHaveLength(prestart?3:2);
-      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:8},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
+      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:9},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
@@ -1554,7 +1554,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.close());
     const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
     const summary=ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
-    const database={purpose:'synthetic',schemaVersion:8} as const;
+    const database={purpose:'synthetic',schemaVersion:9} as const;
     const service=new JournalService({history:{state:'open',failureCode:null,client,database,databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
     const selected=ok(await client.listSamples({tripUuid:uuid}));expect(selected.map(row=>row.id)).toEqual(['1','2','4','5']);
     for(const limit of [300,3600]){

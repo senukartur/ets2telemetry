@@ -25,7 +25,6 @@ async function openDirect(): Promise<{storage: Storage; db: Database.Database}> 
   opened.push(storage);
   return {storage, db: conn.writer()};
 }
-type Opened = Awaited<ReturnType<typeof openDirect>>;
 const plain = (row: Record<string, unknown>) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'bigint' ? Number(value) : value]));
 /** Every decision row, with `decided` reporting whether decided_revision is set (it is the revision watermark, not a fixed number). */
 const decisions = (db: Database.Database) => (db.prepare(`SELECT trip_ref, plugin_session_ref, state, reason, raw_closed_event_seq, target_logical_ref,
