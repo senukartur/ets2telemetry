@@ -289,13 +289,16 @@ export class TripRecorderSink implements DurableSink {
   private pendingProfile: {key:string;input:AttachInput;token?:object}|undefined;
   private storedProfileKey:string|undefined;
   /**
-   * ET-112b2b: a newly admitted proof key of the session (session, process, binding, scope, load generation) seen while no
-   * trip is open, to resolve the session's closed pending memberships; `resolvedProofKey` is the last key nothing remained for.
+   * ET-112b2b: a newly admitted proof key of the session (session, process, binding, scope, load generation and the game's
+   * last closed trip) seen while no trip is open, to resolve the session's closed pending memberships; `resolvedProofKey` is
+   * the last key nothing remained for. The last closed trip makes every later close new work, even when the same proof
+   * returns after it was dropped while that trip was open.
    */
   private pendingResolve: {key:string;pluginSessionId:string}|undefined;
   private resolvedProofKey:string|undefined;
-  private resolveKey(point:{source:{pluginSessionId:string;processInstanceId:string}},profile:ProfileObservation):string {
-    return JSON.stringify([point.source.pluginSessionId,point.source.processInstanceId,profile.binding,profile.scope,profile.loadGeneration]);
+  private resolveKey(game:TripGame,point:{source:{pluginSessionId:string;processInstanceId:string}},profile:ProfileObservation):string {
+    return JSON.stringify([point.source.pluginSessionId,point.source.processInstanceId,profile.binding,profile.scope,profile.loadGeneration,
+      this.state.games[game].lastClosed?.tripUuid ?? null]);
   }
   private boundaryPrevious: NonNullable<SampleInput['recording']>['previous'];
   private boundaryRunning: CapturedRunning | undefined;
@@ -504,7 +507,7 @@ export class TripRecorderSink implements DurableSink {
     }
     // ET-112b2b: with no trip open and no queued close (such as a profile-switch close and its boundary) still to commit,
     // a newly admitted proof may resolve the session's closed pending memberships.
-    const resolveKey=this.lastReadingProfile?this.resolveKey(message,this.lastReadingProfile):undefined;
+    const resolveKey=this.lastReadingProfile?this.resolveKey(message.source.game,message,this.lastReadingProfile):undefined;
     this.pendingResolve=replayDrained && resolveKey!==undefined && !view.current && this.client.resolvePendingMemberships && this.state.games[message.source.game].pending.length===0
       && !session.profileChangePending && resolveKey!==this.resolvedProofKey ? {key:resolveKey,pluginSessionId:message.source.pluginSessionId} : undefined;
     // H2, H7: the sample sees the trip state that the commits before it in the FIFO left, and this reading.
@@ -591,7 +594,7 @@ export class TripRecorderSink implements DurableSink {
   private async resolveMemberships(): Promise<SinkResult<{status: AttachStatus}>> {
     const due=this.pendingResolve;this.pendingResolve=undefined;
     const session=due?this.state.sessions[due.pluginSessionId]:undefined,point=session?.lastReading,profile=this.lastReadingProfile;
-    if(!due || !session || !point || !profile || !this.client.resolvePendingMemberships || this.resolveKey(point,profile)!==due.key || this.view(session.game).current
+    if(!due || !session || !point || !profile || !this.client.resolvePendingMemberships || this.resolveKey(session.game,point,profile)!==due.key || this.view(session.game).current
       || this.state.games[session.game].pending.length>0 || session.profileChangePending)return {ok:true,value:{status:'none'}};
     const result=await this.client.resolvePendingMemberships({pluginSessionId:due.pluginSessionId,nextEventSeq:(BigInt(session.processedThrough)+1n).toString(),
       profile:structuredClone(profile),sourceClockId:point.capture.clockId,monotonicNs:point.capture.monotonicNs});

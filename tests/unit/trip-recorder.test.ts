@@ -814,6 +814,24 @@ describe('ET-112b2b resolving closed pending memberships from a later proof', ()
     expect([recorder.attach.due(), await recorder.attach.open(context)]).toEqual([false, {ok: true, value: {status: 'none'}}]);
     expect(storage.resolves).toHaveLength(1);
   });
+  it('R2 sends the same proof key again after a later trip of the session closed without proof', async () => {
+    const storage = new ResolvingStorage(), s = new Script(ETS2_A), evidence: {profile?: ProfileObservation} = {profile: proofOf(s)};
+    const recorder = new TripRecorderSink(storage, {profileEvidence: () => evidence.profile});
+    const withoutJob = () => { const m = s.snapshot(); m.data.state.configuration.job = {available: false, reason: 'not-observed'}; return m; };
+    await recorder.openSession(s.welcome()); recorder.observe(s.checkpoint(null), context);
+    storage.answers.push({ok: true, value: {status: 'none', resolved: 0, remaining: 0}});
+    recorder.observe(withoutJob(), context);
+    expect(await recorder.attach.open(context)).toEqual({ok: true, value: {status: 'duplicate'}});
+    // The proof is dropped at the job's profile boundary and returns only after the delivery, with the same key inputs.
+    evidence.profile = undefined;
+    recorder.observe(withoutJob(), context);
+    for (const record of [r.jobConfigured(), r.delivered()]) expect((await recorder.commit(s.event(record), context)).ok).toBe(true);
+    evidence.profile = proofOf(s);
+    recorder.observe(withoutJob(), context);
+    expect(recorder.attach.due()).toBe(true);
+    expect(await recorder.attach.open(context)).toEqual({ok: true, value: {status: 'committed'}});
+    expect(storage.resolves.map(input => input.nextEventSeq)).toEqual(['1', '3']);
+  });
   it('R3 sends the same proof again with the next reading while decisions remain', async () => {
     const storage = new ResolvingStorage(), {s, recorder} = await deliveredWithoutProof(storage);
     storage.answers.push({ok: true, value: {status: 'resolved', resolved: 8, remaining: 1}});
