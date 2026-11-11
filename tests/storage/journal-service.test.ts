@@ -50,7 +50,7 @@ const ACK_LINES = ACKS.map(seq => `ack ${seq}`);
 const TRIP_ROW = {game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, recordingCompleteness: 'partial',
   startedUtcMs: 1_800_000_000_030, job: {source: 'event', plannedDistance: {available: true, value: 152_000, unit: 'm'},
     expectedIncome: {available: true, value: {raw: '12345', sdkType: 'u64', currency: {status: 'unknown'}}}}};
-const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 8};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 9};
 
 /** One service's recording runtime for `synthetic:<name>` and the journal service over its database, as the service builds them. */
 function service(name: string, worker: StorageWorkerHandle, timeline: string[], sampleFlushMs = NO_FLUSH_TIMER_MS) {

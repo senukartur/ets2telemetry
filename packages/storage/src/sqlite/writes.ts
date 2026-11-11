@@ -1,7 +1,7 @@
 import {RULE_LOSSES} from './trailer-baselines';
 import {retainUploadDeletion} from './upload-discovery';
 import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
-import {admittedProfile, associate, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
+import {admittedProfile, associate, decisionsEnabled, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
 import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../../contracts/src/hard-mode';
 // Write commands. Each command is one BEGIN IMMEDIATE transaction on the verified writer connection; a commit result
@@ -131,6 +131,17 @@ function advanceCoverage(db: Database.Database, session: SessionRow, first: bigi
   }
   statement(db, 'UPDATE plugin_sessions SET committed_through_event_seq = ? WHERE id = ?').run(u64Key(through), session.id);
   return through.toString();
+}
+
+/**
+ * Schema 9: raises the session's profile boundary to `throughKey`, an eventSeq key of that session, in the committing
+ * transaction. A boundary is a timers.restart or gameTime.regression event, a newly stored gap (through its lastEventSeq)
+ * or a verified profile-change attach (its nextEventSeq); it never moves back, so out-of-order commits keep the highest.
+ */
+function markProfileBoundary(db: Database.Database, session: bigint, throughKey: string): void {
+  if (!decisionsEnabled(db)) return;
+  statement(db, `INSERT INTO session_profile_boundaries (plugin_session_ref, through_event_seq) VALUES (?, ?)
+    ON CONFLICT (plugin_session_ref) DO UPDATE SET through_event_seq = max(through_event_seq, excluded.through_event_seq)`).run(session, throughKey);
 }
 
 /**
@@ -284,6 +295,8 @@ function applyEffects(c: EffectContext, effects: unknown): void {
           closed_by_session_ref = ?, closed_by_event_seq = ? WHERE id = ?`)
           .run(outcome, enumValue(effect.closeReason, CLOSE_REASONS), outcomeEvent, enumValue(effect.recordingCompleteness, COMPLETENESS), utcMs(effect.endedUtcMs), c.now,
             c.session.id, c.carrierEventSeq, trip.id);
+        // Schema 9: the membership decision keeps the same carrier, so a later profile boundary can be compared with it.
+        if (decisionsEnabled(c.db)) statement(c.db, 'UPDATE logical_membership_decisions SET raw_closed_event_seq = ? WHERE trip_ref = ?').run(c.carrierEventSeq, trip.id);
         break;
       }
       case 'event.attribute': {
@@ -339,6 +352,7 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
     applyEventHardMode(db, m, input.effects, input.hardMode, now, input.hardModeLoss, input.hardModeFresh === true);
     projectEffects(db, input.effects, m.data.occurred.monotonicNs.available && !m.data.redelivered ? admittedProfile(input.profile, m.source, m.capture.clockId, m.data.occurred.monotonicNs.value) : undefined);
     if (record.type==='job.cancelled' || record.type==='job.delivered') retireObservedTerminal(db,session.id);
+    if (record.type === 'timers.restart' || record.type === 'gameTime.regression') markProfileBoundary(db, session.id, seqKey);
     const through = advanceCoverage(db, session, BigInt(eventSeq), BigInt(eventSeq));
     projectSessionBounds(db,session.id);
     options.testHooks?.beforeCommit?.();
@@ -392,6 +406,8 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     const firstNew = BigInt(previouslyCoveredThrough) + 1n, carrier = BigInt(d.firstEventSeq) > firstNew ? BigInt(d.firstEventSeq) : firstNew;
     applyEffects({db, session, game: session.game, now, carrierEventSeq: u64Key(carrier)}, input.effects);
     projectEffects(db, input.effects);
+    // Every stored gap reaches beyond the coverage, so it has a new suffix.
+    markProfileBoundary(db, session.id, lastKey);
     const through = advanceCoverage(db, session, BigInt(d.firstEventSeq), BigInt(d.lastEventSeq));
     projectSessionBounds(db,session.id);
     options.testHooks?.beforeCommit?.();
@@ -628,6 +644,7 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
     }
     applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey,profileChange:input.profileChange}, effects);
     projectEffects(db, input.effects, proof);
+    if (input.profileChange) markProfileBoundary(db, session.id, nextKey);
     if (input.endpoint) {
       if (!proof || !input.sourceClockId || !input.monotonicNs) fail('INVALID_INPUT');
       const row = statement(db,'SELECT * FROM trips WHERE trip_uuid=?').get(attachTripUuid(input.pluginSessionId,input.nextEventSeq)) as Record<string,unknown>;
@@ -657,7 +674,9 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
  * 1. Checks trip existence (UNKNOWN_TRIP if missing).
  * 2. Checks schema v4 logical group membership to find all member trips.
  * 3. Active recording guard: if `options.rejectIfOpen` and ANY member trip has `outcome === 'open'`, aborts with STORAGE_BUSY.
- * 4. Schema v4 logical trip tables cleanup (if logicalEnabled(db)):
+ * 4. Schema v9 membership decisions of the member trips and of decisions that target a removed root; session profile
+ *    boundaries are kept.
+ *    Schema v4 logical trip tables cleanup (if logicalEnabled(db)):
  *    - logical_trips progress_head
  *    - logical_revisions progress_head and rows
  *    - logical_progress prefix_ref / start_ref and rows
@@ -706,6 +725,11 @@ export function deleteTrip(conn: StorageConnection, tripUuid: string, options: D
     }
 
     deleteUnownedUploadMetadata();
+    // Schema 9: the removed raw trips' membership decisions go with them; session profile boundaries are session evidence and stay.
+    if (decisionsEnabled(db)) {
+      for (const lId of logicalIds) statement(db, 'DELETE FROM logical_membership_decisions WHERE target_logical_ref = ?').run(lId);
+      for (const mId of memberIds) statement(db, 'DELETE FROM logical_membership_decisions WHERE trip_ref = ?').run(mId);
+    }
     if (hasV4 && logicalIds.length > 0) {
       for (const lId of logicalIds) {
         statement(db, 'UPDATE logical_trips SET progress_head = NULL WHERE id = ?').run(lId);

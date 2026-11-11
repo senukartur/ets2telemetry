@@ -9,7 +9,7 @@ describe('ET-026 migration 0003 (REG-013)', () => {
   it.each([1, 2])('preserves every existing trip column and ID when migrating frozen schema %i, with false/null defaults', async version => {
     const file = ws.copyFixture(`schema-v${version}-representative.sqlite`), originalHash = sha256(file), before = digestOf(file);
     const trips = readOnly(file, db => db.prepare('SELECT * FROM trips ORDER BY id').all()) as Record<string, unknown>[];
-    const storage = await ws.open({path: file}); expect(storage.summary.schemaVersion).toBe(8); expect(storage.summary.migratedFrom).toBe(version);
+    const storage = await ws.open({path: file}); expect(storage.summary.schemaVersion).toBe(9); expect(storage.summary.migratedFrom).toBe(version);
     const backup = path.join(ws.backups, storage.summary.backupFileName!); expect(digestOf(backup)).toEqual(before);
     expect(storage.summary.backupFileName).toBeTruthy(); storage.close();
     readOnly(file, db => {
@@ -26,7 +26,7 @@ describe('ET-026 migration 0003 (REG-013)', () => {
     const broken = [...MIGRATIONS.slice(0, 2), {...MIGRATIONS[2], up: (db: Parameters<typeof MIGRATIONS[2]['up']>[0]) => {MIGRATIONS[2].up(db); throw new Error('Injected after migration SQL');}}];
     const error = failed(await openStorage(ws.options({path: file, migrations: broken})), 'MIGRATION_FAILED');
     expect(digestOf(file)).toEqual(before); expect(error.backupFileName).toBeTruthy(); const backupFiles = files(ws.backups);
-    const storage = await ws.open({path: file}); expect(storage.summary.schemaVersion).toBe(8); expect(storage.summary.backupFileName).toBe(error.backupFileName); storage.close();
+    const storage = await ws.open({path: file}); expect(storage.summary.schemaVersion).toBe(9); expect(storage.summary.backupFileName).toBe(error.backupFileName); storage.close();
     expect(files(ws.backups)).toEqual(backupFiles);
   });
   it('keeps INTEGER boolean and bounded valid JSON constraints in SQLite STRICT', async () => {

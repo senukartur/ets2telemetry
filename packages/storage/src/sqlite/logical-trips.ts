@@ -16,6 +16,24 @@ import {readHardModeDetails} from './hard-mode';
 export type LogicalRow = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
 export const logicalEnabled = (db: Database.Database) => Number(db.pragma('user_version', {simple: true})) >= 4;
+/** Schema 9 records membership decisions and per-session profile boundaries. */
+export const decisionsEnabled = (db: Database.Database) => Number(db.pragma('user_version', {simple: true})) >= 9;
+/**
+ * Inserts the pending decision of a raw trip unless it already has one. `raw_closed_event_seq` copies the trip's close
+ * carrier, which a trip.close earlier in the same transaction may already have written.
+ */
+function pendingDecision(db: Database.Database, row: LogicalRow): void {
+  db.prepare(`INSERT OR IGNORE INTO logical_membership_decisions(trip_ref, game, plugin_session_ref, rule_version, state, reason, raw_closed_event_seq)
+    VALUES (?, ?, ?, 1, 'pending', 'profile-unverified', ?)`).run(row.id, row.game, row.plugin_session_ref, row.closed_by_event_seq ?? null);
+}
+/**
+ * Records a final decision of a still pending row. `decided_revision` is the logical revision watermark when the decision
+ * committed; a decided row never changes (I3).
+ */
+function recordDecision(db: Database.Database, trip: unknown, state: 'joined' | 'root', reason: string, target: unknown): void {
+  db.prepare(`UPDATE logical_membership_decisions SET state = ?, reason = ?, target_logical_ref = ?, decided_revision = (SELECT coalesce(max(id), 0) FROM logical_revisions)
+    WHERE trip_ref = ? AND state = 'pending'`).run(state, reason, target, trip);
+}
 export const encodeRow = (value: unknown) => JSON.stringify(value, (_key, v: unknown) => typeof v === 'bigint' ? {$integer: v.toString()} : v);
 export const decodeRow = (value: unknown): LogicalRow => {
   const row = JSON.parse(String(value), (_key, v: unknown) => v && typeof v === 'object' && '$integer' in v ? BigInt((v as {$integer: string}).$integer) : v) as LogicalRow;
@@ -32,6 +50,7 @@ export function logicalFor(db: Database.Database, trip: unknown): bigint {
 function createGroup(db: Database.Database, row: LogicalRow): void {
   const created = db.prepare('INSERT OR IGNORE INTO logical_trips(id, trip_uuid, latest_trip_ref, game) VALUES (?, ?, ?, ?)').run(row.id, row.trip_uuid, row.id, row.game).changes;
   db.prepare('INSERT OR IGNORE INTO logical_memberships(trip_ref, logical_ref, decision_key) VALUES (?, ?, ?)').run(row.id, row.id, `open-v1:${String(row.trip_uuid)}`);
+  if (created && decisionsEnabled(db)) pendingDecision(db, row);
   if (created) revise(db, row.id as bigint, originalCoverage(db, row));
 }
 /** Private proof is source-qualified and bounded. Events older than this boundary cannot borrow it. */
@@ -53,6 +72,9 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   createGroup(db, row);
   let id = logicalFor(db, row.id);const group=get(db,'SELECT * FROM logical_trips WHERE id=?',id)!;
   const membership = get(db, 'SELECT proof_json FROM logical_memberships WHERE trip_ref = ?', row.id)!;
+  // An open raw trip recorded before schema 9 without proof is still undecided; a closed or proof-bearing one never gets a row.
+  const decisions = decisionsEnabled(db);
+  if (decisions && row.outcome === 'open' && membership.proof_json === null) pendingDecision(db, row);
   if (!proof || group.retired === 1n || row.outcome !== 'open') return id;
   const recordedJob=job(db,row),known=JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
   const recorded=learnContinuationConstraints(known,recordedJob);
@@ -74,7 +96,10 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     compatible: rows.length === 1 && combinedFor(candidate) !== null && compatibleContinuation(job(db, raw(db, candidate.id)), currentJob)}));
   const decision = decideMembership({profileVerified: true, recordedJob, currentJob, consistent: learned !== null, candidates});
   // Missing evidence retires nothing; a later proof-bearing reading of this open raw trip decides again.
-  if (decision.state === 'pending') return id;
+  if (decision.state === 'pending') {
+    if (decisions) db.prepare(`UPDATE logical_membership_decisions SET reason = ? WHERE trip_ref = ? AND state = 'pending'`).run(decision.reason, row.id);
+    return id;
+  }
   let pendingCoverage: LogicalCoverage | undefined, combined: ContinuationConstraints | null = null;
   if (decision.state === 'joined') {
     const candidate = decision.target;
@@ -108,6 +133,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), row.id);
   db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,decision.fingerprint,JSON.stringify(decision.state === 'joined' ? combined : learned ?? recorded ?? known),id);
   if (pendingCoverage) revise(db, id, pendingCoverage);
+  if (decisions) recordDecision(db, row.id, decision.state, decision.reason, decision.state === 'joined' ? id : null);
   return id;
 }
 

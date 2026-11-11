@@ -1800,7 +1800,7 @@ describe('REG-013 logical singleton migration',()=>{
   it.each([1,2,3])('preserves IDs and raw facts from frozen schema v%i without inferring membership',async version=>{
     const file=ws.copyFixture(`schema-v${version}-representative.sqlite`);
     const before=readOnly(file,db=>db.prepare('SELECT * FROM trips ORDER BY id').all()) as Record<string,unknown>[];
-    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(8);
+    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(9);
     const list=ok(storage.journalTrips()).trips;
     expect(list.map(t=>t.tripUuid).sort()).toEqual(before.map(t=>t.trip_uuid).sort());
     for(const trip of before)expect(ok(storage.journalTrip(String(trip.trip_uuid))).trip.recordingCompleteness).toBe(trip.recording_completeness);
