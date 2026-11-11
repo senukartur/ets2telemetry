@@ -284,6 +284,29 @@ describe('ET-065 trip deletion', () => {
     });
   });
 
+  it('removes the membership decisions of every deleted member and keeps unrelated decisions and every session profile boundary (ET-112b2)', async () => {
+    const storage = await ws.open();
+    // A root and its continuation (sessions 1 and 2), then an unrelated proof-less trip (session 3); the restarts are boundaries.
+    const a = new Script(ETS2_A), first = openContinuation(storage, a);
+    sampleContinuation(storage, a, first, 1, 1000000);
+    closeContinuation(storage, a, first, false);
+    const b = new Script(ETS2_B), second = openContinuation(storage, b);
+    closeContinuation(storage, b, second, true);
+    const c = new Script('10000000-0000-4000-8000-0000000000d4'), third = openContinuation(storage, c, job(), false);
+    closeContinuation(storage, c, third, false);
+    expect(ok(storage.journalTrips()).trips).toHaveLength(2);
+    ok(storage.deleteTrip(second));
+    expect(ok(storage.listTrips()).trips.map(trip => trip.tripUuid)).toEqual([third]);
+    ok(storage.close());
+    readOnly(ws.database, db => {
+      expect(db.prepare('SELECT trip_ref, state, reason, raw_closed_event_seq FROM logical_membership_decisions').all())
+        .toEqual([{trip_ref: 3, state: 'pending', reason: 'profile-unverified', raw_closed_event_seq: '00000000000000000002'}]);
+      expect(db.prepare('SELECT plugin_session_ref, through_event_seq FROM session_profile_boundaries ORDER BY plugin_session_ref').all())
+        .toEqual([{plugin_session_ref: 1, through_event_seq: '00000000000000000002'}, {plugin_session_ref: 3, through_event_seq: '00000000000000000002'}]);
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+    });
+  });
+
   it('rejects non-existent UUID with UNKNOWN_TRIP and malformed inputs with INVALID_INPUT', async () => {
     ws.copyFixture(REPRESENTATIVE, ws.database);
     const storage: Storage = await ws.open();

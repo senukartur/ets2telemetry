@@ -141,3 +141,22 @@ it('REG-013 freezes schema6 with delivered upload bytes, receipt and retained pr
     expect(db.prepare('SELECT receipt_id FROM upload_receipts WHERE event_ref=?').pluck().get(expected.eventId)).toBe(expected.receiptId);
   });
 });
+
+it('REG-013 freezes schema8 with a proof-bearing restart-closed group, proof-less delivered and open trips and a complete delivery',async()=>{
+  const copy=ws.copyFixture('schema-v8-representative.sqlite'),expected=JSON.parse(readFileSync(path.join(STORAGE_FIXTURES,'schema-v8-representative.expected.json'),'utf8'));
+  const storage=await ws.open({path:copy,migrations:MIGRATIONS.slice(0,8)});
+  expect(storage.summary).toMatchObject({schemaVersion:8,created:false,databaseUuid:expected.databaseUuid});expect(storage.summary.migratedFrom).toBeUndefined();
+  expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([...expected.journalRoots].sort());
+  storage.close();
+  const fresh=await ws.open({migrations:MIGRATIONS.slice(0,8)});fresh.close();expect(schemaOf(copy)).toEqual(schemaOf(ws.database));
+  readOnly(copy,db=>{
+    expect(db.prepare('SELECT plugin_session_uuid FROM plugin_sessions ORDER BY id').pluck().all()).toEqual(expected.sessions);
+    expect(db.prepare(`SELECT t.id,t.trip_uuid,s.plugin_session_uuid AS session,t.outcome,t.close_reason,t.recording_completeness,c.plugin_session_uuid AS closed_by,t.closed_by_event_seq
+      FROM trips t JOIN plugin_sessions s ON s.id=t.plugin_session_ref LEFT JOIN plugin_sessions c ON c.id=t.closed_by_session_ref ORDER BY t.id`).all()).toEqual(expected.trips);
+    expect(db.prepare('SELECT trip_ref,logical_ref,previous_logical_ref,proof_json IS NOT NULL AS proof FROM logical_memberships ORDER BY trip_ref').all()).toEqual(expected.memberships);
+    expect(db.prepare('SELECT id,latest_trip_ref,member_count,retired,interrupted,profile_scope IS NOT NULL AS scoped FROM logical_trips ORDER BY id').all()).toEqual(expected.logicalTrips);
+    const counts=contentDigest(db).rowCounts;
+    expect(Object.fromEntries(Object.keys(expected.rowCounts).map(table=>[table,counts[table]]))).toEqual(expected.rowCounts);
+    expect(db.pragma('foreign_key_check')).toEqual([]);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');
+  });
+});
