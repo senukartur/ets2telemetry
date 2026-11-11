@@ -94,7 +94,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
       db.prepare('UPDATE trips SET hard_mode_details=?, is_hard_mode=0 WHERE id=?').run(JSON.stringify(legacy), row.id);
     }
 
-    db.prepare('UPDATE logical_trips SET latest_trip_ref = max(latest_trip_ref, ?), member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
+    db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
     if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), sampleResumePending:false, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
       window: {session: String(row.plugin_session_ref), opened: row.opened_event_ref === null ? null : (row.opened_event_ref as bigint).toString()}};

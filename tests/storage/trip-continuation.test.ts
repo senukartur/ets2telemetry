@@ -1730,6 +1730,22 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,other].sort());
     expect(trip(storage,other)).toMatchObject({outcome:'open'});
   });
+  it.each(['missing-cargo','u32-max'] as const)('M2 makes an incomplete recorded job of the profile its own root without retiring the candidate: %s',async variant=>{
+    let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);
+    const incomplete=variant==='u32-max'?INCIDENT_JOB_U32_MAX_DEADLINE:{...INCIDENT_JOB,cargoId:{available:false as const,reason:'not-observed' as const}};
+    // The same verified profile records J without complete identity evidence; it can neither join nor replace A.
+    const own=tripUuidFor(extra[0],'1'),last=INCIDENT_SEGMENTS[0].readings.length-1;
+    drive(storage,{...INCIDENT_SEGMENTS[0],session:extra[0]},{job:incomplete,afterReading:reading=>{if(reading!==last)return;
+      expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,own].sort());
+      expect(trip(storage,INCIDENT_EXPECTED.rootTripUuid)).toMatchObject({outcome:'open',closeReason:null});
+      expect(validateJournalTripDetail(ok(storage.journalTrip(own))).exportBounds.sources?.map(source=>source.pluginSessionId)).toEqual([extra[0]]);}});
+    // A persisted root keeps its unresolved presentation after the game exit, and A is still the only candidate of J.
+    expect(trip(storage,own)).toMatchObject({outcome:'open',closeReason:null});
+    ({storage}=await incident(storage,1));
+    expectIncident(storage);
+    expect(trip(storage,own)).toMatchObject({outcome:'open',closeReason:null});
+    expect(ok(storage.journalTrips()).trips).toHaveLength(2);
+  });
   it.each(['missing','u32-max'] as const)('M3 keeps the candidate when a proof-bearing reading has no current deadline: %s',async variant=>{
     const incomplete=variant==='missing'?INCIDENT_JOB_WITHOUT_DEADLINE:INCIDENT_JOB_U32_MAX_DEADLINE;
     let checked=false;const {storage}=await incident(await ws.open(),0,undefined,(index,current)=>index<2?{}:{
