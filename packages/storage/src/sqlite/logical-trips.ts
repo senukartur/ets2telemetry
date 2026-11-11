@@ -4,7 +4,7 @@ import {gameDistanceStep} from '../../../telemetry-core/src/trips/game-distance'
 import {matchesSavedEndpoint, savedEndpointLimits} from '../../../telemetry-core/src/trips/saved-endpoint';
 import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
-import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationIdentityFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {decideMembership, type MembershipCandidate} from '../../../telemetry-core/src/trips/membership';
 import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
 import type {CapturedEndpoint, CapturedRunning, SampleInput, TripEffect} from '../api';
@@ -62,7 +62,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     else db.prepare('UPDATE logical_trips SET retired=1 WHERE id=?').run(id);
     return id;
   }
-  const fingerprint = continuationFingerprint(currentJob);
+  const fingerprint = continuationIdentityFingerprint(currentJob);
   // The logical_candidates index bounds the lookup; two matching rows already make the segment ambiguous.
   const rows = fingerprint === null ? [] : db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
     .all(row.game, proof.scope, fingerprint, id) as LogicalRow[];

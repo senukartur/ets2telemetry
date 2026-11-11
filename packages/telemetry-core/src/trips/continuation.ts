@@ -21,8 +21,6 @@ export function learnContinuationConstraints(known: ContinuationConstraints, job
   }
   return result;
 }
-/** The SDK defines no deadline sentinel; the u32 maximum cannot distinguish one job from another, so identity treats it as unavailable. */
-export const U32_DEADLINE_SENTINEL = '4294967295';
 /** Exact canonical evidence only. Localized labels, cargoLoaded and currency descriptions are deliberately excluded. */
 export function continuationFingerprint(job: JobConfiguration): string | null {
   const values: unknown[] = [];
@@ -30,11 +28,19 @@ export function continuationFingerprint(job: JobConfiguration): string | null {
     const reading = job[field];
     if (!reading?.available) return null;
     const value = reading.value;
-    if (field === 'deliveryDeadline' && value === U32_DEADLINE_SENTINEL) return null;
     if (typeof value === 'string' && !value.length || typeof value === 'number' && (!Number.isFinite(value) || value < 0)) return null;
     values.push(field === 'expectedIncome' ? {raw: job.expectedIncome.available ? job.expectedIncome.value.raw : '', sdkType: job.expectedIncome.available ? job.expectedIncome.value.sdkType : ''} : value);
   }
   return `job-v1:${canonicalJson(values)}`;
+}
+/** The SDK defines no deadline sentinel; the u32 maximum cannot distinguish one job from another. */
+export const U32_DEADLINE_SENTINEL = '4294967295';
+/**
+ * The fingerprint of automatic continuation identity: continuationFingerprint, but null when the deadline is the u32
+ * maximum. Same-job checks within one recording keep using continuationFingerprint and compatibleContinuation.
+ */
+export function continuationIdentityFingerprint(job: JobConfiguration): string | null {
+  return job.deliveryDeadline?.available && job.deliveryDeadline.value === U32_DEADLINE_SENTINEL ? null : continuationFingerprint(job);
 }
 export function compatibleContinuation(a: JobConfiguration, b: JobConfiguration): boolean {
   const key = continuationFingerprint(a);

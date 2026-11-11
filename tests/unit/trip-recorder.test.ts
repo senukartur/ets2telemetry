@@ -479,6 +479,27 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,false,true]);
   });
 
+  // ET-112b1: the u32-maximum deadline is unavailable only for automatic continuation identity; the recorder's same-job
+  // check on its trusted predecessor must still treat the job as unchanged (REG-008).
+  it.each(['13000','4294967295'])('keeps admitted predecessor links for a job with deadline %s',async deadline=>{
+    const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},token={};
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const profile={version:1 as const,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2' as const,pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1};
+    const recorder=new TripRecorderSink(storage,{profileEvidence:()=>profile,profileStatus:()=>({phase:'admitted',token})});
+    const values=job({deliveryDeadline:{available:true,value:deadline,unit:'min'}});
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured(values)),context));
+    const configuration=s.checkpoint(values).data.state.configuration;
+    for(const odo of [1000000,1000020,1000040,1000060]){
+      accept(recorder.observe(s.snapshot({configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'},speed:{available:true,value:20,unit:'m/s'},
+        gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x:odo/5,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}}),context));
+    }
+    accept(await recorder.samples.write(3600,true));
+    const rows=storage.model.samples;
+    expect(rows.map(row=>row.recording?.previous!==undefined)).toEqual([false,true,true,true]);
+    expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,undefined,undefined]);
+  });
+
   it('retains the reset reason across a sampled row without recording evidence',async()=>{
     const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
     expect((await recorder.openSession(s.welcome())).ok).toBe(true);expect(recorder.observe(s.checkpoint(null),context).ok).toBe(true);

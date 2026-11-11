@@ -259,7 +259,7 @@ Columns:
 | `tests/unit/tray-model.test.ts` | Node unit (Vitest) | REG-012 | R | ET-011a (#52) | PR (tests job, `npm test`) | — |
 | `tests/unit/trip-accounting.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-005, REG-008, REG-012 | R, F | ET-014 (#72) | PR (tests job, `npm test`) | gap, trip completeness, loaded-job coverage and paused reconnect replay |
 | `tests/unit/trip-identity.test.ts` | Node unit (Vitest) | REG-005, REG-008 | T, V (et-014) | ET-014 (#71) | PR (tests job, `npm test`) | dedup |
-| `tests/unit/trip-recorder.test.ts` | Node unit (Vitest) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-007, REG-009, REG-011 | R, F | ET-015a (#77), ET-081 | PR (tests job, `npm test`) | ACK, dedup, gap, trip completeness, no-job checkpoint persistence before replay |
+| `tests/unit/trip-recorder.test.ts` | Node unit (Vitest) | REG-001, REG-003, REG-004, REG-005, REG-006, REG-007, REG-008, REG-009, REG-011 | R, F | ET-015a (#77), ET-081, ET-112 | PR (tests job, `npm test`) | ACK, dedup, gap, trip completeness, no-job checkpoint persistence before replay |
 | `tests/unit/trip-reducer-replay.test.ts` | Node unit (Vitest) | REG-005 | R, F | ET-014 (#71) | PR (tests job, `npm test`) | dedup, trip completeness |
 | `tests/unit/trip-reducer.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-004, REG-005, REG-006, REG-008, REG-012 | R, F | ET-014 (#71); ET-059 | PR (tests job, `npm test`) | dedup, gap, trip completeness, regression, mode evidence and load window |
 | `tests/unit/trip-seeds.test.ts` | Node unit (Vitest) | REG-006, REG-012 | R | ET-015a (#75) | PR (tests job, `npm test`) | trip completeness, regression |

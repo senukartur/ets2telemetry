@@ -1,5 +1,5 @@
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
-import {continuationFingerprint, U32_DEADLINE_SENTINEL} from './continuation';
+import {continuationIdentityFingerprint, U32_DEADLINE_SENTINEL} from './continuation';
 
 /**
  * Another unretired logical trip of the same game, profile scope and job fingerprint as the segment's current reading.
@@ -36,10 +36,10 @@ const deadlineUnavailable = (job: JobConfiguration) => !job.deliveryDeadline?.av
  */
 export function decideMembership<T>(evidence: MembershipEvidence<T>): MembershipDecision<T> {
   if (!evidence.profileVerified) return {state: 'pending', reason: 'profile-unverified'};
-  const recorded = continuationFingerprint(evidence.recordedJob);
+  const recorded = continuationIdentityFingerprint(evidence.recordedJob);
   // The recorded job is immutable, so a later reading cannot complete it.
   if (recorded === null) return {state: 'root', reason: deadlineUnavailable(evidence.recordedJob) ? 'deadline-unavailable' : 'recorded-job-incomplete', fingerprint: null, interrupt: false};
-  const current = continuationFingerprint(evidence.currentJob);
+  const current = continuationIdentityFingerprint(evidence.currentJob);
   if (current === null) return {state: 'pending', reason: 'job-evidence-incomplete'};
   if (current !== recorded || !evidence.consistent) return {state: 'root', reason: 'job-evidence-conflict', fingerprint: null, interrupt: true};
   if (evidence.candidates.length > 1) return {state: 'root', reason: 'ambiguous-candidates', fingerprint: current, interrupt: true};

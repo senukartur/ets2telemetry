@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {continuationFingerprint} from '../../packages/telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationFingerprint, continuationIdentityFingerprint} from '../../packages/telemetry-core/src/trips/continuation';
 import {decideMembership, type MembershipCandidate, type MembershipDecision, type MembershipEvidence} from '../../packages/telemetry-core/src/trips/membership';
 import {INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB} from '../shared/trip-continuation-incident';
 
@@ -17,9 +17,15 @@ describe('REG-003/REG-008 continuation membership decisions', () => {
     expect(continuationFingerprint(INCIDENT_OTHER_JOB)).not.toBe(F);
   });
   it('treats a missing deadline and the u32 maximum deadline as unavailable identity evidence', () => {
-    expect(continuationFingerprint(INCIDENT_JOB_WITHOUT_DEADLINE)).toBeNull();
-    expect(continuationFingerprint(INCIDENT_JOB_U32_MAX_DEADLINE)).toBeNull();
-    expect(continuationFingerprint({...INCIDENT_JOB, deliveryDeadline: {available: true, value: '4294967294', unit: 'min'}})).not.toBeNull();
+    expect(continuationIdentityFingerprint(INCIDENT_JOB_WITHOUT_DEADLINE)).toBeNull();
+    expect(continuationIdentityFingerprint(INCIDENT_JOB_U32_MAX_DEADLINE)).toBeNull();
+    expect(continuationIdentityFingerprint(INCIDENT_JOB)).toBe(F);
+    expect(continuationIdentityFingerprint({...INCIDENT_JOB, deliveryDeadline: {available: true, value: '4294967294', unit: 'min'}})).not.toBeNull();
+  });
+  it('keeps the u32 maximum deadline a same-job value outside continuation identity', () => {
+    expect(continuationFingerprint(INCIDENT_JOB_U32_MAX_DEADLINE)).not.toBeNull();
+    expect(compatibleContinuation(INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_U32_MAX_DEADLINE)).toBe(true);
+    expect(compatibleContinuation(INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB)).toBe(false);
   });
   const table: [string, Partial<MembershipEvidence<string>>, MembershipDecision<string>][] = [
     ['unverified profile', {profileVerified: false, candidates: [match('A')]}, {state: 'pending', reason: 'profile-unverified'}],
