@@ -21,7 +21,7 @@ import {attachTripUuidFor,tripUuidFor, type EventMessage, type ProfileObservatio
 import {validateJournalTripDetail, validateJournalEventPage,validateJournalIntervalPage} from '../../packages/contracts/src/journal';
 import {ETS2_A, ETS2_B, GAME_CLOCK_1, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
 import {FINAL_PROCESS_PROFILE_DELAY_MS, INCIDENT_EXPECTED, INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB,
-  INCIDENT_OTHER_JOB_WITHOUT_DEADLINE, INCIDENT_SEGMENTS, incidentDelivered, type IncidentSegment} from '../shared/trip-continuation-incident';
+  INCIDENT_OTHER_JOB_WITHOUT_DEADLINE, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentDelivered, incidentTripUuid, type IncidentSegment} from '../shared/trip-continuation-incident';
 import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
 import {MIGRATIONS,openStorage} from '../../packages/storage/src';
 import {ok,failed,digestOf,readOnly,STORAGE_FIXTURES,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
@@ -1786,6 +1786,54 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     const driven=await incident(await ws.open()),delivery=driven.last.close!,storage=await reopen(driven.storage);
     expect(ok(storage.commitEvent(delivery))).toMatchObject({status:'duplicate'});
     expect(ok(storage.commitEvent({...delivery,message:driven.last.script.redeliver(delivery.message)}))).toMatchObject({status:'duplicate'});
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips).toHaveLength(1);
+  });
+  /**
+   * ET-112b2b: the last process reads without proof through its delivery (its proof arrives only after the last reading),
+   * so its segment closes pending; the session's later in-process proof then resolves it.
+   */
+  async function delayedIncident(){
+    let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);drive(storage,INCIDENT_SEGMENTS[1]);storage=await reopen(storage);
+    const last=drive(storage,{...INCIDENT_SEGMENTS[2],profileFromMs:99_999});
+    const input={pluginSessionId:INCIDENT_SESSIONS[2],nextEventSeq:'3',profile:{...proof(last.script),scope,afterMonotonicNs:atNs(8_000)},sourceClockId:last.script.clockId,monotonicNs:atNs(8_000)};
+    return {storage,last,input};
+  }
+  /** Upload readiness of a raw trip's root, through the bounded projection preparation. */
+  function readiness(storage:Storage,uuid:string){
+    const pinId=`70000000-0000-4000-8000-${String(++pins).padStart(12,'0')}`;let state=ok(storage.beginUploadProjection({pinId,tripUuid:uuid}));
+    for(let turn=0;state.state==='preparing'&&turn<1000;turn++)state=ok(storage.advanceUploadProjection(pinId));
+    return state.projection?.rootReadiness;
+  }
+  let pins=0;
+  it('M4 continues the trip from a profile proof that arrives after the delivery: one delivered trip, its revenue once',async()=>{
+    const {storage,input}=await delayedIncident(),lastUuid=incidentTripUuid(2);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,lastUuid].sort());
+    expect(trip(storage,lastUuid)).toMatchObject({outcome:'delivered'});
+    // The closed pending segment is held from upload until it resolves.
+    expect(readiness(storage,lastUuid)).toBe('identity-pending');
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
+    expect(ok(storage.listTrips()).trips).toHaveLength(INCIDENT_EXPECTED.rawTrips);
+    const detail=validateJournalTripDetail(ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid)));
+    expect(detail.outcomeDetails?.record).toMatchObject({revenue:{available:true,value:{raw:'9978',sdkType:'s64'}},distance:{available:true,value:187342.01049804688,unit:'m'}});
+    // The last segment's quantities were recorded outside the trip's accounting chain: the trip is partial, without totals.
+    expect(detail.trip).toMatchObject({recordingCompleteness:'partial',observedDistanceM:{available:false,reason:'not-observed'},fuelUsedL:{available:false,reason:'not-observed'}});
+    expect(readiness(storage,INCIDENT_EXPECTED.rootTripUuid)).toBe('ready');
+    // The group's Hard Mode counts are the sums over its three raw members.
+    const counts=(details:unknown)=>{const d=details as {passingChecks:number;failingChecks:number;unknownChecks:number};return [d.passingChecks,d.failingChecks,d.unknownChecks];};
+    const sum=[0,1,2].map(index=>counts(ok(storage.getTrip(incidentTripUuid(index)))!.hardModeDetails)).reduce((a,b)=>a.map((value,index)=>value+b[index]));
+    expect(sum.every(Number.isSafeInteger)).toBe(true);expect(counts(detail.trip.hardModeDetails)).toEqual(sum);
+  });
+  it('M12 replays the resolve and the delivery without a second continuation or delivery',async()=>{
+    const {storage,last,input}=await delayedIncident(),delivery=last.close!;
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});
+    const journal=ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid));
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'none',resolved:0,remaining:0});
+    expect(ok(storage.commitEvent(delivery))).toMatchObject({status:'duplicate'});
+    expect(ok(storage.commitEvent({...delivery,message:last.script.redeliver(delivery.message)}))).toMatchObject({status:'duplicate'});
+    expect(ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid))).toEqual(journal);
     expectIncident(storage);
     expect(ok(storage.journalTrips()).trips).toHaveLength(1);
   });

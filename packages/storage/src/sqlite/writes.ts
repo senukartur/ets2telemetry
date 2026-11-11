@@ -1,7 +1,7 @@
 import {RULE_LOSSES} from './trailer-baselines';
 import {retainUploadDeletion} from './upload-discovery';
 import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
-import {admittedProfile, associate, decisionsEnabled, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
+import {admittedProfile, associate, decisionsEnabled, finalizePending, resolvePendingInSession, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
 import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../../contracts/src/hard-mode';
 // Write commands. Each command is one BEGIN IMMEDIATE transaction on the verified writer connection; a commit result
@@ -11,7 +11,7 @@ import {createHash} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {V1_MAX_MINOR, validateServerMessage, type Available, type EventRecord, type GapData, type ServerMessage, type SourceIdentity} from '../../../contracts/src/protocol-v1';
 import {
-  ACCOUNTING_PREDECESSOR_RESETS, MAX_EFFECTS, MAX_SAMPLE_BATCH, type AttachInput, type AttachResult, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type DeleteTripOptions, type EventReference, type SampleAppendOptions,
+  ACCOUNTING_PREDECESSOR_RESETS, MAX_EFFECTS, MAX_RESOLVE_MEMBERSHIPS, MAX_SAMPLE_BATCH, type ResolveMembershipsInput, type ResolveMembershipsResult, type AttachInput, type AttachResult, type CommitOptions, type CommitResult, type CompletenessInterval, type CompletenessOptions, type DeleteTripOptions, type EventReference, type SampleAppendOptions,
   type SampleAppendResult, type SampleInput, type TripEffect, type Uint64
 } from '../api';
 import {
@@ -87,7 +87,9 @@ export function upsertSession(conn: StorageConnection, input: {message: unknown}
       return {created: false, committedThroughEventSeq: fromU64Key(existing.committed_through_event_seq)};
     }
     const columns = ['plugin_session_uuid', ...Object.keys(values), 'protocol_major', 'game_mode', 'game_mode_method', 'game_mode_confidence', 'game_mode_module', 'game_mode_module_state', 'committed_through_event_seq', 'first_seen_utc_ms'];
-    statement(db, insert('plugin_sessions', columns)).run(s.pluginSessionId, ...Object.values(values), 1n, d.gameMode.mode, d.gameMode.method, d.gameMode.confidence, module, moduleState, u64Key(0n), conn.now());
+    const id = statement(db, insert('plugin_sessions', columns)).run(s.pluginSessionId, ...Object.values(values), 1n, d.gameMode.mode, d.gameMode.method, d.gameMode.confidence, module, moduleState, u64Key(0n), conn.now()).lastInsertRowid;
+    // Schema 9: a new process of the game ends every earlier one, so their closed pending segments can no longer resolve.
+    finalizePending(db, s.game, BigInt(id), 64);
     return {created: true, committedThroughEventSeq: '0'};
   });
 }
@@ -135,8 +137,9 @@ function advanceCoverage(db: Database.Database, session: SessionRow, first: bigi
 
 /**
  * Schema 9: raises the session's profile boundary to `throughKey`, an eventSeq key of that session, in the committing
- * transaction. A boundary is a timers.restart or gameTime.regression event, a newly stored gap (through its lastEventSeq)
- * or a verified profile-change attach (its nextEventSeq); it never moves back, so out-of-order commits keep the highest.
+ * transaction. A boundary is a timers.restart or gameTime.regression event, a newly stored gap (through its lastEventSeq),
+ * a verified profile-change attach (its nextEventSeq) or a profileChange trip.close (its close carrier); it never moves
+ * back, so out-of-order commits keep the highest.
  */
 function markProfileBoundary(db: Database.Database, session: bigint, throughKey: string): void {
   if (!decisionsEnabled(db)) return;
@@ -274,6 +277,8 @@ function applyEffects(c: EffectContext, effects: unknown): void {
       case 'trip.close': {
         const trip = tripRow(c, effect.tripUuid), outcome = enumValue(effect.outcome, OUTCOMES);
         if (trip.outcome !== 'open') fail('INVALID_INPUT');
+        // A profile-switch close is exactly a different-job close without an outcome.
+        if (effect.profileChange !== undefined && (effect.profileChange !== true || outcome !== 'none' || effect.closeReason !== 'different-job')) fail('INVALID_INPUT');
         // PR-7 review round 1: an attach carries only closes of earlier plugin sessions' trips (restart). A close of a trip
         // of this session would record carrier (session, nextEventSeq), which the journal would read as the next live event.
         if (c.attachJobRef !== undefined && statement(c.db, 'SELECT plugin_session_ref FROM trips WHERE id = ?').pluck().get(trip.id) === c.session.id) {
@@ -297,6 +302,8 @@ function applyEffects(c: EffectContext, effects: unknown): void {
             c.session.id, c.carrierEventSeq, trip.id);
         // Schema 9: the membership decision keeps the same carrier, so a later profile boundary can be compared with it.
         if (decisionsEnabled(c.db)) statement(c.db, 'UPDATE logical_membership_decisions SET raw_closed_event_seq = ? WHERE trip_ref = ?').run(c.carrierEventSeq, trip.id);
+        // The switched trip's close carrier is the boundary itself, so the trip has crossed it (through >= raw close).
+        if (effect.profileChange) markProfileBoundary(c.db, c.session.id, c.carrierEventSeq);
         break;
       }
       case 'event.attribute': {
@@ -355,6 +362,8 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
     if (record.type === 'timers.restart' || record.type === 'gameTime.regression') markProfileBoundary(db, session.id, seqKey);
     const through = advanceCoverage(db, session, BigInt(eventSeq), BigInt(eventSeq));
     projectSessionBounds(db,session.id);
+    // The rest of a finalization that one welcome could not finish, a few rows per commit.
+    finalizePending(db, session.game, session.id, 8);
     options.testHooks?.beforeCommit?.();
     return {status: 'committed', committedThroughEventSeq: through};
   });
@@ -408,6 +417,7 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     projectEffects(db, input.effects);
     // Every stored gap reaches beyond the coverage, so it has a new suffix.
     markProfileBoundary(db, session.id, lastKey);
+    finalizePending(db, session.game, session.id, 8);
     const through = advanceCoverage(db, session, BigInt(d.firstEventSeq), BigInt(d.lastEventSeq));
     projectSessionBounds(db,session.id);
     options.testHooks?.beforeCommit?.();
@@ -652,6 +662,29 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
     }
     options.testHooks?.beforeCommit?.();
     return {status: 'committed'};
+  });
+}
+
+const RESOLVE_INPUT_KEYS = 'monotonicNs,nextEventSeq,pluginSessionId,profile,sourceClockId';
+/**
+ * Schema 9 (ET-112b2b): resolves the session's closed pending membership decisions with a later admitted in-process
+ * proof, at most MAX_RESOLVE_MEMBERSHIPS in one transaction (ResolveMembershipsInput). `nextEventSeq` must follow the
+ * committed coverage, as an observation's does, and the proof must be admitted for the session at `monotonicNs`. Below
+ * schema 9 nothing is pending, and a replay finds nothing left: both are `none`. No event, coverage or ACK changes.
+ */
+export function resolvePendingMemberships(conn: StorageConnection, input: ResolveMembershipsInput, options: CommitOptions = {}): ResolveMembershipsResult {
+  if (!plainRecord(input) || keysOf(input) !== RESOLVE_INPUT_KEYS || !isUuid(input.sourceClockId)) fail('INVALID_INPUT');
+  sampleMonotonicNs(input.monotonicNs);
+  u64Key(input.nextEventSeq);
+  return transact(conn, db => {
+    const session = sessionByUuid(db, input.pluginSessionId);
+    if (!decisionsEnabled(db)) { options.testHooks?.beforeCommit?.(); return {status: 'none', resolved: 0, remaining: 0}; }
+    if (BigInt(input.nextEventSeq) !== BigInt(fromU64Key(session.committed_through_event_seq)) + 1n) fail('INVALID_INPUT');
+    const proof = admittedProfile(input.profile, {game: session.game, processInstanceId: session.process_instance_uuid, pluginSessionId: input.pluginSessionId}, input.sourceClockId, input.monotonicNs);
+    if (!proof) fail('INVALID_INPUT');
+    const {resolved, remaining} = resolvePendingInSession(db, session.id, proof, undefined, MAX_RESOLVE_MEMBERSHIPS);
+    options.testHooks?.beforeCommit?.();
+    return {status: resolved > 0 ? 'resolved' : 'none', resolved, remaining};
   });
 }
 

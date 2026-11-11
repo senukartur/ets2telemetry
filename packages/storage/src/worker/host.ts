@@ -92,6 +92,11 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
       const {pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid,endpoint} = command.input;
       return storage.openAttachedTrip({pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid,endpoint});
     }
+    // ET-112b2b: only the five parsed input fields are forwarded.
+    case 'resolvePendingMemberships': {
+      const {pluginSessionId, nextEventSeq, profile, sourceClockId, monotonicNs} = command.input;
+      return storage.resolvePendingMemberships({pluginSessionId, nextEventSeq, profile, sourceClockId, monotonicNs});
+    }
     case 'observeHardMode': return storage.observeHardMode(command.game, command.observation, command.fresh);
     case 'committedThrough': return storage.committedThrough(command.pluginSessionId);
     case 'getSession': return storage.getSession(command.pluginSessionId);

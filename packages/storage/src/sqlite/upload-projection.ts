@@ -13,6 +13,7 @@ import type {StorageConnection} from './connection';
 import {jobValues} from './journal';
 import {snapshot, type LogicalSnapshot} from './logical-snapshot';
 import {ACCOUNTING_PATH, encodeRow, decodeRow, type LogicalRow} from './logical-trips';
+import {decisionState, identityPending, rootBound} from './identity-pending';
 
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
 const all = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as LogicalRow[];
@@ -27,7 +28,7 @@ function current(db: Database.Database, requested: string): {root: string; readi
     JOIN trips t ON t.id=l.id JOIN logical_memberships m ON m.trip_ref=l.id WHERE l.id=?`,member.logical_ref));
   // An abandoned singleton is retired too. Self-membership must be established before considering retirement/proof.
   if (root.logical_ref !== member.logical_ref) fail('DATABASE_CORRUPT');
-  return {root: String(root.trip_uuid), readiness: root.proof_json !== null || root.retired === 1n || root.outcome !== 'open' ? 'ready' : 'identity-pending'};
+  return {root: String(root.trip_uuid), readiness: identityPending(root, decisionState(db, member.logical_ref), rootBound(db, member.logical_ref)) ? 'identity-pending' : 'ready'};
 }
 function versions(row: LogicalRow): UploadVersions {
   return {nativeProtocol: {major: 1, minor: n(row.protocol_minor)}, sdkArchive: {available:true,value:String(row.sdk_archive)},
