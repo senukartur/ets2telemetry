@@ -78,8 +78,9 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   if (decisions && row.outcome === 'open' && membership.proof_json === null) pendingDecision(db, row);
   if (!proof || group.retired === 1n || row.outcome !== 'open') return id;
   // I4: the same admitted proof first resolves the session's earlier closed pending segments, oldest first; while any is
-  // left, this segment stays pending too, so its own decision always sees its resolved predecessors.
-  if (decisions && resolvePendingInSession(db, row.plugin_session_ref as bigint, proof, row.id as bigint, 8).remaining > 0 && membership.proof_json === null) return id;
+  // left, this segment stays pending too, so its own decision always sees its resolved predecessors. It runs only while
+  // this segment is undecided: once its proof is stored, every earlier segment of the session was already resolved.
+  if (decisions && membership.proof_json === null && resolvePendingInSession(db, row.plugin_session_ref as bigint, proof, row.id as bigint, 8).remaining > 0) return id;
   const recordedJob=job(db,row),known=JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
   const recorded=learnContinuationConstraints(known,recordedJob);
   const learned = recorded===null?null:learnContinuationConstraints(recorded,currentJob);
@@ -180,13 +181,8 @@ export function resolveClosed(db: Database.Database, tripRef: bigint, proof: Pro
     return 'separate';
   }
   if (decision.state === 'root') {
-    if (decision.interrupt) {
-      // b1's replacement rule, limited to groups whose latest member precedes S, so a later recording is never interrupted
-      // by a decision that the live rule would have made before that recording existed.
-      const previous = db.prepare('SELECT id FROM logical_trips WHERE game = ? AND profile_scope = ? AND retired = 0 AND id <> ? AND latest_trip_ref < ? ORDER BY id').pluck().all(row.game, proof.scope, id, id) as bigint[];
-      for (const ref of previous) db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 1 WHERE id = ?').run(ref);
-      for (const ref of previous) revise(db, ref);
-    }
+    // A retroactive root retires no other trip (decideRetroactive): the later proof does not verify S's profile at the
+    // time S was recorded, and only complete, live, verified evidence replaces other unresolved trips.
     db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), id);
     db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?, canonical_constraints = ? WHERE id = ?').run(proof.scope, decision.fingerprint, JSON.stringify(learned ?? recorded ?? known), id);
     recordDecision(db, id, 'root', decision.reason, null);

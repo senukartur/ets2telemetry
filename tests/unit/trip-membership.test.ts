@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {compatibleContinuation, continuationFingerprint, continuationIdentityFingerprint} from '../../packages/telemetry-core/src/trips/continuation';
-import {decideMembership, decideRetroactive, retroactiveGate, type MembershipCandidate, type MembershipDecision, type MembershipEvidence, type RetroactiveFacts,
+import {decideMembership, decideRetroactive, retroactiveGate, type MembershipCandidate, type MembershipDecision, type MembershipEvidence, type RetroactiveDecision, type RetroactiveFacts,
   type RetroactiveSeparate} from '../../packages/telemetry-core/src/trips/membership';
 import {INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB} from '../shared/trip-continuation-incident';
 
@@ -79,11 +79,11 @@ describe('REG-005/REG-008 retroactive resolution of a closed pending segment', (
     expect(decide({}, {A: 9n})).toEqual(separate('out-of-order'));
   });
   it.each([
-    ['no candidate', {candidates: []}, {state: 'root', reason: 'no-candidate', fingerprint: F, interrupt: true}],
-    ['two candidates', {candidates: [match('A'), match('B')]}, {state: 'root', reason: 'ambiguous-candidates', fingerprint: F, interrupt: true}],
+    ['no candidate', {candidates: []}, {state: 'root', reason: 'no-candidate', fingerprint: F, interrupt: false}],
+    ['two candidates', {candidates: [match('A'), match('B')]}, {state: 'root', reason: 'ambiguous-candidates', fingerprint: F, interrupt: false}],
     ['an incomplete recorded job', {recordedJob: missingCargo}, {state: 'root', reason: 'recorded-job-incomplete', fingerprint: null, interrupt: false}],
-    ['inconsistent learned offer fields', {consistent: false}, {state: 'root', reason: 'job-evidence-conflict', fingerprint: null, interrupt: true}]
-  ] as [string, Parameters<typeof decide>[0], MembershipDecision<string>][])('decides %s as a root', (_name, overrides, expected) => {
+    ['inconsistent learned offer fields', {consistent: false}, {state: 'root', reason: 'job-evidence-conflict', fingerprint: null, interrupt: false}]
+  ] as [string, Parameters<typeof decide>[0], RetroactiveDecision<string>][])('decides %s as a root that interrupts no other trip', (_name, overrides, expected) => {
     expect(decide(overrides)).toEqual(expected);
   });
   it('returns the gate result before any candidate is considered', () => {

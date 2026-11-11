@@ -275,6 +275,22 @@ describe('ET-112b2b profile-switch boundaries and retroactive decisions', () => 
     expect(JSON.parse(String(proofOfTrip(db, 2))).scope).toBe(otherScope);
     expect(members(db, 1)).toEqual([1]);
   });
+  it('decides a segment after a profile switch with no trip open and no boundary event under the later profile, and interrupts no other trip', async () => {
+    const {storage, db} = await openDirect(), a = new Script(ETS2_A), b = new Script(ETS2_B), first = openTrip(storage, a, true, INCIDENT_JOB);
+    // J1 of profile Y stays unresolved: the next session's first event closes it by restart, which is no boundary of that session.
+    ok(storage.upsertSession({message: b.welcome()}));
+    ok(storage.commitEvent({message: b.event(r.started()), effects: [{kind: 'trip.close', tripUuid: first, outcome: 'none', closeReason: 'restart', recordingCompleteness: 'partial', endedUtcMs: 2000}]}));
+    // Known limit: a switch to profile X with no trip open and no boundary event is not observable, so S, recorded under X
+    // without proof, is decided by the later proof of profile Y.
+    const configured = b.event(r.jobConfigured(INCIDENT_OTHER_JOB)), segment = tripUuidFor(b.session, configured.data.eventSeq);
+    ok(storage.commitEvent({message: configured, effects: [{kind: 'trip.open', tripUuid: segment, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', startedUtcMs: 2000,
+      recordingCompleteness: 'complete'}]}));
+    deliver(storage, b, segment);
+    expect(ok(resolve(storage, b, 4))).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    expect(decisions(db)).toEqual([row(1, 1, 'root', 'no-candidate', 1), row(2, 2, 'root', 'no-candidate', 3)]);
+    // The J1 trip of profile Y stays unresolved: a retroactive root never interrupts it.
+    expect(plain(db.prepare('SELECT retired, interrupted FROM logical_trips WHERE id = 1').get() as Record<string, unknown>)).toEqual({retired: 0, interrupted: 0});
+  });
   it('M8 joins a cancelled segment into its trip and keeps one cancellation with its penalty', async () => {
     const {storage, db} = await openDirect();
     const root = drive(storage, S1); drive(storage, S2); drive(storage, late(), {end: 'cancelled'});

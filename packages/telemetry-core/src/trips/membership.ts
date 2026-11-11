@@ -50,6 +50,10 @@ export function decideMembership<T>(evidence: MembershipEvidence<T>): Membership
 
 /** A closed pending segment that a later proof can no longer resolve; it stays its own singleton for good. */
 export type RetroactiveSeparate = {state: 'separate'; reason: 'process-ended' | 'profile-boundary' | 'published' | 'out-of-order'};
+/** A retroactive root: the live root with the same reason and fingerprint, which never interrupts other trips. */
+export type RetroactiveRoot<T> = Extract<MembershipDecision<T>, {state: 'root'}> extends infer R ? R extends {state: 'root'} ? Omit<R, 'interrupt'> & {interrupt: false} : never : never;
+/** The result of decideRetroactive. */
+export type RetroactiveDecision<T> = Exclude<MembershipDecision<T>, {state: 'root'}> | RetroactiveRoot<T> | RetroactiveSeparate;
 /** What storage knows about a closed pending segment S when a later in-process proof arrives. */
 export interface RetroactiveFacts {
   /** S was closed by a commit of its own plugin session; a close carried by a later session means the process ended. */
@@ -82,12 +86,15 @@ export function retroactiveGate(facts: RetroactiveFacts): RetroactiveSeparate | 
  * Decides a closed pending segment from a later admitted proof of its own session. After the gate, the live rules decide
  * with the recorded job as the current reading, since a closed raw trip has no later reading. A join is allowed only into
  * a target whose latest member precedes the segment (`latest(target) < segment`); otherwise the segment stays separate.
+ * A root never interrupts other trips: a proof that arrives after S closed does not verify S's own profile at that time
+ * (a profile switch with no trip open and no boundary event is not observable), and only complete, live, verified
+ * evidence retires other trips. A later live proof-bearing trip of another job still interrupts them.
  */
 export function decideRetroactive<T>(facts: RetroactiveFacts, evidence: {recordedJob: JobConfiguration; consistent: boolean; candidates: readonly MembershipCandidate<T>[]},
-  latest: (target: T) => bigint, segment: bigint): MembershipDecision<T> | RetroactiveSeparate {
+  latest: (target: T) => bigint, segment: bigint): RetroactiveDecision<T> {
   const gate = retroactiveGate(facts);
   if (gate) return gate;
   const decision = decideMembership({profileVerified: true, recordedJob: evidence.recordedJob, currentJob: evidence.recordedJob, consistent: evidence.consistent, candidates: evidence.candidates});
   if (decision.state === 'joined' && latest(decision.target) >= segment) return {state: 'separate', reason: 'out-of-order'};
-  return decision;
+  return decision.state === 'root' ? {...decision, interrupt: false} : decision;
 }
