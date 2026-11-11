@@ -1,6 +1,8 @@
 // Child process of tests/storage/crash-recovery.test.ts, run under the pinned Electron runtime in Node mode with the
 // storage test bundles (scripts/build-storage-test-bundles.mjs). It commits a prepared synthetic stream and writes
 // "ack <lastEventSeq> <committedThrough>" to stdout after each commit result, the point where a consumer would ACK.
+// A stream item of kind `resolve` (ET-112b2b) sends its `input` to resolvePendingMemberships instead and writes
+// "resolve <status> <resolved> <remaining>"; `killAt` applies to it like to a commit.
 // Modes:
 //   before-commit  in-process storage core; the process terminates itself inside the transaction of item `killAt`
 //   after-commit   storage worker; the process terminates itself after item `killAt` committed, before its ack line
@@ -36,6 +38,11 @@ async function inProcess() {
   await write('ready');
   for (const [index, item] of config.stream.entries()) {
     const options = index === config.killAt ? {testHooks: {beforeCommit: terminate}} : undefined;
+    if (item.kind === 'resolve') {
+      const value = must(storage.resolvePendingMemberships(item.input, options));
+      await write(`resolve ${value.status} ${value.resolved} ${value.remaining}`);
+      continue;
+    }
     const input = {message: item.message, effects: item.effects};
     const result = must(item.kind === 'gap' ? storage.commitGap(input, options) : storage.commitEvent(input, options));
     await write(`ack ${item.last} ${result.committedThroughEventSeq}`);
@@ -50,6 +57,12 @@ async function viaWorker() {
   must(await client.upsertSession({message: config.welcome}));
   await write('ready');
   for (const [index, item] of config.stream.entries()) {
+    if (item.kind === 'resolve') {
+      const value = must(await client.resolvePendingMemberships(item.input));
+      if (mode === 'after-commit' && index === config.killAt) terminate();
+      await write(`resolve ${value.status} ${value.resolved} ${value.remaining}`);
+      continue;
+    }
     const input = {message: item.message, effects: item.effects};
     const result = must(await (item.kind === 'gap' ? client.commitGap(input) : client.commitEvent(input)));
     if (mode === 'after-commit' && index === config.killAt) terminate();
