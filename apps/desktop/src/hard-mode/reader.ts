@@ -449,7 +449,8 @@ export class HardModeReader {
     const root = await realpath(process.homeDirectory ?? (override ? override[1] ?? override[2] : path.join(this.options.documents, source.game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator')));
     this.generation(work);
     if (bound?.process === processKey && bound.root !== root) this.invalidate();
-    // A log admitted for this lifetime is bound to it: failing to read its continuation is a change, not a new generation.
+    // Diagnostics only: any read failure of a log already admitted for this lifetime reports PROFILE_LOG_CHANGED, whether
+    // the tail detected replacement or truncation or the read failed with an I/O error.
     const previous = this.previous;
     stage = previous?.process === processKey ? 'PROFILE_LOG_CHANGED' : 'PROFILE_LOG_GENERATION';
     if (this.tail?.process !== processKey) this.tail = {process: processKey, value: new ProfileLogTail()};

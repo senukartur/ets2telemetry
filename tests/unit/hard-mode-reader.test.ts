@@ -1167,6 +1167,21 @@ describe('ET-112a current game log generation (REG-003/008/012)', () => {
     }
     expect((await r.read(later, '1', at, signal)).assessment.state).toBe('pass'); expect(inspect).toHaveBeenCalledTimes(2);
   });
+  it.each(['keeps', 'removes'] as const)('retires an admitted tail log truncated in place beyond its header prefix once and re-verifies it when the truncation %s the ordered load', async variant => {
+    // More than the 8 KiB header prefix, so the truncation leaves that prefix intact.
+    const filler = ('00:00:01.500 : Synthetic filler ' + 'x'.repeat(100) + '\n').repeat(100), prefix = variant === 'keeps' ? INCIDENT_HEADER + selection + save() + filler : INCIDENT_HEADER + filler;
+    await writeFile(logFile(), prefix + (variant === 'keeps' ? '00:00:04.000 : Ordinary current-session line\n'.repeat(20) : selection + save()));
+    const inspect = processAt(P), r = ownedReader({documents: documents(), process: inspect}), signal = new AbortController().signal, before = await stat(logFile(), {bigint: true});
+    expect((await r.read(source, '1', INCIDENT_OBSERVED_MS, signal)).assessment.state).toBe('pass');
+    await writeFile(logFile(), prefix); const after = await stat(logFile(), {bigint: true});
+    expect(after.ino).toBe(before.ino); expect(after.birthtimeNs).toBe(before.birthtimeNs); expect(after.size < before.size).toBe(true);
+    expect(await outcome(r.read(source, '2', INCIDENT_OBSERVED_MS, signal))).toBe('PROFILE_LOG_CHANGED');
+    if (variant === 'removes') {
+      expect(await outcome(r.read(source, '3', INCIDENT_OBSERVED_MS, signal))).toBe('PROFILE_SELECTION_UNPROVEN');
+      await appendFile(logFile(), selection + save());
+    }
+    expect((await r.read(source, '4', INCIDENT_OBSERVED_MS, signal)).assessment.state).toBe('pass'); expect(inspect).toHaveBeenCalledOnce();
+  });
   it.each([['inside the former five-second window', generationHeader('01:31:02')], ['delayed 5,114 ms', INCIDENT_HEADER]])('recovers at the next scheduled guard when a stale log is rewritten in place with a header %s', async (_label, current) => {
     vi.useFakeTimers(); vi.setSystemTime(INCIDENT_OBSERVED_MS); let now = 0n, done = gate();
     await writeFile(logFile(), PREVIOUS_SESSION_HEADER + selection + save()); const before = await stat(logFile(), {bigint: true});
