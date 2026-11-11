@@ -509,6 +509,8 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     sinkOk(await sink.checkpoint(mid));sinkOk(sink.observe(mid,{receivedUtcMs:3000}));
     await feed(r.timersRestart(),'paused');const resent=await feed(r.jobConfigured(),'paused'),root=tripUuidFor(s.session,resent.data.eventSeq);
     await feed(r.started());await feed(r.fined());await feed(r.delivered());
+    // D9: the unproven delivered root stays pending until the next session of the game finalizes it, then it is ready.
+    ok(await client.upsertSession({message:gameShaped(new Script(ETS2_B).welcome())}));
     expect(root).not.toBe(original);const {pin,snapshot}=await projected(client,root);
     expect(pin.totals.members).toBe(1);expect(pin.facts.moneyIncomplete).toBe(false);
     const detail=ok(await client.journalIntervals(root,{limit:100}));expect(JSON.stringify(detail)).toContain('not-merged');
