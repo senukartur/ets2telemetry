@@ -8,13 +8,14 @@ import path from 'node:path';
 import os from 'node:os';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {hardModeFixtureOptions} from '../../apps/desktop/src/hard-mode/fixture';
-import {HardModeReader, FileEvidenceError, ProfileSuperseded, UnchangedVerificationError, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
+import {HardModeReader, FileEvidenceError, ProfileSuperseded, ProfileVerificationError, UnchangedVerificationError, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {hardModeView} from '../../apps/desktop/src/hard-mode/view';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
+import {INCIDENT_HEADER, INCIDENT_OBSERVED_MS, INCIDENT_PROCESS_CREATED_MS, PREVIOUS_SESSION_HEADER, PROFILE_LOG_GENERATION_CASES, generationHeader} from '../shared/profile-log-generation';
 import {advanceHardModeV2, newHardModeDetails, qualifiesHardMode, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 const source: SourceIdentity = {game: 'ets2', origin: 'game', processId: 123, windowsSessionId: 1, processInstanceId: '10000000-0000-4000-8000-000000000001', pluginSessionId: '20000000-0000-4000-8000-000000000001'};
 const name = 'Synthetic Профиль', id = Buffer.from(name).toString('hex').toUpperCase();
@@ -1126,5 +1127,103 @@ describe('ET-026 isolated reader (REG-008/010/011)', () => {
     await vi.advanceTimersByTimeAsync(2001); expect(m.status().assessment.state).toBe('unknown'); void m.refresh(); expect(scan).toHaveBeenCalledTimes(1);
     finish({assessment: m.status().assessment, binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});
     await vi.advanceTimersByTimeAsync(0); m.close();
+  });
+});
+describe('ET-112a current game log generation (REG-003/008/012)', () => {
+  const P = INCIDENT_PROCESS_CREATED_MS, documents = () => path.join(root, 'Documents'), logFile = () => path.join(game, 'game.log.txt');
+  const processAt = (createdUtcMs: number) => vi.fn((s: SourceIdentity) => Promise.resolve({pid: s.processId, createdUtcMs, executable: 'C:\\Synthetic\\eurotrucks2.exe', commandLine: 'eurotrucks2.exe'}));
+  const outcome = (work: Promise<unknown>) => work.then(() => 'admitted', (error: unknown) => error instanceof ProfileVerificationError ? error.code : 'unclassified');
+  const later = {...source, processId: 456, processInstanceId: '10000000-0000-4000-8000-000000000002', pluginSessionId: '20000000-0000-4000-8000-000000000002'};
+  it.each(PROFILE_LOG_GENERATION_CASES)('$scenario tail generation, $origin: $name is $expected', async fixture => {
+    await writeFile(logFile(), fixture.header + selection + save());
+    const inspect = processAt(fixture.processCreatedUtcMs), signal = new AbortController().signal;
+    const settings = ownedReader({documents: documents(), process: inspect}), identity = ownedReader({documents: documents(), process: inspect});
+    expect(await outcome(settings.read(source, '1', fixture.atUtcMs, signal))).toBe(fixture.expected);
+    expect(await outcome(identity.resolveProfile(source, fixture.atUtcMs, signal))).toBe(fixture.expected);
+    expect(inspect).toHaveBeenCalledTimes(2);
+  });
+  it('admits the incident delay for Hard Mode and profile association through one shared reader and one inspection', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(INCIDENT_OBSERVED_MS); let now = 0n; const completed = gate();
+    await writeFile(logFile(), INCIDENT_HEADER + selection + save());
+    const inspect = processAt(P), r = ownedReader({documents: documents(), process: inspect, nowNs: () => now}), observer = ownedObserver(() => r, () => now, false);
+    const m = ownedMonitor((s, ns, at, signal) => observer.readSettings(r, s, ns, at, signal).finally(() => completed.resolve()), undefined, () => now), current = {source, clockId: 'clock', monotonicNs: '1'};
+    try {
+      observer.select(current); m.select(current); await completed.promise; await observer.refresh(); now = 1n;
+      const bound = {...current, boundary: {clockId: 'clock', probeSentClientNs: '1', receivedSourceNs: '2'}}; observer.select(bound); m.select(bound); await m.refresh();
+      expect(m.evidence().assessment.state).toBe('pass');
+      expect(observer.evidence()).toMatchObject({binding: m.evidence().binding, loadGeneration: 2, afterMonotonicNs: '3'}); expect(inspect).toHaveBeenCalledOnce();
+    } finally {m.close(); observer.close();}
+  });
+  it.each(['tail', 'file'] as const)('keeps a replaced current-looking log rejected for the bound %s lifetime and admits it for a later lifetime', async mode => {
+    await writeFile(logFile(), INCIDENT_HEADER + selection + save());
+    const inspect = vi.fn((s: SourceIdentity) => Promise.resolve({pid: s.processId, createdUtcMs: s.processId === source.processId ? P : P + 19_114, executable: 'C:\\Synthetic\\eurotrucks2.exe', commandLine: 'eurotrucks2.exe'}));
+    const r = ownedReader({documents: documents(), process: inspect, ...(mode === 'file' ? {file: readStableFile} : {})}), at = P + 60_000, signal = new AbortController().signal;
+    expect((await r.read(source, '1', at, signal)).assessment.state).toBe('pass');
+    // A later game start (or another writer) replaces the file with a header 20 s after this process started.
+    await rename(logFile(), path.join(game, 'replaced.log.txt')); await writeFile(logFile(), generationHeader('01:31:21') + selection + save());
+    for (let guard = 0; guard < 2; guard++) {
+      expect(await outcome(r.read(source, '1', at, signal))).toBe('PROFILE_LOG_CHANGED');
+      expect(await outcome(r.resolveProfile(source, at, signal, true))).toBe('PROFILE_LOG_CHANGED');
+    }
+    expect((await r.read(later, '1', at, signal)).assessment.state).toBe('pass'); expect(inspect).toHaveBeenCalledTimes(2);
+  });
+  it.each(['keeps', 'removes'] as const)('retires an admitted tail log truncated in place beyond its header prefix once and re-verifies it when the truncation %s the ordered load', async variant => {
+    // More than the 8 KiB header prefix, so the truncation leaves that prefix intact.
+    const filler = ('00:00:01.500 : Synthetic filler ' + 'x'.repeat(100) + '\n').repeat(100), prefix = variant === 'keeps' ? INCIDENT_HEADER + selection + save() + filler : INCIDENT_HEADER + filler;
+    await writeFile(logFile(), prefix + (variant === 'keeps' ? '00:00:04.000 : Ordinary current-session line\n'.repeat(20) : selection + save()));
+    const inspect = processAt(P), r = ownedReader({documents: documents(), process: inspect}), signal = new AbortController().signal, before = await stat(logFile(), {bigint: true});
+    expect((await r.read(source, '1', INCIDENT_OBSERVED_MS, signal)).assessment.state).toBe('pass');
+    await writeFile(logFile(), prefix); const after = await stat(logFile(), {bigint: true});
+    expect(after.ino).toBe(before.ino); expect(after.birthtimeNs).toBe(before.birthtimeNs); expect(after.size < before.size).toBe(true);
+    expect(await outcome(r.read(source, '2', INCIDENT_OBSERVED_MS, signal))).toBe('PROFILE_LOG_CHANGED');
+    if (variant === 'removes') {
+      expect(await outcome(r.read(source, '3', INCIDENT_OBSERVED_MS, signal))).toBe('PROFILE_SELECTION_UNPROVEN');
+      await appendFile(logFile(), selection + save());
+    }
+    expect((await r.read(source, '4', INCIDENT_OBSERVED_MS, signal)).assessment.state).toBe('pass'); expect(inspect).toHaveBeenCalledOnce();
+  });
+  it.each([['inside the former five-second window', generationHeader('01:31:02')], ['delayed 5,114 ms', INCIDENT_HEADER]])('recovers at the next scheduled guard when a stale log is rewritten in place with a header %s', async (_label, current) => {
+    vi.useFakeTimers(); vi.setSystemTime(INCIDENT_OBSERVED_MS); let now = 0n, done = gate();
+    await writeFile(logFile(), PREVIOUS_SESSION_HEADER + selection + save()); const before = await stat(logFile(), {bigint: true});
+    const inspect = processAt(P), r = ownedReader({documents: documents(), process: inspect, nowNs: () => now}), observer = ownedObserver(() => r, () => now, false);
+    const m = ownedMonitor((s, ns, at, signal) => observer.readSettings(r, s, ns, at, signal).then(value => {done.resolve(); return value;}, error => {done.resolve(); throw error;}), undefined, () => now);
+    const initial = {source, clockId: 'clock', monotonicNs: '1'};
+    try {
+      observer.select(initial); m.select(initial); await done.promise; await observer.refresh();
+      expect(m.evidence().assessment.state).toBe('unknown'); expect(observer.evidence()).toBeUndefined(); expect(observer.status().phase).toBe('unavailable');
+      // The game truncates and rewrites the same file; it grows past the rejected prefix before the next guard.
+      await writeFile(logFile(), current + selection + save() + '00:00:03.000 : Ordinary current-session line\n');
+      const after = await stat(logFile(), {bigint: true}); expect(after.ino).toBe(before.ino); expect(after.size > before.size).toBe(true);
+      now = 5_000_000_000n; done = gate(); const scheduled = m.refresh(); await done.promise; await observer.refresh(); now++;
+      const bound = {...initial, boundary: {clockId: 'clock', probeSentClientNs: now.toString(), receivedSourceNs: '2'}}; observer.select(bound); m.select(bound); await scheduled;
+      expect(m.evidence().assessment.state).toBe('pass'); expect(observer.evidence()).toMatchObject({loadGeneration: 2}); expect(inspect).toHaveBeenCalledOnce();
+    } finally {m.close(); observer.close();}
+  });
+  it('counts the scheduled unknown check, adds none for Check again and exactly one for the next scheduled guard', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(INCIDENT_OBSERVED_MS); let now = 0n, done = gate(); const publications: HardModeObservation[] = [];
+    await writeFile(logFile(), PREVIOUS_SESSION_HEADER + selection + save());
+    const inspect = processAt(P), r = ownedReader({documents: documents(), process: inspect, nowNs: () => now}), observer = ownedObserver(() => r, () => now, false);
+    const m = ownedMonitor((s, ns, at, signal, force) => observer.readSettings(r, s, ns, at, signal, force).then(value => {done.resolve(); return value;}, error => {done.resolve(); throw error;}),
+      value => publications.push(value), () => now, () => r.requestFull());
+    const checks = () => publications.filter(value => value.check).map(value => [value.check!.sequence, value.assessment.state]), initial = {source, clockId: 'clock', monotonicNs: '1'};
+    try {
+      observer.select(initial); m.select(initial); await done.promise; await observer.refresh();
+      expect(checks()).toEqual([[1, 'unknown']]);
+      await writeFile(logFile(), INCIDENT_HEADER + selection + save() + '00:00:03.000 : Ordinary current-session line\n');
+      now = 1_000_000_000n; done = gate(); const manual = m.refresh(true); await done.promise; await observer.refresh(); now++;
+      m.select({...initial, boundary: {clockId: 'clock', probeSentClientNs: now.toString(), receivedSourceNs: '2'}}); await manual;
+      expect(m.evidence().assessment.state).toBe('pass'); expect(checks()).toEqual([[1, 'unknown']]);
+      now = 5_000_000_000n; done = gate(); const scheduled = m.refresh(); await done.promise; await scheduled;
+      expect(m.evidence().assessment.state).toBe('pass'); expect(checks()).toEqual([[1, 'unknown'], [2, 'pass']]); expect(inspect).toHaveBeenCalledOnce();
+    } finally {m.close(); observer.close();}
+  });
+  it('requires the ordered save load after a delayed header and rejects a save for another selection', async () => {
+    const signal = new AbortController().signal, r = ownedReader({documents: documents(), process: processAt(P)});
+    await writeFile(logFile(), INCIDENT_HEADER + selection);
+    expect(await outcome(r.read(source, '1', INCIDENT_OBSERVED_MS, signal))).toBe('PROFILE_SELECTION_UNPROVEN');
+    await appendFile(logFile(), save());
+    expect((await r.read(source, '2', INCIDENT_OBSERVED_MS, signal)).assessment.state).toBe('pass');
+    await writeFile(logFile(), INCIDENT_HEADER + selection + save().replace(id, Buffer.from('Other').toString('hex').toUpperCase()));
+    expect(await outcome(ownedReader({documents: documents(), process: processAt(P)}).read(source, '3', INCIDENT_OBSERVED_MS, signal))).toBe('PROFILE_SELECTION_UNPROVEN');
   });
 });

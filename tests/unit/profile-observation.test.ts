@@ -5,6 +5,7 @@ import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {HardModeReader} from '../../apps/desktop/src/hard-mode/reader';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
+import {INCIDENT_HEADER,INCIDENT_OBSERVED_MS,INCIDENT_PROCESS_CREATED_MS,PREVIOUS_SESSION_HEADER} from '../shared/profile-log-generation';
 
 const source: SourceIdentity={game:'ets2',origin:'game',processId:123,windowsSessionId:1,pluginSessionId:'10000000-0000-4000-8000-000000000001',processInstanceId:'20000000-0000-4000-8000-000000000001'};
 const created=new Date(2026,9,21,12,0,0).getTime();
@@ -120,5 +121,43 @@ describe('REG-003/008 independent verified profile identity',()=>{
     finish({...resolved,timing:{startedClientNs:0n,completedClientNs:now}});await work;
     now=100n;observer.select({...next,boundary:{clockId:next.clockId,probeSentClientNs:'100',receivedSourceNs:'2'}});
     expect(observer.evidence()).toBeUndefined();observer.close();
+  });
+});
+describe('ET-112a delayed current game log (REG-003/008)',()=>{
+  const delayed=(header:string)=>`${header}New profile selected: Synthetic\nLoading save. /home/profiles/${profile}/save/autosave/game.sii\n`;
+  const incident=()=>{
+    const inspect=vi.fn((s:SourceIdentity)=>Promise.resolve({pid:s.processId,createdUtcMs:INCIDENT_PROCESS_CREATED_MS,executable:'C:/Synthetic/eurotrucks2.exe',homeDirectory:null}));
+    let now=0n;const clock=vi.spyOn(Date,'now').mockReturnValue(INCIDENT_OBSERVED_MS),r=new HardModeReader({documents:root,nowNs:()=>now,process:inspect});
+    const observer=new ProfileObserver(()=>r,()=>now,false);
+    return {inspect,r,observer,current:{source,clockId:'clock',monotonicNs:'1'},at:(value:bigint)=>{now=value;},close:async()=>{observer.close();await r.drain();clock.mockRestore();}};
+  };
+  it('admits a log whose header follows process creation by 5,114 ms only after a later probe',async()=>{
+    await writeFile(path.join(game,'game.log.txt'),delayed(INCIDENT_HEADER));const h=incident();
+    try{
+      h.observer.select(h.current);await h.observer.refresh();expect(h.observer.evidence()).toBeUndefined();expect(h.observer.status().phase).toBe('pending');
+      h.at(1n);h.observer.select({...h.current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});
+      expect(h.observer.evidence()).toMatchObject({loadGeneration:2,afterMonotonicNs:'3'});expect(h.observer.status().phase).toBe('admitted');expect(h.inspect).toHaveBeenCalledOnce();
+    }finally{await h.close();}
+  });
+  it('keeps a stale previous-session header unavailable and recovers once the same file carries the current header',async()=>{
+    const filename=path.join(game,'game.log.txt');await writeFile(filename,delayed(PREVIOUS_SESSION_HEADER));const h=incident();
+    try{
+      h.observer.select(h.current);await h.observer.refresh();expect(h.observer.evidence()).toBeUndefined();expect(h.observer.status().phase).toBe('unavailable');
+      await writeFile(filename,delayed(INCIDENT_HEADER)+'Ordinary current-session line\n');
+      h.at(5_000_000_000n);await h.observer.refresh();expect(h.observer.status().phase).toBe('pending');
+      h.at(5_000_000_001n);h.observer.select({...h.current,boundary:{clockId:'clock',probeSentClientNs:'5000000001',receivedSourceNs:'2'}});
+      expect(h.observer.evidence()).toMatchObject({loadGeneration:2,afterMonotonicNs:'3'});expect(h.inspect).toHaveBeenCalledOnce();
+    }finally{await h.close();}
+  });
+  it('re-admits the delayed header through a cheap boundary guard without another process inspection',async()=>{
+    await writeFile(path.join(game,'game.log.txt'),delayed(INCIDENT_HEADER));const h=incident();
+    try{
+      h.observer.select(h.current);await h.observer.refresh();h.at(1n);h.observer.select({...h.current,boundary:{clockId:'clock',probeSentClientNs:'1',receivedSourceNs:'2'}});
+      const first=h.observer.evidence();expect(first).toBeDefined();
+      const reads=vi.spyOn(h.r,'resolveProfile');await h.observer.boundary();
+      expect(reads).toHaveBeenCalledOnce();expect(reads.mock.calls[0][3]).toBe(true);expect(h.observer.evidence()).toBeUndefined();
+      h.at(2n);h.observer.select({...h.current,boundary:{clockId:'clock',probeSentClientNs:'2',receivedSourceNs:'4'}});
+      expect(h.observer.evidence()).toMatchObject({binding:first!.binding,afterMonotonicNs:'5'});expect(h.inspect).toHaveBeenCalledOnce();
+    }finally{await h.close();}
   });
 });
