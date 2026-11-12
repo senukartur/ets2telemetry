@@ -140,9 +140,25 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
     expect(isHardModeObservation(withoutBatch)).toBe(false);
   });
   it('rejects unlisted fields, identities, bad lengths and malformed cross-boundary values', () => {
-    const status = {assessment: evaluate(), trip: null}; expect(isHardModeStatus(status)).toBe(true);
+    const verified = {state: 'verified', reason: null, checking: false, lastCheck: null};
+    const status = {assessment: evaluate(), trip: null, verification: verified}; expect(isHardModeStatus(status)).toBe(true);
     expect(isHardModeStatus({...status, filename: 'private'})).toBe(false);
     expect(isHardModeStatus({...status, assessment: {...status.assessment, rules: []}})).toBe(false);
+    // ET-112d: verification is required, and only a verified profile carries known settings.
+    const {verification: omitted, ...withoutVerification} = status; void omitted;
+    expect(isHardModeStatus(withoutVerification)).toBe(false);
+    const unknown = {assessment: unknownHardMode(0), trip: null};
+    const lastCheck = {atUtcMs: 1, state: 'unverified', reason: 'timeout'};
+    for (const verification of [{state: 'waiting', reason: 'no-game', checking: false, lastCheck: null}, {state: 'waiting', reason: 'checking', checking: true, lastCheck},
+      {state: 'unverified', reason: 'game-log', checking: false, lastCheck: {...lastCheck, state: 'waiting', reason: 'no-game'}}, {...verified, lastCheck: {atUtcMs: 1, state: 'verified', reason: null}}])
+      expect(isHardModeStatus({...unknown, verification})).toBe(true);
+    for (const verification of [{state: 'unverified', reason: null, checking: false, lastCheck: null}, {state: 'unverified', reason: 'no-game', checking: false, lastCheck: null},
+      {state: 'waiting', reason: 'game-log', checking: false, lastCheck: null}, {state: 'verified', reason: 'timeout', checking: false, lastCheck: null},
+      {state: 'verified', reason: null, checking: 'yes', lastCheck: null}, {...verified, lastCheck: {...lastCheck, atUtcMs: -1}}, {...verified, lastCheck: {...lastCheck, checking: false}},
+      {...verified, lastCheck: {...lastCheck, reason: 'PROFILE_LOG_GENERATION'}}, {...verified, code: 'PROFILE_LOG_GENERATION'}])
+      expect(isHardModeStatus({...unknown, verification})).toBe(false);
+    for (const state of ['waiting', 'unverified'] as const)
+      expect(isHardModeStatus({...status, verification: {state, reason: state === 'waiting' ? 'checking' : 'timeout', checking: false, lastCheck: null}})).toBe(false);
     expect(isHardModeObservation({assessment: evaluate(), binding: 'raw profile', pluginSessionId: null, sourceMonotonicNs: null})).toBe(false);
   });
 });

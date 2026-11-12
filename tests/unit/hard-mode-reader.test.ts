@@ -9,14 +9,14 @@ import os from 'node:os';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {hardModeFixtureOptions} from '../../apps/desktop/src/hard-mode/fixture';
 import {HardModeReader, FileEvidenceError, ProfileSuperseded, ProfileVerificationError, UnchangedVerificationError, coalesceProfileDiagnostics, type ProfileDiagnostic, profileFromLog, readStableFile} from '../../apps/desktop/src/hard-mode/reader';
-import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
+import {HardModeMonitor, hardModeVerificationResult} from '../../apps/desktop/src/hard-mode/monitor';
 import {hardModeView} from '../../apps/desktop/src/hard-mode/view';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {INCIDENT_HEADER, INCIDENT_OBSERVED_MS, INCIDENT_PROCESS_CREATED_MS, PREVIOUS_SESSION_HEADER, PROFILE_LOG_GENERATION_CASES, generationHeader} from '../shared/profile-log-generation';
-import {advanceHardModeV2, newHardModeDetails, qualifiesHardMode, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardModeV2, evaluateHardMode, newHardModeDetails, parseHardModeConfig, qualifiesHardMode, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 const source: SourceIdentity = {game: 'ets2', origin: 'game', processId: 123, windowsSessionId: 1, processInstanceId: '10000000-0000-4000-8000-000000000001', pluginSessionId: '20000000-0000-4000-8000-000000000001'};
 const name = 'Synthetic Профиль', id = Buffer.from(name).toString('hex').toUpperCase();
 const created = new Date(2026, 9, 21, 12, 0, 0).getTime();
@@ -1225,5 +1225,148 @@ describe('ET-112a current game log generation (REG-003/008/012)', () => {
     expect((await r.read(source, '2', INCIDENT_OBSERVED_MS, signal)).assessment.state).toBe('pass');
     await writeFile(logFile(), INCIDENT_HEADER + selection + save().replace(id, Buffer.from('Other').toString('hex').toUpperCase()));
     expect(await outcome(ownedReader({documents: documents(), process: processAt(P)}).read(source, '3', INCIDENT_OBSERVED_MS, signal))).toBe('PROFILE_SELECTION_UNPROVEN');
+  });
+});
+
+describe('ET-112d profile verification status of the monitor (REG-003, REG-008, REG-011)', () => {
+  type Pending = {promise: Promise<HardModeObservation>; resolve: (value: HardModeObservation) => void; reject: (error: unknown) => void};
+  const pending = (): Pending => {let resolve!: Pending['resolve'], reject!: Pending['reject']; const promise = new Promise<HardModeObservation>((yes, no) => {resolve = yes; reject = no;}); return {promise, resolve, reject};};
+  const evaluate = (text = HARD_MODE_CONFIG) => evaluateHardMode(parseHardModeConfig(text), 1000, 'fixture');
+  const bound = (assessment = evaluate()): HardModeObservation => ({assessment, binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'});
+  const failing = () => bound(evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')));
+  const waiting = {state: 'waiting', reason: 'no-game', checking: false, lastCheck: null};
+  /** A monitor whose reads wait for the case; `health` counts the publications pushed outside an observation change. */
+  function harness(guard?: ConstructorParameters<typeof HardModeMonitor>[7]) {
+    vi.useFakeTimers(); vi.setSystemTime(10_000);
+    const reads: Pending[] = [], published: HardModeObservation[] = [], clock = {now: 0n}, health = {count: 0};
+    const m = ownedMonitor(() => {const read = pending(); reads.push(read); return read.promise;}, value => published.push(value), () => clock.now,
+      undefined, undefined, () => {health.count++;}, undefined, guard);
+    const attach = (session = source.pluginSessionId) => m.select({source: {...source, pluginSessionId: session}, monotonicNs: '100', clockId: 'clock'});
+    const bind = () => m.select({source, monotonicNs: '100', clockId: 'clock', boundary: {clockId: 'clock', probeSentClientNs: (clock.now + 1n).toString(), receivedSourceNs: '200'}});
+    return {m, reads, published, clock, health, attach, bind};
+  }
+  const LOG = 'PROFILE_LOG_GENERATION' as const;
+  it('V1 waits for the game without a source, in the status and the publication', () => {
+    const {m} = harness();
+    expect(m.status().verification).toEqual(waiting); expect(m.publication().verification).toEqual(waiting);
+  });
+  it('V2 is checking from the source selection until its first read settles', async () => {
+    const {m, reads, attach} = harness(); attach();
+    expect(reads).toHaveLength(1); expect(m.status().verification).toEqual({state: 'waiting', reason: 'checking', checking: false, lastCheck: null});
+    reads[0].resolve(failing()); await m.refresh();
+  });
+  it('V3 names an unverified game log and publishes it', async () => {
+    const {m, reads, attach} = harness(); attach();
+    reads[0].reject(new ProfileVerificationError(new Error('log'), LOG)); await m.refresh();
+    expect(m.status()).toMatchObject({assessment: {state: 'unknown'}, verification: {state: 'unverified', reason: 'game-log', checking: false, lastCheck: null}});
+    expect(m.publication().verification).toEqual({state: 'unverified', reason: 'game-log', checking: false, lastCheck: null});
+  });
+  it.each([
+    ['PROFILE_SOURCE_UNPROVEN', 'game-process'], ['PROFILE_PROCESS_QUERY_FAILED', 'game-process'], ['PROFILE_PROCESS_QUERY_DEADLINE', 'game-process'],
+    ['PROFILE_PROCESS_QUERY_INVALID', 'game-process'], ['PROFILE_PROCESS_UNPROVEN', 'game-process'], ['PROFILE_PROCESS_CHANGED', 'game-process'],
+    ['PROFILE_LOG_GENERATION', 'game-log'], ['PROFILE_LOG_CHANGED', 'game-log'], ['PROFILE_SELECTION_UNPROVEN', 'profile-selection'],
+    ['PROFILE_LOCATION_UNPROVEN', 'profile-files'], ['PROFILE_SETTINGS_UNAVAILABLE', 'settings-read'], ['PROFILE_DEADLINE', 'timeout'],
+    ['PROFILE_CANCELLED', 'timeout'], ['PROFILE_EPOCH_RETIRED', 'timeout'], ['PROFILE_PROBE_PENDING', 'timeout'], ['PROFILE_PROBE_EXPIRED', 'timeout'],
+    ['PROFILE_PROOF_EXPIRED', 'timeout']
+  ] as const)('V4 maps the failed read %s to the fixed reason %s', async (code, reason) => {
+    const {m, reads, attach} = harness(); attach();
+    reads[0].reject(new ProfileVerificationError(new Error('private detail'), code)); await m.refresh();
+    expect(m.status().verification).toEqual({state: 'unverified', reason, checking: false, lastCheck: null});
+  });
+  it('V4 maps a settings read failure outside profile verification to settings-read (D10)', async () => {
+    const {m, reads, attach} = harness(); attach();
+    reads[0].reject(new Error('EACCES C:/private/config.cfg')); await m.refresh();
+    expect(m.status().verification).toEqual({state: 'unverified', reason: 'settings-read', checking: false, lastCheck: null});
+    // The pure rule: a bound observation is verified even with unknown settings; a transition is still checking.
+    expect(hardModeVerificationResult(true, bound(unknownHardMode(1, 'missing')), LOG)).toEqual({state: 'verified', reason: null});
+    expect(hardModeVerificationResult(true, {assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null, diagnostic: 'settings-changing'}, LOG)).toEqual({state: 'waiting', reason: 'checking'});
+    expect(hardModeVerificationResult(false, bound(), LOG)).toEqual({state: 'waiting', reason: 'no-game'});
+  });
+  it('V5 recovers to verified at the next scheduled admitted pass, without latching the earlier failure', async () => {
+    const {m, reads, clock, attach, bind} = harness(); attach();
+    reads[0].reject(new ProfileVerificationError(new Error('log'), LOG)); await m.refresh();
+    expect(m.status().verification.state).toBe('unverified');
+    clock.now = 5_000_000_000n; const scheduled = m.refresh(); reads[1].resolve(bound()); await vi.advanceTimersByTimeAsync(0);
+    bind(); await scheduled;
+    expect(m.status()).toMatchObject({assessment: {state: 'pass'}, verification: {state: 'verified', reason: null, checking: false, lastCheck: null}});
+  });
+  it('V6 keeps a failing rule of a verified profile verified', async () => {
+    const {m, reads, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
+    expect(m.status()).toMatchObject({assessment: {state: 'fail'}, verification: {state: 'verified', reason: null, checking: false, lastCheck: null}});
+  });
+  it('V7 shows a manual check at once, records its result, and adds no check', async () => {
+    const {m, reads, published, clock, health, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
+    const before = health.count, sequences = () => published.flatMap(value => value.check ? [value.check.sequence] : []);
+    expect(sequences()).toEqual([1]);
+    clock.now = 1_000_000_000n; const manual = m.refresh(true);
+    expect(m.status().verification).toMatchObject({checking: true, lastCheck: null}); expect(health.count).toBe(before + 1);
+    const manualStart = published.length; reads[1].reject(new ProfileVerificationError(new Error('log'), LOG)); await manual;
+    expect(m.status().verification).toEqual({state: 'unverified', reason: 'game-log', checking: false, lastCheck: {atUtcMs: 10_000, state: 'unverified', reason: 'game-log'}});
+    expect(health.count).toBe(before + 2); expect(published.slice(manualStart).some(value => value.check)).toBe(false);
+    clock.now = 5_000_000_000n; const scheduled = m.refresh(); reads[2].resolve(failing()); await scheduled;
+    expect(sequences()).toEqual([1, 2]);
+  });
+  it('V8 keeps checking through the manual follow-up of a scheduled run and records one result', async () => {
+    const {m, reads, attach} = harness(); attach();
+    const lastChecks: unknown[] = [], record = () => lastChecks.push(m.status().verification.lastCheck);
+    void m.refresh(true); expect(m.status().verification.checking).toBe(true);
+    reads[0].resolve(failing()); const running = m.refresh(); await vi.advanceTimersByTimeAsync(0);
+    expect(reads).toHaveLength(2); record(); expect(m.status().verification).toMatchObject({checking: true, lastCheck: null});
+    reads[1].resolve(failing()); await running; record();
+    expect(lastChecks).toEqual([null, {atUtcMs: 10_000, state: 'verified', reason: null}]); expect(m.status().verification.checking).toBe(false);
+  });
+  it('V9 completes a manual check without a source at once as waiting for the game', () => {
+    const {m, reads, health} = harness(); void m.refresh(true);
+    expect(reads).toHaveLength(0); expect(health.count).toBe(1);
+    expect(m.status().verification).toEqual({...waiting, lastCheck: {atUtcMs: 10_000, state: 'waiting', reason: 'no-game'}});
+  });
+  it.each(['verified', 'game-log'] as const)('V11 is still checking after an invalidation during a read, then shows the settled result: %s', async settled => {
+    const {m, reads, clock, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
+    clock.now = 5_000_000_000n; const scheduled = m.refresh(); expect(reads).toHaveLength(2);
+    // A profile load seen by the reader withdraws the proof while the last successful read left no failure code.
+    m.invalidate('profile-verification');
+    expect(m.status().verification).toEqual({state: 'waiting', reason: 'checking', checking: false, lastCheck: null});
+    expect(m.publication().verification).toMatchObject({state: 'waiting', reason: 'checking'});
+    const answer = (read: Pending) => settled === 'verified' ? read.resolve(failing()) : read.reject(new ProfileVerificationError(new Error('log'), LOG));
+    answer(reads[1]); await vi.advanceTimersByTimeAsync(0);
+    // The invalidation requested one follow-up read of the same source.
+    expect(reads).toHaveLength(3); answer(reads[2]); await scheduled;
+    expect(m.status().verification).toEqual(settled === 'verified' ? {state: 'verified', reason: null, checking: false, lastCheck: null}
+      : {state: 'unverified', reason: 'game-log', checking: false, lastCheck: null});
+  });
+  it('V11 is checking after an invalidation between reads until the next scheduled read settles', async () => {
+    const {m, reads, clock, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
+    m.invalidate('profile-verification'); expect(m.status().verification).toMatchObject({state: 'waiting', reason: 'checking'});
+    clock.now = 5_000_000_000n; const scheduled = m.refresh(); reads[1].resolve(failing()); await scheduled;
+    expect(m.status()).toMatchObject({assessment: {state: 'fail'}, verification: {state: 'verified', reason: null}});
+    // Without a failure code or a read in flight or due, the withdrawn proof could not be completed (timeout); a failure code keeps its reason.
+    const withdrawn: HardModeObservation = {assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null, diagnostic: 'profile-verification'};
+    expect(hardModeVerificationResult(true, withdrawn, undefined, false)).toEqual({state: 'unverified', reason: 'timeout'});
+    expect(hardModeVerificationResult(true, withdrawn, undefined, true)).toEqual({state: 'waiting', reason: 'checking'});
+    expect(hardModeVerificationResult(true, withdrawn, LOG, true)).toEqual({state: 'unverified', reason: 'game-log'});
+  });
+  it.each(['resolved', 'unchanged', 'ineligible'] as const)('V12 answers an invalidation once its read settles (%s): a later withdrawn proof could not be completed', async settled => {
+    const guard = {eligible: true};
+    const {m, reads, clock, attach} = harness({eligible: () => guard.eligible, select: () => undefined});
+    attach(); reads[0].resolve(failing()); await m.refresh();
+    m.invalidate('profile-verification'); expect(m.status().verification).toMatchObject({state: 'waiting', reason: 'checking'});
+    clock.now = 5_000_000_000n; const scheduled = m.refresh();
+    // The scheduled read settles: with a result, as an unchanged guard without a failure code, or after the guard retired.
+    if (settled === 'resolved') reads[1].resolve(failing());
+    else if (settled === 'unchanged') reads[1].reject(new UnchangedVerificationError(new Error('unchanged'), 'PROFILE_DEADLINE'));
+    else {guard.eligible = false; reads[1].resolve(failing());}
+    await scheduled; expect(reads).toHaveLength(2);
+    // An unbound profile-verification observation without a failure code, a read in flight or a new invalidation.
+    guard.eligible = false;
+    expect(m.status()).toMatchObject({assessment: {state: 'unknown'}, verification: {state: 'unverified', reason: 'timeout', checking: false, lastCheck: null}});
+  });
+  it('V10 ends a manual check without a result when the source changes during it', async () => {
+    const {m, reads, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
+    const manual = m.refresh(true); expect(m.status().verification.checking).toBe(true);
+    attach('20000000-0000-4000-8000-000000000002');
+    expect(m.status().verification).toEqual({state: 'waiting', reason: 'checking', checking: false, lastCheck: null});
+    reads[1].resolve(failing()); await manual; await vi.advanceTimersByTimeAsync(0);
+    for (const read of reads.slice(2)) read.resolve(failing());
+    await m.refresh(); expect(m.status().verification).toMatchObject({checking: false, lastCheck: null});
   });
 });

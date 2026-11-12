@@ -23,7 +23,7 @@ function trip(firstLoss: HardModeDetails['firstLoss']): HardModeDetails {
   return {version: 1, binding: null, opening: PASS, latest: PASS, firstLoss, manualDelivery: null};
 }
 const LOSS: HardModeDetails['firstLoss'] = {atUtcMs: 2000, reason: 'outside-limit', rule: 'fatigue', values: [0]};
-const status = (value: HardModeAssessment, details: HardModeDetails | null = null): HardModeStatus => ({assessment: value, trip: details});
+const status = (value: HardModeAssessment, details: HardModeDetails | null = null): Pick<HardModeStatus, 'assessment' | 'trip'> => ({assessment: value, trip: details});
 
 describe('the indicator main projects from its Hard Mode status', () => {
   it('is active only for a passing assessment, exactly {state: active}', () => {

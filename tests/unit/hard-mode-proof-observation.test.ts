@@ -1,11 +1,13 @@
 import {performance} from 'node:perf_hooks';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
-import type {HardModeDetails, HardModeObservation, HardModeStatus} from '../../packages/contracts/src/hard-mode';
+import type {HardModeDetails, HardModeObservation, HardModeStatus, HardModeVerification} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {advanceHardMode, evaluateHardMode, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
 import {waitForHardModeProof, type HardModeProofRecord} from '../../scripts/ci/hard-mode-proof-observation.mjs';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
+/** A passing assessment always comes from a verified profile. */
+const VERIFIED: HardModeVerification = {state: 'verified', reason: null, checking: false, lastCheck: null};
 
 beforeEach(() => {vi.useFakeTimers(); vi.setSystemTime(0); vi.spyOn(performance, 'now').mockImplementation(() => Date.now());});
 afterEach(() => {vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers();});
@@ -72,7 +74,7 @@ it('drives eligible refreshes through the real monitor and requires two differen
 it('keeps trusted refresh and read requests sequential, rejecting a loss before the acceptance predicate', async () => {
   let resolve!: () => void;
   const refresh = vi.fn(() => new Promise<void>(done => {resolve = done;}));
-  const status: HardModeStatus = {assessment: passing(), trip: {...advanceHardMode(null, passing()), firstLoss: {atUtcMs: 1, reason: 'interrupted', rule: null, values: null}}};
+  const status: HardModeStatus = {assessment: passing(), trip: {...advanceHardMode(null, passing()), firstLoss: {atUtcMs: 1, reason: 'interrupted', rule: null, values: null}}, verification: VERIFIED};
   const read = vi.fn(() => Promise.resolve(status)), accept = vi.fn(() => true), record: HardModeProofRecord = {};
   const pending = waitForHardModeProof({refresh, read, accept, record, message: 'REFRESH'}), failed = expect(pending).rejects.toThrow('REFRESH_QUALIFICATION_LOST');
   await vi.advanceTimersByTimeAsync(200); expect(refresh).toHaveBeenCalledOnce(); expect(read).not.toHaveBeenCalled();
@@ -83,7 +85,7 @@ it('keeps trusted refresh and read requests sequential, rejecting a loss before 
 
 it.each(['refresh', 'read', 'accept'] as const)('bounds a hung %s by one eight-second deadline and stops after late settlement', async phase => {
   let resolve!: () => void;
-  const held = new Promise<void>(done => {resolve = done;}), status: HardModeStatus = {assessment: passing(), trip: null};
+  const held = new Promise<void>(done => {resolve = done;}), status: HardModeStatus = {assessment: passing(), trip: null, verification: VERIFIED};
   const refresh = vi.fn(() => phase === 'refresh' ? held : Promise.resolve());
   const read = vi.fn(async () => {if (phase === 'read') await held; return status;});
   const record: HardModeProofRecord = {}, accept = vi.fn(async () => {if (phase === 'accept') await held; return false;});
@@ -95,7 +97,7 @@ it.each(['refresh', 'read', 'accept'] as const)('bounds a hung %s by one eight-s
 });
 
 it('never accepts an unchanged observed stamp or resets its deadline while polling', async () => {
-  const status: HardModeStatus = {assessment: passing(), trip: advanceHardMode(null, passing())}, record: HardModeProofRecord = {};
+  const status: HardModeStatus = {assessment: passing(), trip: advanceHardMode(null, passing()), verification: VERIFIED}, record: HardModeProofRecord = {};
   const pending = waitForHardModeProof({refresh: () => Promise.resolve(), read: () => Promise.resolve(status), record, message: 'REFRESH',
     accept: value => value.trip!.latest.observedUtcMs !== 0}), failed = expect(pending).rejects.toThrow('REFRESH within 8000 ms');
   await vi.advanceTimersByTimeAsync(8000); await failed;

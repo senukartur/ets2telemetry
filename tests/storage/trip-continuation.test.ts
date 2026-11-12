@@ -9,7 +9,8 @@ import {decodePayload,encodeFrame,type ClientMessage,type ServerMessage,type Cur
 import {HardModeReader,readStableFile} from '../../apps/desktop/src/hard-mode/reader';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
 import {ProfileObserver} from '../../apps/desktop/src/profile-observation';
-import {advanceHardMode, evaluateHardMode, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardMode, evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import type {HardModeCounts, HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {V1_CLIENT_MAX_MINOR,V1Ingestion} from '../../apps/desktop/src/v1-ingestion';
 import {serveV1Reactive} from '../../tools/telemetry-simulator/src/v1/reactive';
@@ -1722,7 +1723,7 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
   const extra=['10000000-0000-4000-8000-000000112004','10000000-0000-4000-8000-000000112005'] as const;
   const atNs=(atMs:number)=>(1_000_000_000_000n+BigInt(atMs)*1_000_000n).toString();
   const absent={available:false,reason:'not-observed'} as const;
-  interface SegmentOptions {job?:JobConfiguration;scope?:string;readingJob?:(reading:number)=>JobConfiguration;end?:IncidentSegment['end']|'open';afterReading?:(reading:number)=>void}
+  interface SegmentOptions {job?:JobConfiguration;scope?:string;readingJob?:(reading:number)=>JobConfiguration;end?:IncidentSegment['end']|'open';afterReading?:(reading:number)=>void;checks?:HardModeCounts}
   /** One process of the corpus through the storage API: job.configured opens eventSeq 1, readings follow at 1 Hz, then the segment ends. */
   interface Driven {uuid:string;close?:{message:EventMessage;effects:import('../../packages/storage/src').TripEffect[]};script:Script}
   function drive(storage:Storage,segment:IncidentSegment,options:SegmentOptions={}):Driven{
@@ -1743,6 +1744,12 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
       ok(storage.appendSamples(script.session,[row],{uniqueSeconds:true}));options.afterReading?.(index);
     }
     const end=options.end??segment.end,last=segment.readings.at(-1)!.atMs;
+    // ET-112d: the member's cumulative Hard Mode checks, one producer per process; the same batch sent twice counts once.
+    const checks=options.checks??segment.checks,total=checks.passingChecks+checks.failingChecks+checks.unknownChecks,at=segment.startUtcMs+last;
+    const observation:HardModeObservation=segment.profileVerified
+      ?{assessment:evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),at,'local'),binding:'e'.repeat(64),pluginSessionId:segment.session,sourceMonotonicNs:'0'}
+      :{assessment:unknownHardMode(at,'source-unproven'),binding:null,pluginSessionId:segment.session,sourceMonotonicNs:null,diagnostic:'profile-verification'};
+    if(total>0)for(let sent=0;sent<2;sent++)ok(storage.observeHardMode('ets2',{...observation,batch:{tripUuid:uuid,producer:`90000000-0000-4000-8000-${segment.session.slice(-12)}`,sequence:total,...checks}},segment.profileVerified));
     if(end==='open')return {uuid,script};
     const delivered=end==='delivered',message=script.event(delivered?incidentDelivered():r.timersRestart(),{advanceMs:last});
     const effects:import('../../packages/storage/src').TripEffect[]=[{kind:'trip.close',tripUuid:uuid,outcome:delivered?'delivered':'none',closeReason:delivered?'outcome':'restart',
@@ -1778,6 +1785,27 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(detail.money.incomplete).toBe(false);
   }
   const trip=(storage:Storage,uuid:string)=>ok(storage.journalTrips()).trips.find(row=>row.tripUuid===uuid);
+  /**
+   * ET-112d: the root's Hard Mode is one sum over its members' checks, the same in the Journal detail and list row, the
+   * JSON export and the upload projection; each raw member keeps its own audit. `members` are the raw members' counts.
+   */
+  function expectIncidentHardMode(storage:Storage,expected:{passingChecks:number;failingChecks:number;unknownChecks:number;qualified:boolean}=INCIDENT_EXPECTED.hardMode,
+    members:readonly HardModeCounts[]=INCIDENT_SEGMENTS.map(segment=>segment.checks)){
+    const {qualified,...counts}=expected,root=INCIDENT_EXPECTED.rootTripUuid;
+    const audit={version:2,...counts,firstLoss:null,checkpoint:null,latest:{state:'unknown'},latestDiagnostic:{code:'profile-verification'}};
+    const detail=validateJournalTripDetail(ok(storage.journalTrip(root)));
+    expect(detail.trip).toMatchObject({isHardMode:qualified,hardModeDetails:audit});
+    expect(trip(storage,root)).toMatchObject({isHardMode:qualified,hardModeDetails:audit});
+    const snapshot=detail.exportBounds.snapshot!,serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000112',purpose:'synthetic',schemaVersion:10},'test',4000));
+    const exported=JSON.parse(serializer.begin()+serializer.rows('sources',ok(storage.journalIntervals(root,{limit:500,cursor:snapshot.sources})).sources!)
+      +serializer.rows('intervals',ok(storage.journalIntervals(root,{limit:500,cursor:snapshot.intervals})).intervals)
+      +serializer.rows('events',ok(storage.journalEvents(root,{limit:500,cursor:snapshot.events})).events)
+      +serializer.rows('samples',ok(storage.listSamples({tripUuid:root},{afterId:snapshot.samples,limit:500})))+serializer.end());
+    expect(tripExportProblems(exported)).toEqual([]);
+    expect(exported.trip).toMatchObject({is_hard_mode:qualified,hard_mode_details:{version:2,...counts}});
+    expect(projection(storage,root)?.facts.hardModeResult).toBe(qualified?'qualified':'not-qualified');
+    for(const [index,member] of members.entries())expect(ok(storage.getTrip(incidentTripUuid(index)))?.hardModeDetails).toMatchObject({version:2,...member});
+  }
   /** Drives the corpus from segment `from`; `before` replaces the corpus' own service restart before each segment. */
   async function incident(storage:Storage,from=0,before?:(current:Storage)=>Promise<Storage>,options:(index:number,current:Storage)=>SegmentOptions=()=>({})){
     let last:Driven|undefined;
@@ -1795,6 +1823,20 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expectIncident(storage);expectIncidentQuantities(storage);
     expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
     expect(ok(storage.listTrips()).trips).toHaveLength(INCIDENT_EXPECTED.rawTrips);
+    // 101 + 77 passing and 74 unknown: one qualified trip; each raw audit keeps its own counts and does not qualify alone.
+    expectIncidentHardMode(storage);
+    expect([0,1,2].map(index=>ok(storage.getTrip(incidentTripUuid(index)))?.isHardMode)).toEqual([false,false,false]);
+  });
+  it.each([
+    // 171 x 100 = 17,100 >= 180 x 95 = 17,100: the inclusive threshold qualifies.
+    {failing:9,qualified:true},
+    // 17,100 < 181 x 95 = 17,195: one more failing check disqualifies, although member A alone (100/0/0) would qualify.
+    {failing:10,qualified:false}
+  ])('M1 applies the 95% threshold to the sum of the members only: $failing failing checks',async({failing,qualified})=>{
+    const members=[{passingChecks:100,failingChecks:0,unknownChecks:0},{passingChecks:0,failingChecks:failing,unknownChecks:0},{passingChecks:71,failingChecks:0,unknownChecks:74}];
+    const {storage}=await incident(await ws.open(),0,undefined,index=>({checks:members[index]}));
+    expectIncident(storage);
+    expectIncidentHardMode(storage,{passingChecks:171,failingChecks:failing,unknownChecks:74,qualified},members);
   });
   it.each(['recorded-incomplete','left-unresolved'] as const)('M2 continues among matching candidates while another job of the profile is unresolved: %s',async variant=>{
     let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);
@@ -1864,7 +1906,7 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     const driven=await incident(await ws.open()),delivery=driven.last.close!,storage=await reopen(driven.storage);
     expect(ok(storage.commitEvent(delivery))).toMatchObject({status:'duplicate'});
     expect(ok(storage.commitEvent({...delivery,message:driven.last.script.redeliver(delivery.message)}))).toMatchObject({status:'duplicate'});
-    expectIncident(storage);expectIncidentQuantities(storage);
+    expectIncident(storage);expectIncidentQuantities(storage);expectIncidentHardMode(storage);
     expect(ok(storage.journalTrips()).trips).toHaveLength(1);
   });
   /**
@@ -1883,6 +1925,14 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     for(let turn=0;state.state==='preparing'&&turn<1000;turn++)state=ok(storage.advanceUploadProjection(pinId));
     return state.projection?.rootReadiness;
   }
+  /** The prepared upload projection of a raw trip's root; its pin is released again, so the pin bound never fills. */
+  function projection(storage:Storage,uuid:string){
+    const pinId=`70000000-0000-4000-8000-${String(++pins).padStart(12,'0')}`;let state=ok(storage.beginUploadProjection({pinId,tripUuid:uuid}));
+    for(let turn=0;state.state==='preparing'&&turn<1000;turn++)state=ok(storage.advanceUploadProjection(pinId));
+    const prepared=state.projection;
+    let released=ok(storage.releaseUploadProjection(pinId));for(let turn=0;released.state==='releasing'&&turn<1000;turn++)released=ok(storage.releaseUploadProjection(pinId));
+    return prepared;
+  }
   let pins=0;
   it('M4 continues the trip from a profile proof that arrives after the delivery: one delivered trip, its revenue once',async()=>{
     const {storage,input}=await delayedIncident(),lastUuid=incidentTripUuid(2);
@@ -1890,6 +1940,9 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(trip(storage,lastUuid)).toMatchObject({outcome:'delivered'});
     // The closed pending segment is held from upload until it resolves.
     expect(readiness(storage,lastUuid)).toBe('identity-pending');
+    // Before the resolve: the open root sums 101 + 77, and the delivered segment alone has no known check.
+    expect(trip(storage,INCIDENT_EXPECTED.rootTripUuid)).toMatchObject({outcome:'open',isHardMode:false,hardModeDetails:{passingChecks:178,failingChecks:0,unknownChecks:0}});
+    expect(trip(storage,lastUuid)).toMatchObject({outcome:'delivered',isHardMode:false,hardModeDetails:{passingChecks:0,failingChecks:0,unknownChecks:74}});
     expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});
     expectIncident(storage);
     expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
@@ -1903,6 +1956,10 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     const counts=(details:unknown)=>{const d=details as {passingChecks:number;failingChecks:number;unknownChecks:number};return [d.passingChecks,d.failingChecks,d.unknownChecks];};
     const sum=[0,1,2].map(index=>counts(ok(storage.getTrip(incidentTripUuid(index)))!.hardModeDetails)).reduce((a,b)=>a.map((value,index)=>value+b[index]));
     expect(sum.every(Number.isSafeInteger)).toBe(true);expect(counts(detail.trip.hardModeDetails)).toEqual(sum);
+    // ET-112d: the retroactive join revises the root to the same qualified 178/0/74 as the live join.
+    expectIncidentHardMode(storage);
+    // The recorder rereads the trip by the resolved segment's raw UUID; the journal answers it with the group's sums.
+    expect(validateJournalTripDetail(ok(storage.journalTrip(lastUuid))).trip).toMatchObject({isHardMode:true,hardModeDetails:{passingChecks:178,failingChecks:0,unknownChecks:74}});
   });
   it('M12 replays the resolve and the delivery without a second continuation or delivery',async()=>{
     const {storage,last,input}=await delayedIncident(),delivery=last.close!;
@@ -1912,12 +1969,12 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(ok(storage.commitEvent(delivery))).toMatchObject({status:'duplicate'});
     expect(ok(storage.commitEvent({...delivery,message:last.script.redeliver(delivery.message)}))).toMatchObject({status:'duplicate'});
     expect(ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid))).toEqual(journal);
-    expectIncident(storage);expectIncidentQuantities(storage);
+    expectIncident(storage);expectIncidentQuantities(storage);expectIncidentHardMode(storage);
     expect(ok(storage.journalTrips()).trips).toHaveLength(1);
   });
   it('M14 keeps one trip across a next-day resume and an app restart before every segment',async()=>{
     const {storage}=await incident(await ws.open(),0,current=>{ws.advance(86_400_000);return reopen(current);});
-    expectIncident(storage);expectIncidentQuantities(storage);
+    expectIncident(storage);expectIncidentQuantities(storage);expectIncidentHardMode(storage);
     expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
   });
 });

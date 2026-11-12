@@ -110,7 +110,7 @@ it.each([
   ['stopped', 'still'], ['disabled', 'still'], ['unknown', 'still'], ['live-only', 'still'], ['not-recorded-source', 'still'], [undefined, 'still']
 ] as const)('animates the recording %s dot as %s', (state, motion) => expect(recordingMotion(state)).toBe(motion));
 it('colors current settings independently of irreversible trip loss', () => {
-  const status: HardModeStatus = {assessment: unknownHardMode(0), trip: null};
+  const status: Pick<HardModeStatus, 'assessment' | 'trip'> = {assessment: unknownHardMode(0), trip: null};
   expect(hardModeTone(status)).toBe('neutral');
   expect(hardModeTone({...status, assessment: {...status.assessment, state: 'pass'}})).toBe('ok');
   expect(hardModeTone({...status, assessment: {...status.assessment, state: 'fail'}})).toBe('warn');
@@ -235,8 +235,8 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
     expect(pluginChip([{state: 'excluded'}], 'en').text).toBe('Plugin · Not managed (game excluded)');
   });
   it('shows Hard Mode n/12, the loss for this trip and an unknown assessment in words', () => {
-    const base: HardModeStatus = {assessment: unknownHardMode(0), trip: null};
-    const assessed = (passing: number): HardModeStatus => ({...base, assessment: {...base.assessment, state: passing === 12 ? 'pass' : 'fail',
+    const base: Pick<HardModeStatus, 'assessment' | 'trip'> = {assessment: unknownHardMode(0), trip: null};
+    const assessed = (passing: number): Pick<HardModeStatus, 'assessment' | 'trip'> => ({...base, assessment: {...base.assessment, state: passing === 12 ? 'pass' : 'fail',
       rules: base.assessment.rules.map((rule, index) => ({...rule, state: index < passing ? 'pass' : 'fail'}))}});
     const lost = {firstLoss: {}} as HardModeStatus['trip'];
     expect(hardModeChip(assessed(12), 0, 'en')).toEqual({text: 'Hard Mode 12/12', tone: 'ok'});

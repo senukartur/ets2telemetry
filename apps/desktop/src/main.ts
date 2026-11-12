@@ -1133,7 +1133,7 @@ function runApplication(profileError: unknown): void {
   ipcMain.handle('scaffold:status', event => {if (!trusted(event)) throw new Error('Untrusted status request'); return status ?? null;});
   for (const channel of ['hard-mode:status', 'hard-mode:refresh']) ipcMain.handle(channel, (event, ...request: unknown[]) => {
     if (!trusted(event) || request.length !== 0) throw new Error('Untrusted Hard Mode request');
-    if (channel === 'hard-mode:refresh' && serviceReady && service && !supervisor.stopping) service.postMessage({type: 'hard-mode-refresh'});
+    if (channel === 'hard-mode:refresh' && serviceReady && service && !supervisor.stopping) {service.postMessage({type: 'hard-mode-refresh'}); hardMode.checkRequested();}
     return hardMode.status(serviceReady && !supervisor.stopping);
   });
   ipcMain.handle('app:get-state', event => {if (!trusted(event)) throw new Error('Untrusted application state request'); return appState();});

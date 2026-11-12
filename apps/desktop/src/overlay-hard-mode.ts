@@ -16,7 +16,7 @@ const INACTIVE: OverlayHardMode = Object.freeze({state: 'inactive'});
  * evidence all yield twelve unknown rules, so they show no count rather than a guessed 0 of 12. V2 trip ratios and
  * retained diagnostics never override the current settings.
  */
-export function overlayHardMode(status: HardModeStatus): OverlayHardMode {
+export function overlayHardMode(status: Pick<HardModeStatus, 'assessment' | 'trip'>): OverlayHardMode {
   if (status.trip?.version === 1 && status.trip.firstLoss) return {state: 'lost'};
   if (status.assessment.state === 'pass') return {state: 'active'};
   const rules = status.assessment.rules;

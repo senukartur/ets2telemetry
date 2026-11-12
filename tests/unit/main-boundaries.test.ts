@@ -20,6 +20,9 @@ import {v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 import {changed, DETAIL, LIST_ITEM, TRIP, TRIP_PAGE} from '../shared/journal-replies';
 import type {JournalExporterOptions} from '../../apps/desktop/src/journal-export-writer';
 
+/** ET-112d: a known Hard Mode assessment travels with the verified-profile status it was read under. */
+const HM_VERIFIED = {state: 'verified', reason: null, checking: false, lastCheck: null} as const;
+
 const processEvents = ['uncaughtException', 'unhandledRejection'] as const;
 const processEmitter: EventEmitter = process;
 let originals: Map<string, ReturnType<EventEmitter['listeners']>>;
@@ -3031,10 +3034,11 @@ it('limits Hard Mode status/refresh to the trusted dashboard with no arguments, 
   await ready(); let monotonic = 0n; vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => monotonic);
   const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
   const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
-  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null};
-  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'});
+  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null, verification: HM_VERIFIED};
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, verification: HM_VERIFIED, remainingNs: '3000000000'});
   expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
-  handlers.get('hard-mode:refresh')!(trusted()); expect(child.postMessage).toHaveBeenCalledWith({type: 'hard-mode-refresh'});
+  // ET-112d: a forwarded manual check shows as running until the service publishes again.
+  expect(handlers.get('hard-mode:refresh')!(trusted())).toEqual({...status, verification: {...HM_VERIFIED, checking: true}}); expect(child.postMessage).toHaveBeenCalledWith({type: 'hard-mode-refresh'});
   for (const name of ['hard-mode:status', 'hard-mode:refresh']) {
     const handler = handlers.get(name)!;
     expect(() => handler({sender: overlayContents, senderFrame: overlayContents.mainFrame})).toThrow('Untrusted');
@@ -3042,24 +3046,24 @@ it('limits Hard Mode status/refresh to the trusted dashboard with no arguments, 
     expect(() => handler(trusted(), {path: 'private', state: 'pass'})).toThrow('Untrusted');
   }
   const utc = Date.now(); vi.setSystemTime(utc + 120_000);
-  expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual({...status, verification: {...HM_VERIFIED, checking: true}});
   vi.setSystemTime(utc - 120_000); monotonic = 3_001_000_000n;
   await vi.advanceTimersByTimeAsync(3001);
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
-  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: {...status.assessment, filename: 'private'}, remainingNs: '3000000000'});
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: {...status.assessment, filename: 'private'}, verification: HM_VERIFIED, remainingNs: '3000000000'});
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}});
 });
 
 it('retires Hard Mode receipt proof on service exit/restart and rejects old-child publications', async () => {
   await ready(); const {evaluateHardMode, parseHardModeConfig} = await import('../../packages/telemetry-core/src/hard-mode');
   const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
-  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null};
-  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  const status = {assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip: null, verification: HM_VERIFIED};
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, verification: HM_VERIFIED, remainingNs: '3000000000'}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
   child.emit('exit', 1); expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip: null});
   await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
-  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'}); replacement.emit('message', {type: 'ready'}); await settle();
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, verification: HM_VERIFIED, remainingNs: '3000000000'}); replacement.emit('message', {type: 'ready'}); await settle();
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip: null});
-  replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, remainingNs: '3000000000'}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
+  replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: status.assessment, verification: HM_VERIFIED, remainingNs: '3000000000'}); expect(handlers.get('hard-mode:status')!(trusted())).toEqual(status);
 });
 
 it('does not renew aged Hard Mode publication lifetime on trip-only updates', async () => {
@@ -3067,16 +3071,16 @@ it('does not renew aged Hard Mode publication lifetime on trip-only updates', as
   const {evaluateHardMode, parseHardModeConfig, advanceHardMode} = await import('../../packages/telemetry-core/src/hard-mode');
   const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
   const assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture'), trip = advanceHardMode(null, assessment);
-  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs: '100000000'});
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, verification: HM_VERIFIED, remainingNs: '100000000'});
   mono += 50_000_000n; child.emit('message', {type: 'hard-mode', update: 'trip', trip});
-  expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip});
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip, verification: HM_VERIFIED});
   mono += 50_000_000n; expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip});
   child.emit('message', {type: 'hard-mode', update: 'trip', trip});
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip});
   child.emit('message', {type: 'hard-mode', update: 'assessment', assessment});
   expect(handlers.get('hard-mode:status')!(trusted())).toMatchObject({assessment: {state: 'unknown'}, trip});
-  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs: '3000000000'});
-  expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip});
+  child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, verification: HM_VERIFIED, remainingNs: '3000000000'});
+  expect(handlers.get('hard-mode:status')!(trusted())).toEqual({assessment, trip, verification: HM_VERIFIED});
 });
 
 // ET-070 (D3, D4): the overlay's fixed Hard Mode indicator is main's lease-checked status reduced to an enum and a pass count.
@@ -3086,7 +3090,7 @@ async function hardModeFixtures() {
   const pass = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture');
   // Fatigue off: eleven of the twelve rules pass.
   const fail = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), Date.now(), 'fixture');
-  const publish = (assessment: unknown, remainingNs = '3000000000') => child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, remainingNs});
+  const publish = (assessment: unknown, remainingNs = '3000000000') => child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, verification: HM_VERIFIED, remainingNs});
   return {pass, fail, publish, lostTrip: advanceHardMode(advanceHardMode(null, pass), fail)};
 }
 it('ET-070 projects the overlay Hard Mode indicator from the lease-checked status: active only on a pass, lost on a trip loss', async () => {
@@ -3128,7 +3132,7 @@ it('ET-070 keeps a passing publication accepted before service readiness not act
   expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
   // A restarted service: its pass before readiness is computed from status(false), twelve unknown rules, so not active.
   child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
-  replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: pass, remainingNs: '3000000000'});
+  replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: pass, verification: HM_VERIFIED, remainingNs: '3000000000'});
   expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
   // Readiness alone republishes it; no further service message or telemetry frame arrives.
   replacement.emit('message', {type: 'ready'}); await settle();

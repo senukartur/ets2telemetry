@@ -85,7 +85,7 @@ export function serviceTone(service: ServiceHealth): 'ok' | 'warn' | 'error' | '
 export function storageTone(storage: StorageHealth): 'ok' | 'warn' | 'error' | 'neutral' {
   return storage === 'verified' ? 'ok' : storage === 'failed' ? 'error' : 'neutral';
 }
-export function hardModeTone(status: HardModeStatus): 'ok' | 'warn' | 'error' | 'neutral' {
+export function hardModeTone(status: Pick<HardModeStatus, 'assessment' | 'trip'>): 'ok' | 'warn' | 'error' | 'neutral' {
   if (status.trip?.firstLoss) return 'error';
   return status.assessment.state === 'pass' ? 'ok' : status.assessment.state === 'fail' ? 'warn' : 'neutral';
 }
@@ -139,7 +139,7 @@ export function pluginChip(targets: readonly Pick<PluginTargetView, 'state'>[], 
 }
 
 /** "Hard Mode n/12" from the current assessment; a loss for this trip and an unknown assessment say so in words. */
-export function hardModeChip(status: HardModeStatus, nowUtcMs: number, language: AppLanguage = 'en'): StatusChip {
+export function hardModeChip(status: Pick<HardModeStatus, 'assessment' | 'trip'>, nowUtcMs: number, language: AppLanguage = 'en'): StatusChip {
   const tone = hardModeTone(status);
   if (status.trip?.firstLoss) return {text: t('chip.hm.lost', undefined, language), tone};
   if (status.assessment.state === 'unknown') return {text: t('hm.status.unknown', undefined, language), tone};

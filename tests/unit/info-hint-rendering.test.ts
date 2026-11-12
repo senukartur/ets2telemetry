@@ -31,7 +31,7 @@ it('uses a given id, so a control can be described by the same text', () => {
 
 it('shows inline failure detail and cvar name for a failing Hard Mode rule, and the caveats behind one hint', () => {
   const assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), 0, 'fixture');
-  const html = renderToStaticMarkup(React.createElement(HardModeCard, {language: 'en', controller: {status: {assessment, trip: null}, now: 0, busy: false, error: false, loaded: true, check: () => undefined}}));
+  const html = renderToStaticMarkup(React.createElement(HardModeCard, {language: 'en', controller: {status: {assessment, trip: null, verification: {state: 'verified', reason: null, checking: false, lastCheck: null}}, now: 0, busy: false, error: false, loaded: true, check: () => undefined}}));
   expect(html.match(/data-testid="hard-mode-rule-[a-z]+"/g)).toHaveLength(12);
   expect(html.match(/data-testid="hard-mode-detail-rule-[a-z]+"/g)).toEqual(['data-testid="hard-mode-detail-rule-fatigue"']);
   expect(html).toContain('data-testid="hard-mode-detail-rule-fatigue"><p>Now Off · required On</p></div>');
@@ -45,7 +45,7 @@ it('shows inline failure detail and cvar name for a failing Hard Mode rule, and 
 
 it('shows no in-game fix line when every Hard Mode rule passes', () => {
   const assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), 0, 'fixture');
-  const html = renderToStaticMarkup(React.createElement(HardModeCard, {language: 'en', controller: {status: {assessment, trip: null}, now: 0, busy: false, error: false, loaded: true, check: () => undefined}}));
+  const html = renderToStaticMarkup(React.createElement(HardModeCard, {language: 'en', controller: {status: {assessment, trip: null, verification: {state: 'verified', reason: null, checking: false, lastCheck: null}}, now: 0, busy: false, error: false, loaded: true, check: () => undefined}}));
   expect(html).not.toContain('hard-mode-detail-rule-');
   expect(html).not.toContain('data-testid="hard-mode-fix"');
 });
@@ -54,7 +54,7 @@ it.each(['en','ru'] as const)('shows current rules separately from recoverable v
   const assessment=evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG),0,'fixture');
   const details={...newHardModeDetails(assessment,null),passingChecks:94,failingChecks:6,unknownChecks:7,
     firstDiagnostic:{atUtcMs:0,code:'settings-changing' as const,rule:null,values:null},latestDiagnostic:{atUtcMs:1,code:'guard-deadline' as const,rule:null,values:null}};
-  const html=renderToStaticMarkup(React.createElement(HardModeCard,{language,controller:{status:{assessment,trip:details},now:1,busy:true,error:false,loaded:true,check:()=>undefined}}));
+  const html=renderToStaticMarkup(React.createElement(HardModeCard,{language,controller:{status:{assessment,trip:details,verification:{state:'verified',reason:null,checking:false,lastCheck:null}},now:1,busy:true,error:false,loaded:true,check:()=>undefined}}));
   expect(html).toContain('94/100');expect(html).toContain('94%');expect(html).toContain('≥95%');expect(html).toContain('7');
   expect(html).toContain(language==='en'?'The ratio can recover':'Доля может восстановиться');
   expect(html).toContain(language==='en'?'Required verification deadline exceeded':'Истёк срок обязательной проверки');
