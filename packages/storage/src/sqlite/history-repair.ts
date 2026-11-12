@@ -72,7 +72,7 @@ export function repairSummary(conn: StorageConnection, tripUuid: string): Repair
   };
 }
 
-const ROLLBACK = Symbol('rollback');
+const ROLLBACK = new Error('History repair action rolled back');
 /**
  * One join in one BEGIN IMMEDIATE transaction, which first starts the replay budget. In order: an existing membership of
  * the segment in the target is `already-applied`; a fingerprint other than the planned one is `stale`; the rules must
@@ -123,7 +123,7 @@ export function applyRepairAction(conn: StorageConnection, action: RepairJoinAct
  */
 export function planRepair(conn: StorageConnection, attest: readonly string[], options?: RepairOptions): RepairScan {
   if (!Array.isArray(attest) || attest.some(uuid => typeof uuid !== 'string' || !UUID.test(uuid))) fail('INVALID_INPUT');
-  const db = conn.writer(), attested = new Set(attest), seen = new Set<string>(), actions: RepairJoinAction[] = [], listings: RepairListing[] = [];
+  const db = conn.writer(), attested = new Set<string>(attest), seen = new Set<string>(), actions: RepairJoinAction[] = [], listings: RepairListing[] = [];
   const uuidOf = (id: unknown) => String(get(db, 'SELECT trip_uuid FROM trips WHERE id = ?', id)!.trip_uuid);
   for (let after = 0n; ;) {
     const page = db.prepare(`SELECT t.* FROM trips t JOIN logical_memberships m ON m.trip_ref = t.id JOIN logical_trips l ON l.id = t.id
@@ -146,7 +146,7 @@ export function planRepair(conn: StorageConnection, attest: readonly string[], o
     if (page.length < SCAN_PAGE) break;
     after = page.at(-1)!.id as bigint;
   }
-  for (const uuid of attest) {
+  for (const uuid of attested) {
     if (seen.has(uuid)) continue;
     seen.add(uuid);
     const row = get(db, 'SELECT t.id, m.logical_ref, m.previous_logical_ref FROM trips t JOIN logical_memberships m ON m.trip_ref = t.id WHERE t.trip_uuid = ?', uuid);

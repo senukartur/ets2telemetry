@@ -17,7 +17,7 @@ import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import {tripUuidFor} from '../../packages/telemetry-core/src';
 import {INCIDENT_OTHER_JOB, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentTripUuid} from '../shared/trip-continuation-incident';
 import {r, Script} from '../shared/trip-messages';
-import {digestOf, ok, readOnly, sha256, STORAGE_FIXTURES, uploadTestOwner, workspace} from './helpers';
+import {digestOf, ok, readOnly, sha256, uploadTestOwner, workspace} from './helpers';
 import {drive, EXTRA_SESSIONS, OTHER_SCOPE} from './incident-driver';
 
 const CHILD = path.resolve('tests/storage/fixtures/history-repair-child.cjs');
@@ -113,11 +113,11 @@ async function runChild(mode: 'record' | 'apply', config: unknown, until?: strin
   const child = spawn(process.execPath, [CHILD, mode, configFile], {env: {...process.env, ELECTRON_RUN_AS_NODE: '1'}, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
   const lines: string[] = [];
   let stdout = '', stderr = '';
-  child.stderr!.on('data', chunk => { stderr += String(chunk); });
+  child.stderr.on('data', chunk => { stderr += String(chunk); });
   const reached = new Promise<void>((resolve, reject) => {
     // Hang guard: the child answers within seconds; this bound only diagnoses a missing line and never times product behavior.
     const guard = setTimeout(() => { child.kill(); reject(new Error(`Hang guard: history repair child did not print ${until ?? 'exit'}`)); }, 25_000);
-    child.stdout!.on('data', chunk => {
+    child.stdout.on('data', chunk => {
       stdout += String(chunk);
       const parts = stdout.split('\n'); stdout = parts.pop() ?? '';
       for (const line of parts) { lines.push(line.trim()); if (until && line.trim() === until) { clearTimeout(guard); resolve(); } }
