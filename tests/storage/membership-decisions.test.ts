@@ -98,6 +98,18 @@ describe('ET-112b2a membership decision rows for the b1 decisions', () => {
     expect(decisions(db)).toEqual([row(1, 1, 'root', 'no-candidate', 2), row(2, 2, 'root', 'no-candidate', 2), row(3, 3, 'root', 'no-candidate', 2),
       row(4, 4, 'joined', 'matched', 2, 3)]);
   });
+  it('M2 never continues a group whose fingerprint was written before ET-112i: the same job roots and replaces it', async () => {
+    const {storage, db} = await openDirect();
+    drive(storage, S1);
+    // The incident job's stored job-v1 fingerprint as schema-v9-representative.sql records it, with its deadline.
+    const v1 = 'job-v1:["synthetic_incident_cargo","synthetic_berlin","synthetic_origin_company","synthetic_dresden","synthetic_destination_company",21000,'
+      + '"external_contracts","20895",{"raw":"10250","sdkType":"u64"}]';
+    db.prepare('UPDATE logical_trips SET fingerprint = ? WHERE id = 1').run(v1);
+    drive(storage, S2);
+    expect(decisions(db)).toEqual([row(1, 1, 'root', 'no-candidate', 2), row(2, 2, 'root', 'no-candidate', 2)]);
+    expect(db.prepare('SELECT id, retired, interrupted, substr(fingerprint, 1, 7) AS prefix FROM logical_trips ORDER BY id').all().map(value => plain(value as Record<string, unknown>)))
+      .toEqual([{id: 1, retired: 1, interrupted: 1, prefix: 'job-v1:'}, {id: 2, retired: 0, interrupted: 0, prefix: 'job-v2:'}]);
+  });
   it('M3 keeps the row pending with job-evidence-incomplete for a proof-bearing reading without a current cargo ID, then joins', async () => {
     const {storage, db} = await openDirect();
     drive(storage, S1); drive(storage, S2);
