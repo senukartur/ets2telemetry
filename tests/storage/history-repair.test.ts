@@ -280,8 +280,8 @@ describe('ET-112g repair against concurrent recording', () => {
     ok(storage.close());
     expect(membership(ws.database, tripUuidFor(EXTRA_SESSIONS[0], '1'))).toMatchObject({logical_ref: 1});
     const digest = digestOf(ws.database);
-    // The target's recalculation (ET-112g2) is fingerprinted on the same rows, so it is stale as well.
-    expect((await applied(ws.database, out, plan.confirmation)).actions.map(action => action.status)).toEqual(['stale', 'stale']);
+    // The apply stops at the stale join, so the target's recalculation (ET-112g2), planned on top of it, never runs.
+    expect((await applied(ws.database, out, plan.confirmation)).actions.map(action => action.status)).toEqual(['stale']);
     expect(membership(ws.database, S)).toMatchObject({logical_ref: 3});
     expect(digestOf(ws.database)).toEqual(digest);
   });
