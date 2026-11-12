@@ -8,6 +8,7 @@ import {randomUUID} from 'node:crypto';
 import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MAX_SAMPLE_BATCH, type SampleInput, type Storage, type TripEffect} from '../../packages/storage/src';
+import {pausedReconnect} from '../../packages/storage/src/sqlite/logical-coverage';
 import {revise} from '../../packages/storage/src/sqlite/logical-trips';
 import {reconstructQuantities, SPLICE_SAMPLE_LIMIT, upgradeQuantities} from '../../packages/storage/src/sqlite/quantities';
 import {mapUploadProjection, UPLOAD_PAGE_KINDS, type UploadProjectionPage} from '../../packages/storage/src/upload-projection';
@@ -634,9 +635,12 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
     /**
      * The window after A's readings: as described; `gap` loses the truck re-send with a session-level event-loss interval
      * and keeps A open for the timer reset, so only the lost event differs; `no-pause` has a fine instead of the pause;
-     * `started` and `fined` add that event after the job re-send.
+     * `started` and `fined` add that event after the job re-send; `closed-early` moves the timer reset that closes A
+     * before the pause; `gap-row` stores a gap marker without effects over the truck re-send, whose event still arrives.
      */
-    window: 'clean' | 'gap' | 'no-pause' | 'started' | 'fined';
+    window: 'clean' | 'gap' | 'no-pause' | 'started' | 'fined' | 'closed-early' | 'gap-row';
+    /** A's close reason at the timer reset. */
+    closeReason: 'discontinuity' | 'gap';
     /** The event at N. */
     atNext: 'started' | 'fined';
     junction: Partial<QuantityReading>; following: Partial<QuantityReading>;
@@ -647,7 +651,7 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
     newSession: boolean;
     accountingEngine?: 0;
   }
-  const base: Reconnect = {join: 'attach', window: 'clean', atNext: 'started', junction: {}, following: {}, deadline: false, junctionProof: true, newSession: false};
+  const base: Reconnect = {join: 'attach', window: 'clean', closeReason: 'discontinuity', atNext: 'started', junction: {}, following: {}, deadline: false, junctionProof: true, newSession: false};
   const paused = {simulation: 'paused'} as const;
   async function reconnect(options: Partial<Reconnect> = {}) {
     const v = {...base, ...options};
@@ -656,8 +660,10 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
     for (const reading of [s(0), s(1), s(2), s(3, {speedMps: 0})]) { ok(storage.appendSamples(a.script.session, [sampleOf(a, reading, true)], {uniqueSeconds: true})); a.previous = reading; }
     const event = (record: EventRecord, advanceMs = 1_000) =>
       ok(storage.commitEvent({message: a.script.event(record, v.window === 'no-pause' ? {advanceMs} : {...paused, advanceMs})}));
+    const close = {kind: 'trip.close', tripUuid: a.uuid, outcome: 'none', closeReason: v.closeReason, recordingCompleteness: 'partial', endedUtcMs: 2000} as const;
     // The first event follows A's last reading at 13 s on the shared capture clock.
-    event(v.window === 'no-pause' ? r.fined() : r.paused(), 12_000);
+    if (v.window === 'closed-early') ok(storage.commitEvent({message: a.script.event(r.timersRestart(), {advanceMs: 12_000}), effects: [close]}));
+    event(v.window === 'no-pause' ? r.fined() : r.paused(), v.window === 'closed-early' ? 1_000 : 12_000);
     event(r.jobConfigured());
     if (v.window === 'started') ok(storage.commitEvent({message: a.script.event(r.started())}));
     if (v.window === 'fined') event(r.fined());
@@ -665,16 +671,19 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
       const gap = a.script.gap(1), {firstEventSeq, lastEventSeq} = gap.data;
       ok(storage.commitGap({message: gap, effects: [{kind: 'completeness.add', interval: {tripUuid: null, kind: 'event-loss', firstEventSeq, lastEventSeq,
         detail: {cause: 'gap', causes: {...gap.data.causes}, firstEventSeq, lastEventSeq, redelivered: false}}}]}));
+    } else if (v.window === 'gap-row') {
+      const truck = a.script.event(r.truckConfigured(), {...paused, advanceMs: 1_000}), seq = BigInt(truck.data.eventSeq);
+      ok(storage.commitGap({message: a.script.gapRange(seq, seq, {queueCount: '1'})}));
+      ok(storage.commitEvent({message: truck}));
     } else event(r.truckConfigured());
     event(r.trailerConfigured());
-    const close = {kind: 'trip.close', tripUuid: a.uuid, outcome: 'none', recordingCompleteness: 'partial', endedUtcMs: 2000} as const;
     let script = a.script;
     const effects: TripEffect[] = [];
     if (v.newSession) {
       script = new Script(ETS2_B);
       ok(storage.upsertSession({message: script.welcome()}));
       effects.push({...close, closeReason: 'restart'});
-    } else ok(storage.commitEvent({message: a.script.event(r.timersRestart(), paused), effects: [{...close, closeReason: 'discontinuity'}]}));
+    } else if (v.window !== 'closed-early') ok(storage.commitEvent({message: a.script.event(r.timersRestart(), paused), effects: [close]}));
     const next = script.next.toString(), uuid = attachTripUuidFor(script.session, next), at = {source: 'checkpoint', nextEventSeq: next};
     const checkpointJob = v.deadline ? job({deliveryDeadline: {available: true, value: '13060', unit: 'min'}}) : job();
     effects.push({kind: 'trip.open', tripUuid: uuid, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', recordingCompleteness: 'partial', startedUtcMs: 2000},
@@ -695,7 +704,17 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
     if (v.join === 'retro') expect(resolveAt(storage, b, 100)).toEqual({status: 'resolved', resolved: 1, remaining: 0});
     // B joined A's group: one Journal trip.
     expect(ok(storage.journalTrips()).trips.map(trip => trip.tripUuid)).toEqual([a.uuid]);
-    return {storage, root: a.uuid, completeness: ok(storage.journalTrip(a.uuid)).trip.recordingCompleteness};
+    return {storage, root: a.uuid, attached: uuid, next, completeness: ok(storage.journalTrip(a.uuid)).trip.recordingCompleteness};
+  }
+  /** Closes `storage` and evaluates pausedReconnect for the attached recording, with and without the start at N. */
+  function probe(storage: Storage, attached: string) {
+    ok(storage.close());
+    const db = new Database(ws.database, {readonly: true});
+    try {
+      db.defaultSafeIntegers(true);
+      const row = db.prepare('SELECT * FROM trips WHERE trip_uuid=?').get(attached) as Record<string, unknown>;
+      return [pausedReconnect(db, row), pausedReconnect(db, row, false)];
+    } finally { db.close(); }
   }
   // A's 60 m and 0.03 L continue at the save point, then B adds 20 m and 10 ml.
   const same: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'complete', flags: [], cut: false};
@@ -707,10 +726,12 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
     ['a join at the attach', {}],
     ['a pre-join splice whose proof follows the junction reading', {join: 'pre-join'}]
   ] as const)('keeps the coverage complete: %s', async (_name, options) => {
-    const {storage, root, completeness} = await reconnect(options);
+    const {storage, root, attached, next, completeness} = await reconnect(options);
     expect(completeness).toBe('complete');
     expectJournal(storage, root, same);
     expectLedger(ledger(storage, root), same);
+    // The control of the isolated conditions below: both checks find the reconnect.
+    expect(probe(await ws.open(), attached)).toEqual([{continuationOf: root, nextEventSeq: next}, {continuationOf: root, nextEventSeq: next}]);
   });
   it.each([
     ['an event lost in the window', {window: 'gap'}, same],
@@ -729,6 +750,24 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
     expect(completeness).toBe('partial');
     expectJournal(storage, root, expected);
     expectLedger(ledger(storage, root), expected);
+  });
+  // Each case differs from the clean control above in one fact that pausedReconnect checks and adds no loss interval,
+  // so the partial coverage comes from that check alone: both forms of the check reject the reconnect.
+  it.each([
+    ['A closed for a gap rather than as a discontinuity', {closeReason: 'gap'}],
+    ['A closed by the timer reset before the pause', {window: 'closed-early'}],
+    ['a fine inside the window, which adds no loss interval', {window: 'fined'}],
+    ['a stored gap marker over the window without a loss interval, its event stored later', {window: 'gap-row'}]
+  ] as const)('records the loss when one reconnect condition fails: %s', async (_name, options) => {
+    const {storage, root, attached, completeness} = await reconnect(options);
+    expect(completeness).toBe('partial');
+    expectJournal(storage, root, same);
+    expectLedger(ledger(storage, root), same);
+    const db = new Database(ws.database, {readonly: true});
+    try {
+      expect(db.prepare("SELECT count(*) FROM completeness_intervals WHERE kind IN ('event-loss','sample-loss','restore-loss')").pluck().get()).toBe(0);
+    } finally { db.close(); }
+    expect(probe(await ws.open(), attached)).toEqual([null, null]);
   });
   it('records the loss as before in an engine-0 group', async () => {
     expect((await reconnect({accountingEngine: 0})).completeness).toBe('partial');
