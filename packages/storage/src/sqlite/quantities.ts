@@ -1,20 +1,35 @@
 // Engine 1 distance and fuel in storage (ET-112c): the per-sample ledger of a logical trip in logical_progress, the replay
 // of a joining member's recorded samples into its target (the splice), the reads of a ledger head and the read-only
 // reconstruction that package g reuses. The rules are advanceQuantities in telemetry-core; live recording, the splice and
-// the reconstruction feed it the same stored inputs (the sample, its truck and the recorder link bit 15), so they agree.
+// the reconstruction feed it the same stored inputs (the sample, its truck and the recorder link bit 15), and apply the
+// same gap rule to a member whose pre-join samples are not replayed, so the reconstruction equals the live head.
 // See docs/storage.md, Schema version 10.
 import type Database from 'better-sqlite3';
 import {advanceQuantities, completeAnchor, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAGS, memoryPath, QUANTITY_FLAGS, QUANTITY_POINT_LIMIT, QUANTITY_RUN_LIMIT, quantityStatus,
   type QuantityAdvance, type QuantityAnchor, type QuantityPath, type QuantityPoint, type QuantityRun, type QuantityStep} from '../../../telemetry-core/src/trips/quantities';
-import {MAX_SAMPLE_BATCH, type SampleInput} from '../api';
+import {MAX_RESOLVE_MEMBERSHIPS, MAX_SAMPLE_BATCH, type SampleInput} from '../api';
 import {registeredAccountingEngine} from './connection';
 import {cleanLoadWindow, COVERAGE_LOSS, type LogicalCoverage} from './logical-coverage';
 
 type Row = Record<string, unknown>;
-const F = QUANTITY_FLAGS, CUMULATIVE = 0x3fff, UNPROVEN = F.distanceUnproven | F.fuelUnproven, BREAKS = DISTANCE_BREAK_FLAGS | FUEL_BREAK_FLAGS;
-/** The most recorded samples a splice replays: one sample batch (MAX_SAMPLE_BATCH). A longer member fails closed. */
-export const SPLICE_SAMPLE_LIMIT = MAX_SAMPLE_BATCH;
-const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as Row | undefined;
+const F = QUANTITY_FLAGS, CUMULATIVE = 0x3fff, BREAKS = DISTANCE_BREAK_FLAGS | FUEL_BREAK_FLAGS;
+/**
+ * The most recorded samples one splice replays, and the replay budget of one resolve call: a full resolve page of members
+ * with one sample batch each. A longer member keeps the target's subtotal as partial instead.
+ */
+export const SPLICE_SAMPLE_LIMIT = MAX_RESOLVE_MEMBERSHIPS * MAX_SAMPLE_BATCH;
+const STATEMENTS = new WeakMap<Database.Database, Map<string, Database.Statement>>();
+/** The connection's prepared statement for `sql`, prepared once. */
+function statement(db: Database.Database, sql: string): Database.Statement {
+  let cache = STATEMENTS.get(db);
+  if (!cache) STATEMENTS.set(db, cache = new Map<string, Database.Statement>());
+  let prepared = cache.get(sql);
+  if (!prepared) cache.set(sql, prepared = db.prepare(sql));
+  return prepared;
+}
+const get = (db: Database.Database, sql: string, ...args: unknown[]) => statement(db, sql).get(...args) as Row | undefined;
+const all = (db: Database.Database, sql: string, ...args: unknown[]) => statement(db, sql).all(...args) as Row[];
+const run = (db: Database.Database, sql: string, ...args: unknown[]) => statement(db, sql).run(...args);
 const real = (value: unknown) => value === null || value === undefined ? null : Number(value);
 
 /** Schema 10 records the engine of each group. */
@@ -81,9 +96,9 @@ function ledgerPath(db: Database.Database, logical: bigint, head: Row | undefine
       return runs;
     },
     points(run, odometerM) {
-      const rows = db.prepare(`SELECT * FROM logical_progress WHERE logical_ref=? AND truck_ref IS ? AND start_odometer_m=? AND odometer_m<=? AND coalesce(start_ref,id)=?
-        AND cut_odometer_m IS NULL AND anchor_sample_ref=bound_sample_ref ORDER BY odometer_m DESC, id DESC LIMIT ?`)
-        .all(logical, sampleTruckRef(db, run.row.anchor_sample_ref), run.row.start_odometer_m, odometerM, run.row.start_ref ?? run.row.id, QUANTITY_POINT_LIMIT) as Row[];
+      const rows = all(db, `SELECT * FROM logical_progress WHERE logical_ref=? AND truck_ref IS ? AND start_odometer_m=? AND odometer_m<=? AND coalesce(start_ref,id)=?
+        AND cut_odometer_m IS NULL AND anchor_sample_ref=bound_sample_ref ORDER BY odometer_m DESC, id DESC LIMIT ?`,
+      logical, sampleTruckRef(db, run.row.anchor_sample_ref), run.row.start_odometer_m, odometerM, run.row.start_ref ?? run.row.id, QUANTITY_POINT_LIMIT);
       return rows.map(row => pointOf(db, row));
     }
   };
@@ -91,21 +106,39 @@ function ledgerPath(db: Database.Database, logical: bigint, head: Row | undefine
 
 /** A replayed member sample: its own row in the member's chain, and the break bits that chain already annotated there. */
 interface Replay {own: unknown; annotated: number}
+/** The ledger head of a group as a replay carries it: the head row's id and its last complete anchor. */
+interface Carried {headId: unknown; a: Stored | undefined}
+/** The last complete anchor of a head row. */
+const anchorOf = (db: Database.Database, head: Row | undefined) => head ? stored(db, head.anchor_sample_ref, truckOf(db, sampleTruckRef(db, head.anchor_sample_ref))) : undefined;
+const pointAt = (head: Row | undefined, a: Stored | undefined): QuantityPoint | null => head && a
+  ? {anchor: a.anchor, distanceM: real(head.distance_m), fuelUsedL: real(head.fuel_used_l), flags: Number(head.quantity_flags)} : null;
 /**
- * Advances the engine-1 ledger of `logical` by the stored sample `b` of raw trip `trip`, then writes its row, a cut row for
- * a rollback, the progress head, the unproven latch and one version 2 annotation of the newly set break bits. A sample
- * before the first complete anchor writes nothing. A replayed sample keeps `sample_ref` NULL (its row in the member's
- * chain owns it) and starts a run at its own row there, so ACCOUNTING_PATH reads the run's sample range. Returns the
- * savePoint of a member junction, null for any other step, and undefined when nothing was written.
+ * The junction of a member whose recorded samples before the join are not replayed (more than SPLICE_SAMPLE_LIMIT, an
+ * engine-0 member, or no complete reading): a new run at `anchor` that keeps the supported subtotal, marked partial.
  */
-function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Stored, truckRef: unknown, link: (a: Stored) => boolean, replay: Replay | null, now: unknown): boolean | null | undefined {
-  const headId = get(db, 'SELECT progress_head FROM logical_trips WHERE id=?', logical)!.progress_head, head = headId === null ? undefined : ledgerRow(db, headId);
-  const a = head ? stored(db, head.anchor_sample_ref, truckOf(db, sampleTruckRef(db, head.anchor_sample_ref))) : undefined;
-  const previous: QuantityPoint | null = head && a ? {anchor: a.anchor, distanceM: real(head.distance_m), fuelUsedL: real(head.fuel_used_l), flags: Number(head.quantity_flags)} : null;
-  const linked = !!a && link(a), step: QuantityStep = a ? stepOf(db, a, b, linked) : {kind: 'member'};
-  const advance: QuantityAdvance<LedgerRun> = advanceQuantities(previous, b.anchor, step, ledgerPath(db, logical, head));
+function gapAdvance<R extends QuantityRun>(previous: QuantityPoint | null, anchor: QuantityAnchor): QuantityAdvance<R> {
+  const gap = F.distanceGap | F.fuelBoundary;
+  const point = previous ? {anchor, distanceM: previous.distanceM, fuelUsedL: previous.fuelUsedL, flags: (previous.flags & CUMULATIVE) | gap}
+    : {anchor, distanceM: 0, fuelUsedL: 0, flags: F.base | gap};
+  return {point, run: 'new', cut: null, unproven: false, savePoint: false, added: gap & ~(previous?.flags ?? 0) & BREAKS};
+}
+/**
+ * Advances the engine-1 ledger of `logical` by the stored sample `b` of raw trip `trip` (or by the gap point, with `gap`),
+ * then writes its row, a cut row for a rollback, the progress head, the unproven latch and one version 2 annotation of the
+ * newly set break bits. A sample before the first complete anchor writes nothing. A replayed sample keeps `sample_ref`
+ * NULL (its row in the member's chain owns it) and starts a run at its own row there, so ACCOUNTING_PATH reads the run's
+ * sample range. `carried` is the head a replay keeps in memory; live recording reads it. Returns the savePoint of a member
+ * junction, null for any other step and undefined when nothing was written, with the head after the step.
+ */
+function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Stored, truckRef: unknown, link: (a: Stored) => boolean, replay: Replay | null, now: unknown,
+  carried?: Carried, gap?: true): {decided: boolean | null | undefined; carried: Carried} {
+  const headId = carried ? carried.headId : get(db, 'SELECT progress_head FROM logical_trips WHERE id=?', logical)!.progress_head;
+  const head = headId === null ? undefined : ledgerRow(db, headId), a = carried ? carried.a : anchorOf(db, head);
+  const previous = pointAt(head, a);
+  const linked = !gap && !!a && link(a), step: QuantityStep = a ? stepOf(db, a, b, linked) : {kind: 'member'};
+  const advance: QuantityAdvance<LedgerRun> = gap ? gapAdvance(previous, b.anchor) : advanceQuantities(previous, b.anchor, step, ledgerPath(db, logical, head));
   const point = advance.point;
-  if (!point) return undefined;
+  if (!point) return {decided: undefined, carried: {headId, a}};
   const own = replay?.own ?? null;
   let prefix: unknown, start: unknown, startOdometer: unknown, flags = point.flags;
   if (!completeAnchor(b.anchor)) {
@@ -115,28 +148,29 @@ function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Sto
   } else if (advance.cut) {
     // The cut ends the restored run at the loaded odometer, in the engine-0 cut row shape.
     const end = advance.cut.run.row, x = advance.cut.odometerM;
-    prefix = db.prepare(`INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,cut_odometer_m,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l,quantity_flags)
-      VALUES(?,?,?,NULL,?,?,?,?,?,?,?,?,?,?)`).run(logical, end.member, b.id, end.bound_sample_ref, end.prefix_ref, end.start_ref ?? end.id, x, truckRef, x, end.start_odometer_m,
-      point.distanceM, point.fuelUsedL, point.flags & CUMULATIVE).lastInsertRowid;
+    prefix = run(db, `INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,cut_odometer_m,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l,quantity_flags)
+      VALUES(?,?,?,NULL,?,?,?,?,?,?,?,?,?,?)`, logical, end.member, b.id, end.bound_sample_ref, end.prefix_ref, end.start_ref ?? end.id, x, truckRef, x, end.start_odometer_m,
+    point.distanceM, point.fuelUsedL, point.flags & CUMULATIVE).lastInsertRowid;
     start = own; startOdometer = b.anchor.odometerM;
   } else if (advance.run === 'new') {
     prefix = head?.id ?? null; start = own; startOdometer = b.anchor.odometerM;
   } else {
     prefix = head!.prefix_ref; start = head!.start_ref ?? head!.id; startOdometer = head!.start_odometer_m;
   }
-  const inserted = db.prepare(`INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l,quantity_flags)
-    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(logical, trip.id, completeAnchor(b.anchor) ? b.id : head!.anchor_sample_ref, replay ? null : b.id, b.id, prefix, start, truckRef,
-    b.anchor.odometerM, startOdometer, point.distanceM, point.fuelUsedL, flags);
-  db.prepare('UPDATE logical_trips SET progress_head=? WHERE id=?').run(inserted.lastInsertRowid, logical);
+  const inserted = run(db, `INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l,quantity_flags)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, logical, trip.id, completeAnchor(b.anchor) ? b.id : head!.anchor_sample_ref, replay ? null : b.id, b.id, prefix, start, truckRef,
+  b.anchor.odometerM, startOdometer, point.distanceM, point.fuelUsedL, flags);
+  run(db, 'UPDATE logical_trips SET progress_head=? WHERE id=?', inserted.lastInsertRowid, logical);
   // D11: an unproven quantity latches the money totals incomplete, as an unresolved engine-0 rollback does.
-  if (advance.unproven) db.prepare('UPDATE logical_trips SET reconciliation_unknown=1 WHERE id=?').run(logical);
+  if (advance.unproven) run(db, 'UPDATE logical_trips SET reconciliation_unknown=1 WHERE id=?', logical);
   const added = advance.added & ~(replay?.annotated ?? 0);
   if (added) {
     const detail = {annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, distanceFlags: added & DISTANCE_BREAK_FLAGS, fuelFlags: added & FUEL_BREAK_FLAGS};
-    db.prepare(`INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,end_utc_ms,end_monotonic_ns,source_clock_ref,detail_json,created_utc_ms)
-      VALUES(?,?,'discontinuity',?,?,?,?,?)`).run(b.session, trip.id, b.utcMs, b.anchor.monotonicNs.padStart(20, '0'), b.clock, JSON.stringify(detail), now);
+    run(db, `INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,end_utc_ms,end_monotonic_ns,source_clock_ref,detail_json,created_utc_ms)
+      VALUES(?,?,'discontinuity',?,?,?,?,?)`, b.session, trip.id, b.utcMs, b.anchor.monotonicNs.padStart(20, '0'), b.clock, JSON.stringify(detail), now);
   }
-  return previous && step.kind === 'member' && completeAnchor(b.anchor) ? advance.savePoint : null;
+  const decided = gap ? false : previous && step.kind === 'member' && completeAnchor(b.anchor) ? advance.savePoint : null;
+  return {decided, carried: {headId: inserted.lastInsertRowid, a: completeAnchor(b.anchor) ? b : a}};
 }
 
 /**
@@ -147,39 +181,50 @@ export function projectQuantitySample(db: Database.Database, logical: bigint, ro
   const previous = sample.recording?.previous;
   const link = (a: Stored) => !!previous && previous.tripUuid === sample.tripUuid && a.trip === row.id && previous.sourceClockId === a.anchor.sourceClockId
     && previous.monotonicNs === a.anchor.monotonicNs;
-  return advanceLedger(db, logical, row, stored(db, sampleId, sample.recording?.truck ?? null), truckRef, link, null, now) ?? null;
+  return advanceLedger(db, logical, row, stored(db, sampleId, sample.recording?.truck ?? null), truckRef, link, null, now).decided ?? null;
 }
+
+/** The engine-1 rows of raw member `member` in its own chain, at most SPLICE_SAMPLE_LIMIT + 1, in sample order; none for engine 0. */
+function ownRows(db: Database.Database, member: unknown): Row[] {
+  if (get(db, 'SELECT * FROM logical_trips WHERE id=?', member)?.accounting_engine !== 1n) return [];
+  return all(db, `SELECT p.* FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=? ORDER BY s.id LIMIT ?`,
+    member, member, SPLICE_SAMPLE_LIMIT + 1);
+}
+/** The samples one splice of `member` replays, as a resolve call counts them against SPLICE_SAMPLE_LIMIT: one when none are replayed. */
+export function spliceCost(db: Database.Database, member: unknown): number {
+  const rows = ownRows(db, member).length;
+  return rows === 0 || rows > SPLICE_SAMPLE_LIMIT ? 1 : rows;
+}
+const headRow = (db: Database.Database, logical: unknown) => get(db, 'SELECT p.* FROM logical_trips l JOIN logical_progress p ON p.id=l.progress_head WHERE l.id=?', logical);
 
 /**
  * Splices raw member `member`, which has just joined engine-1 group `target`, into the target's ledger: its samples
  * recorded in its own engine-1 chain before the join are replayed in order through the same step as live samples, with
- * their stored truck and link inputs. The member's own chain stays unchanged. A member with no ledger row yet, an engine-0
- * member or an engine-0 target is not spliced: the member's next sample is the junction. More than SPLICE_SAMPLE_LIMIT
- * samples fail closed with one row of unavailable quantities. Returns the savePoint of the junction, or null.
+ * their stored truck and link inputs and the head carried in memory. The member's own chain stays unchanged. A member
+ * whose earlier samples are not replayed (more than SPLICE_SAMPLE_LIMIT own rows, an engine-0 member, or samples without
+ * a complete reading) keeps the target's subtotal as partial instead: one gap row at its own last anchor, or at the
+ * target head. A member without samples before the join (`current` is the sample being recorded) is not spliced, and
+ * nothing is spliced into an engine-0 target or before the target's first complete reading. Returns the junction's
+ * savePoint, or null.
  */
-export function spliceMember(db: Database.Database, target: bigint, member: Row): boolean | null {
+export function spliceMember(db: Database.Database, target: bigint, member: Row, current?: bigint): boolean | null {
   // SELECT *: below schema 10 the column is absent, and nothing is spliced.
-  const engines = db.prepare('SELECT * FROM logical_trips WHERE id IN (?,?)').all(target, member.id) as Row[];
-  if (engines.length !== 2 || engines.some(group => group.accounting_engine !== 1n)) return null;
-  const rows = db.prepare(`SELECT p.* FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=? ORDER BY s.id LIMIT ?`)
-    .all(member.id, member.id, SPLICE_SAMPLE_LIMIT + 1) as Row[];
-  if (rows.length === 0) return null;
-  const now = member.updated_utc_ms;
-  if (rows.length > SPLICE_SAMPLE_LIMIT) {
-    const last = get(db, 'SELECT p.* FROM logical_trips l JOIN logical_progress p ON p.id=l.progress_head WHERE l.id=?', member.id)!;
-    const head = get(db, 'SELECT progress_head FROM logical_trips WHERE id=?', target)!.progress_head;
-    const inserted = db.prepare(`INSERT INTO logical_progress(logical_ref,trip_ref,anchor_sample_ref,sample_ref,bound_sample_ref,prefix_ref,start_ref,truck_ref,odometer_m,start_odometer_m,distance_m,fuel_used_l,quantity_flags)
-      VALUES(?,?,?,NULL,?,?,?,?,?,?,NULL,NULL,?)`).run(target, member.id, last.anchor_sample_ref, last.bound_sample_ref, head, last.id, last.truck_ref, last.odometer_m, last.odometer_m, UNPROVEN);
-    db.prepare('UPDATE logical_trips SET progress_head=?,reconciliation_unknown=1 WHERE id=?').run(inserted.lastInsertRowid, target);
-    return false;
+  if (get(db, 'SELECT * FROM logical_trips WHERE id=?', target)?.accounting_engine !== 1n) return null;
+  const rows = ownRows(db, member.id), now = member.updated_utc_ms;
+  if (rows.length === 0 || rows.length > SPLICE_SAMPLE_LIMIT) {
+    const own = rows.length ? headRow(db, member.id) : undefined, head = own ? undefined : headRow(db, target);
+    if (!own && (!head || !get(db, 'SELECT 1 FROM samples WHERE trip_ref=? AND id IS NOT ? LIMIT 1', member.id, current ?? null))) return null;
+    const anchor = anchorOf(db, own ?? head)!;
+    return advanceLedger(db, target, member, anchor, sampleTruckRef(db, anchor.id), () => false, {own: null, annotated: 0}, now, undefined, true).decided ?? null;
   }
-  let junction: boolean | null = null, previousFlags = 0;
+  let junction: boolean | null = null, previousFlags = 0, carried: Carried | undefined;
   for (const row of rows) {
     const flags = Number(row.quantity_flags), annotated = flags & ~previousFlags & BREAKS;
     previousFlags = flags;
     const b = stored(db, row.sample_ref, truckOf(db, row.truck_ref));
-    const decided = advanceLedger(db, target, member, b, row.truck_ref, () => (flags & F.linked) !== 0, {own: row.id, annotated}, now);
-    if (junction === null && decided !== undefined && decided !== null) junction = decided;
+    const step = advanceLedger(db, target, member, b, row.truck_ref, () => (flags & F.linked) !== 0, {own: row.id, annotated}, now, carried);
+    carried = step.carried;
+    if (junction === null && step.decided !== undefined && step.decided !== null) junction = step.decided;
   }
   return junction;
 }
@@ -224,21 +269,38 @@ export function quantitiesIncomplete(db: Database.Database, head: bigint | null)
 
 /**
  * Read-only reconstruction of a logical trip's engine-1 quantities from its stored samples: the members in join order,
- * each member's samples with a ledger row in id order, through advanceQuantities and memoryPath(). It writes nothing.
- * Returns the last point, or null before any complete anchor.
+ * each member's samples with a ledger row in id order, through advanceQuantities and memoryPath(). A joined member's
+ * own-chain rows come first, as the splice replayed them; where the splice wrote a gap row instead (more than
+ * SPLICE_SAMPLE_LIMIT own rows, an engine-0 member, or earlier samples without a complete reading), the same gap point
+ * replaces them. It writes nothing. Returns the last point, or null before any complete anchor.
  */
 export function reconstructQuantities(db: Database.Database, logical: bigint): QuantityPoint | null {
   const path = memoryPath();
   let last: Stored | undefined;
-  const members = db.prepare('SELECT trip_ref FROM logical_memberships WHERE logical_ref=? ORDER BY coalesce(joined_after_revision,0),trip_ref').pluck().all(logical) as bigint[];
-  for (const member of members) {
-    const rows = db.prepare('SELECT p.sample_ref,p.truck_ref,p.quantity_flags FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? ORDER BY s.id').all(member) as Row[];
+  const fold = (member: bigint, rows: Row[]) => {
     for (const row of rows) {
       const b = stored(db, row.sample_ref, truckOf(db, row.truck_ref));
       const step = last ? stepOf(db, last, b, (Number(row.quantity_flags ?? 0) & F.linked) !== 0) : {kind: 'member' as const};
       path.record(String(member), b.anchor, advanceQuantities(path.head, b.anchor, step, path));
       if (completeAnchor(b.anchor)) last = b;
     }
+  };
+  const members = db.prepare('SELECT trip_ref FROM logical_memberships WHERE logical_ref=? ORDER BY coalesce(joined_after_revision,0),trip_ref').pluck().all(logical) as bigint[];
+  for (const member of members) {
+    // The member's rows recorded into this trip, live or after its join; replayed rows have no sample_ref.
+    const rows = all(db, `SELECT p.sample_ref,p.truck_ref,p.quantity_flags FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=?
+      ORDER BY s.id`, member, logical);
+    const own = member === logical ? [] : ownRows(db, member);
+    if (own.length > SPLICE_SAMPLE_LIMIT) {
+      last = anchorOf(db, headRow(db, member))!;
+      path.record(String(member), last.anchor, gapAdvance(path.head, last.anchor));
+    } else if (own.length > 0) fold(member, own);
+    else if (member !== logical && path.head && get(db, 'SELECT 1 FROM samples WHERE trip_ref=? AND id<coalesce(?,id+1) LIMIT 1', member, rows[0]?.sample_ref ?? null)) {
+      // Samples before the member's first row in this trip were recorded before its join and not replayed.
+      const anchor = path.head.anchor;
+      path.record(String(member), anchor, gapAdvance(path.head, anchor));
+    }
+    fold(member, rows);
   }
   return path.head;
 }
