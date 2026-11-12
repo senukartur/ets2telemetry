@@ -45,7 +45,8 @@ export function resolveBinding(db:Database.Database,root:unknown):Row|undefined 
     if(bound)db.prepare("UPDATE upload_source_bindings SET held=1,hold_reason='reconciliation-required' WHERE root_ref=?").run(root);
     return undefined;
   }
-  // A root whose group holds another member with its own source binding would publish that member's evidence twice.
+  // A root whose group holds another member with its own source binding carries that member's evidence again. Hold it here,
+  // before begin, freeze and discovery publish anything and before an unbound root gets a binding, not only at the members fold.
   const memberBound=get(db,`SELECT 1 FROM logical_memberships m JOIN upload_source_bindings b ON b.root_ref=m.trip_ref
     WHERE m.logical_ref=? AND m.trip_ref<>? LIMIT 1`,root,root)!==undefined;
   if(bound){

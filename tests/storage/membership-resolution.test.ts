@@ -204,6 +204,9 @@ describe('REG-004/005/008/012 publication of a segment joined after its delivery
     expect(frozen.status).toBe('frozen');
     expect(wire(db, frozen.eventId!)).toMatchObject({revision: 2, type: 'trip.completed', installationId: registration.installation_id, bindingId: registration.binding_id,
       source: {tripId: root, pluginSessionId: ETS2_A}, snapshot: {outcome: 'delivered', revenue}});
+    // The segment has no source binding of its own.
+    expect(bindings(db)).toHaveLength(1);
+    expect(bindings(db)).toMatchObject([{root_ref: 1n, registration_ref: ownerA}]);
   });
 });
 
@@ -231,6 +234,9 @@ describe('REG-005/008/010/012 a root whose group holds a separately published me
       expect(db.prepare('SELECT count(*) FROM upload_source_bindings WHERE root_ref = 1').pluck().get()).toBe(0n);
     }
     expect(ok(storage.getUploadStoreStatus({registrationId})).heldSources).toBe(1);
+    // Work for the member's raw UUID resolves to the held root as well; the member's own binding is held only when the
+    // member itself is next resolved (its redirect in resolveBinding), which no step here does.
+    expect(begin(storage, segment, registrationId)).toMatchObject({status: 'held', reason: 'reconciliation-required'});
     expect(syncRows(storage)?.find(row => row.tripUuid === root)).toEqual({tripUuid: root, state: 'held', reason: 'reconciliation'});
     expect(envelopes(db)).toHaveLength(published.length);
     expect(published.map(id => payload(db, id))).toEqual(bytes);
