@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {performance} from 'node:perf_hooks';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 
 const MAIN_OBSERVER_READY_MS = 2000;
 const OBSERVER_CLEANUP_MS = 1000;
@@ -14,25 +15,8 @@ const sanitize = value => value.replace(/vtc1_[A-Za-z0-9_-]*/g, '[redacted-token
 
 // Open a handle before quit, verify PID + creation time + executable, then wait on THAT process object.
 // This child observes only; it never terminates Electron. Disposing it terminates only this PowerShell observer.
-const PROCESS_OBSERVER_SCRIPT = `
-$ErrorActionPreference = 'Stop'
-$observed = $null
-try {
-  $observed = [System.Diagnostics.Process]::GetProcessById([int]$env:ETS2TELEMETRY_OBSERVED_PID)
-  $handle = $observed.Handle
-  $created = [DateTimeOffset]::new($observed.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds()
-  if ($created -ne [long]$env:ETS2TELEMETRY_OBSERVED_CREATED -or
-      -not [string]::Equals($observed.MainModule.FileName, $env:ETS2TELEMETRY_OBSERVED_EXE, [StringComparison]::OrdinalIgnoreCase)) {
-    @{event='unknown'; code='IDENTITY_MISMATCH'} | ConvertTo-Json -Compress
-  } else {
-    @{event='opened'} | ConvertTo-Json -Compress
-    [Console]::Out.Flush()
-    if ($observed.WaitForExit(8000)) { @{event='terminated'; code=$observed.ExitCode} | ConvertTo-Json -Compress }
-    else { @{event='unknown'; code='OBSERVER_WAIT_EXPIRED'} | ConvertTo-Json -Compress }
-  }
-} catch { @{event='unknown'; code='PROCESS_OBSERVER_ERROR'} | ConvertTo-Json -Compress }
-finally { if ($null -ne $observed) { $observed.Dispose() } }
-`;
+// The script runs as a file: a hidden PowerShell child with -EncodedCommand is what behavior-based antivirus blocks.
+const PROCESS_OBSERVER_SCRIPT = fileURLToPath(new URL('./exit-process-observer.ps1', import.meta.url));
 
 export function observeMainProcess(identity, update, {spawnProcess = spawn, platform = process.platform} = {}) {
   if (platform !== 'win32') {update({state: 'unknown', reason: 'UNSUPPORTED_PLATFORM'}); return {ready: Promise.resolve(), dispose: () => Promise.resolve({closed: true})};}
@@ -59,7 +43,7 @@ export function observeMainProcess(identity, update, {spawnProcess = spawn, plat
   const close = () => {childClosed = true; if (!finished) unknown('OBSERVER_CLOSED_WITHOUT_TERMINATION'); closeResolve();};
   try {
     child = spawnProcess(path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-      ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PROCESS_OBSERVER_SCRIPT, 'utf16le').toString('base64')], {
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', PROCESS_OBSERVER_SCRIPT], {
         windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], env: {...process.env,
           ETS2TELEMETRY_OBSERVED_PID: String(identity.pid), ETS2TELEMETRY_OBSERVED_CREATED: String(identity.createdMs), ETS2TELEMETRY_OBSERVED_EXE: identity.executable}});
     child.stdout.on('data', data); child.on('error', error); child.on('close', close);
