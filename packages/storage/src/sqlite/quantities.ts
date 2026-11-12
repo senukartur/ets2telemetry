@@ -14,8 +14,8 @@ import {cleanLoadWindow, COVERAGE_LOSS, type LogicalCoverage} from './logical-co
 type Row = Record<string, unknown>;
 const F = QUANTITY_FLAGS, CUMULATIVE = 0x3fff, BREAKS = DISTANCE_BREAK_FLAGS | FUEL_BREAK_FLAGS, GAP = F.distanceGap | F.fuelBoundary;
 /**
- * The most recorded samples one splice replays, and the replay budget of one resolve call: a full resolve page of members
- * with one sample batch each. A longer member keeps the target's subtotal as partial instead.
+ * The most recorded samples one splice replays, and the retroactive replay budget of one write transaction: a full resolve
+ * page of members with one sample batch each. A longer member keeps the target's subtotal as partial instead.
  */
 export const SPLICE_SAMPLE_LIMIT = MAX_RESOLVE_MEMBERSHIPS * MAX_SAMPLE_BATCH;
 const STATEMENTS = new WeakMap<Database.Database, Map<string, Database.Statement>>();
@@ -55,7 +55,7 @@ const sampleTruckRef = (db: Database.Database, sample: unknown) => get(db, 'SELE
 /**
  * The step from the last complete anchor `a` to `b`: another raw member, a source, capture or game clock change or a
  * non-positive time, or running time since the later of `a` and the latest simulation start, with a ferry or train event
- * in (a, b] on the same capture clock (one with an unknown time cannot be placed and is ignored, D7) and the recorder link.
+ * in (a, b] on the same capture clock (one with an unknown time cannot be placed and is ignored) and the recorder link.
  */
 function stepOf(db: Database.Database, a: Stored, b: Stored, linked: boolean): QuantityStep {
   if (a.trip !== b.trip) return {kind: 'member'};
@@ -161,7 +161,7 @@ function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Sto
     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, logical, trip.id, completeAnchor(b.anchor) ? b.id : head!.anchor_sample_ref, replay ? null : b.id, b.id, prefix, start, truckRef,
   b.anchor.odometerM, startOdometer, point.distanceM, point.fuelUsedL, flags);
   run(db, 'UPDATE logical_trips SET progress_head=? WHERE id=?', inserted.lastInsertRowid, logical);
-  // D11: an unproven quantity latches the money totals incomplete, as an unresolved engine-0 rollback does.
+  // An unproven quantity latches the money totals incomplete, as an unresolved engine-0 rollback does.
   if (advance.unproven) run(db, 'UPDATE logical_trips SET reconciliation_unknown=1 WHERE id=?', logical);
   const added = advance.added & ~(replay?.annotated ?? 0);
   if (added) {
@@ -185,16 +185,37 @@ export function projectQuantitySample(db: Database.Database, logical: bigint, ro
   return advanceLedger(db, logical, row, stored(db, sampleId, sample.recording?.truck ?? null), truckRef, link, null, now).decided ?? null;
 }
 
+const OWN_ROWS = 'FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=?';
+const ownEngine1 = (db: Database.Database, member: unknown) => get(db, 'SELECT * FROM logical_trips WHERE id=?', member)?.accounting_engine === 1n;
 /** The engine-1 rows of raw member `member` in its own chain, at most SPLICE_SAMPLE_LIMIT + 1, in sample order; none for engine 0. */
 function ownRows(db: Database.Database, member: unknown): Row[] {
-  if (get(db, 'SELECT * FROM logical_trips WHERE id=?', member)?.accounting_engine !== 1n) return [];
-  return all(db, `SELECT p.* FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=? ORDER BY s.id LIMIT ?`,
-    member, member, SPLICE_SAMPLE_LIMIT + 1);
+  return ownEngine1(db, member) ? all(db, `SELECT p.* ${OWN_ROWS} ORDER BY s.id LIMIT ?`, member, member, SPLICE_SAMPLE_LIMIT + 1) : [];
 }
-/** The samples one splice of `member` replays, as a resolve call counts them against SPLICE_SAMPLE_LIMIT: one when none are replayed. */
-export function spliceCost(db: Database.Database, member: unknown): number {
-  const rows = ownRows(db, member).length;
+/** The samples one splice of `member` replays, as the replay budget counts them: one when none are replayed. */
+function spliceCost(db: Database.Database, member: unknown): number {
+  const rows = ownEngine1(db, member) ? Number(get(db, `SELECT count(*) AS n FROM (SELECT 1 ${OWN_ROWS} LIMIT ?)`, member, member, SPLICE_SAMPLE_LIMIT + 1)!.n) : 0;
   return rows === 0 || rows > SPLICE_SAMPLE_LIMIT ? 1 : rows;
+}
+/** The samples replayed in the current write transaction; writes.ts starts it with each transaction (startReplayBudget). */
+const BUDGETS = new WeakMap<Database.Database, {spent: number}>();
+export const startReplayBudget = (db: Database.Database) => { BUDGETS.set(db, {spent: 0}); };
+function budget(db: Database.Database): {spent: number} {
+  let spent = BUDGETS.get(db);
+  if (!spent) BUDGETS.set(db, spent = {spent: 0});
+  return spent;
+}
+/**
+ * Charges the retroactive splice of `member` (I4 or resolvePendingMemberships) to the transaction's replay budget. The
+ * transaction's first replay always fits; a later one fits while the total stays within SPLICE_SAMPLE_LIMIT. One that
+ * does not fit spends the budget, so every later retroactive splice of the transaction is deferred: false.
+ */
+export function chargeRetroactiveSplice(db: Database.Database, member: unknown): boolean {
+  const b = budget(db);
+  if (b.spent >= SPLICE_SAMPLE_LIMIT) return false;
+  const cost = spliceCost(db, member);
+  if (b.spent > 0 && b.spent + cost > SPLICE_SAMPLE_LIMIT) { b.spent = SPLICE_SAMPLE_LIMIT; return false; }
+  b.spent += cost;
+  return true;
 }
 const headRow = (db: Database.Database, logical: unknown) => get(db, 'SELECT p.* FROM logical_trips l JOIN logical_progress p ON p.id=l.progress_head WHERE l.id=?', logical);
 
@@ -213,6 +234,8 @@ export function spliceMember(db: Database.Database, target: bigint, member: Row,
   if (get(db, 'SELECT * FROM logical_trips WHERE id=?', target)?.accounting_engine !== 1n) return null;
   const rows = ownRows(db, member.id), now = member.updated_utc_ms, gap = (anchor: Stored, at: Stored) =>
     advanceLedger(db, target, member, anchor, sampleTruckRef(db, anchor.id), () => false, {own: null, annotated: 0}, now, undefined, at).decided ?? null;
+  // A live join's splice is never deferred: it is charged after the fact, so later retroactive splices of the transaction wait.
+  if (!retroactive) budget(db).spent += rows.length > SPLICE_SAMPLE_LIMIT ? 1 : rows.length;
   if (rows.length > SPLICE_SAMPLE_LIMIT) {
     const anchor = anchorOf(db, headRow(db, member.id))!;
     return gap(anchor, anchor);

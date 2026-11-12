@@ -13,7 +13,7 @@ import {jobValues} from './journal';
 import {advanceHardMode, hardModeLoss, emptyHardModeCounts, qualifiesHardMode} from '../../../telemetry-core/src/hard-mode';
 import {readHardModeDetails} from './hard-mode';
 import {rootBound} from './identity-pending';
-import {applyQuantities, defaultEngine, junctionCoverage, projectQuantitySample, quantitiesEnabled, SPLICE_SAMPLE_LIMIT, spliceCost, spliceMember} from './quantities';
+import {applyQuantities, chargeRetroactiveSplice, defaultEngine, junctionCoverage, projectQuantitySample, quantitiesEnabled, spliceMember} from './quantities';
 
 export type LogicalRow = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
@@ -226,13 +226,10 @@ export function resolvePendingInSession(db: Database.Database, sessionRef: bigin
   const where = `WHERE plugin_session_ref = ? AND state = 'pending' AND raw_closed_event_seq IS NOT NULL${before === undefined ? '' : ' AND trip_ref < ?'}`;
   const args: unknown[] = before === undefined ? [sessionRef] : [sessionRef, before];
   const refs = db.prepare(`SELECT trip_ref FROM logical_membership_decisions ${where} ORDER BY trip_ref LIMIT ?`).pluck().all(...args, limit) as bigint[];
-  let resolved = 0, replayed = 0;
-  // Engine 1: one call replays at most SPLICE_SAMPLE_LIMIT spliced samples, except that its first segment always
-  // resolves; the rest stay pending for the next call.
+  let resolved = 0;
+  // Engine 1: the write transaction's replay budget defers the rest; they stay pending for a later transaction.
   for (const ref of refs) {
-    const cost = spliceCost(db, ref);
-    if (replayed > 0 && replayed + cost > SPLICE_SAMPLE_LIMIT) break;
-    replayed += cost;
+    if (!chargeRetroactiveSplice(db, ref)) break;
     if (resolveClosed(db, ref, proof) !== 'skipped') resolved++;
   }
   const remaining = Number(db.prepare(`SELECT count(*) FROM logical_membership_decisions ${where}`).pluck().get(...args));
