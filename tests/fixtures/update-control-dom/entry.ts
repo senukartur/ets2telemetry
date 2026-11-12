@@ -83,7 +83,7 @@ async function sidebarFocus(): Promise<Facts> {
 interface AboutRun {
   calls: () => number;
   set: (update: UpdateView) => Promise<void>;
-  /** Clicks the button, then waits until every bridge reply has settled and `ready(facts)` holds. */
+  /** Clicks the button, waits until every bridge reply has settled and `ready(facts)` holds, then until React has run its effects. */
   click: (ready: (facts: Facts) => boolean) => Promise<void>;
   facts: () => Facts;
   done: () => void;
@@ -93,14 +93,22 @@ async function about(initial: UpdateView, reply: () => Promise<UpdateView>): Pro
   let calls = 0, replied = 0;
   // The counter's handlers are attached before the component's, so the component's handler runs right after the count.
   const check = () => {calls++; const answer = reply(); answer.then(() => {replied++;}, () => {replied++;}); return answer;};
-  const set = (update: UpdateView) => render(React.createElement(AboutUpdateCheck, {view: update, language: 'en', check}));
+  let current = initial;
+  const set = (update: UpdateView) => {current = update; return render(React.createElement(AboutUpdateCheck, {view: update, language: 'en', check}));};
   await set(initial);
   const button = () => host.querySelector<HTMLButtonElement>('[data-testid="settings-about-update-check"]');
   const facts = (): Facts => ({busy: button()?.getAttribute('aria-disabled') === 'true', disabled: button()?.disabled ?? null, note: text(host, 'settings-about-update-check-note'),
       message: text(host, 'settings-about-update-check-result-message'), severity: host.querySelector('[data-testid="settings-about-update-check-result"]')?.getAttribute('data-severity') ?? null,
       fakeTimers: fakeTimers.size});
   return {calls: () => calls, set, facts,
-    click: async ready => {button()?.click(); await until(() => replied === calls && ready(facts()), 'the About answer');},
+    click: async ready => {
+      button()?.click();
+      await until(() => replied === calls && ready(facts()), 'the About answer');
+      // The answer to a bridge reply is a default-priority update: React commits it to the DOM first and runs its passive
+      // effects, such as the cleanup that clears the 30 s timer, in a later task. A new root render first runs every
+      // pending effect, and its committed signal comes after them, so the facts below never see a timer already ended.
+      await set(current);
+    },
     done: () => {root.unmount(); host.remove(); fakeTimers.clear();}};
 }
 
