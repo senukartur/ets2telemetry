@@ -67,7 +67,7 @@ export function repairSummary(conn: StorageConnection, tripUuid: string): Repair
     deliveredDistanceM: delivered ? available(delivered.distance) : null,
     revenue: delivered ? (delivered.revenue.available ? {available: true, value: {raw: delivered.revenue.value.raw, sdkType: delivered.revenue.value.sdkType}} : {available: false, reason: delivered.revenue.reason}) : null,
     hardMode: audit?.version === 2 ? {passingChecks: audit.passingChecks, failingChecks: audit.failingChecks, unknownChecks: audit.unknownChecks, qualified: detail.trip.isHardMode} : null,
-    upload: {bound: binding !== undefined, held: binding?.held === 1n, holdReason: (binding?.held === 1n ? binding.hold_reason : reservation?.hold_reason ?? null) as string | null,
+    upload: {bound: binding !== undefined, held: binding?.held === 1n, holdReason: (binding ? binding.held === 1n ? binding.hold_reason : null : reservation?.hold_reason ?? null) as string | null,
       identity: (reservation?.identity_state ?? null) as string | null}
   };
 }
