@@ -256,11 +256,12 @@ describe('ET-112d profile verification on the Hard Mode page (REG-009, REG-010)'
     const html = render(language, {assessment, trip: null, verification: VERIFIED});
     expect(html).toContain('data-testid="hard-mode-fix"'); expect(html).not.toContain('data-testid="hard-mode-verification"');
   });
-  it.each(['en', 'ru'] as const)('shows a running check on the button and the last result once it ends (%s)', language => {
+  it.each(['en', 'ru'] as const)('shows a running check on the button and keeps the last result in place (%s)', language => {
     const text = TEXT[language];
     const running = render(language, {assessment: unknown, trip: null, verification: {...unverified, checking: true, lastCheck}});
     expect(running).toMatch(new RegExp(`data-testid="hard-mode-refresh"[^>]*>${text.checking}</button>`));
-    expect(running).not.toContain('data-testid="hard-mode-check-result"');
+    // The previous result stays while the new check runs, so a repeated Check again never shifts the rules below it.
+    expect(running).toMatch(new RegExp(`data-testid="hard-mode-check-result"[^>]*>${text.result}</p>`));
     const done = render(language, {assessment: unknown, trip: null, verification: {...unverified, lastCheck}});
     expect(done).not.toMatch(new RegExp(`data-testid="hard-mode-refresh"[^>]*>${text.checking}</button>`));
     expect(done).toMatch(new RegExp(`data-testid="hard-mode-check-result"[^>]*>${text.result}</p>`));

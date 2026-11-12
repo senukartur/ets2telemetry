@@ -35,8 +35,8 @@ export function hardModeVerificationText(result: HardModeVerificationResult, lan
 }
 /**
  * ET-112d: the verification parts of the page. `headline` replaces the unknown headline while the profile is not verified,
- * `line` explains an unverified profile, and `checkResult` is the last completed manual check. A status without
- * verification (the chip and older callers) has none of them.
+ * `line` explains an unverified profile, and `checkResult` is the last completed manual check, kept while a new one runs
+ * so repeated clicks never shift the page. A status without verification (the chip and older callers) has none of them.
  */
 function verificationView(verification: HardModeVerification | undefined, nowUtcMs: number, language: AppLanguage) {
   if (!verification) return {headline: null, line: null, checkResult: null};
@@ -44,7 +44,7 @@ function verificationView(verification: HardModeVerification | undefined, nowUtc
     : t(`hm.verify.reason.${verification.reason ?? 'no-game'}`, undefined, language);
   const last = verification.lastCheck;
   return {headline, line: verification.state === 'unverified' ? hardModeVerificationText(verification, language) : null,
-    checkResult: last && !verification.checking ? t('hm.check.result', {s: Math.max(0, Math.floor((nowUtcMs - last.atUtcMs) / 1000)), result: hardModeVerificationText(last, language, ' — ')}, language) : null};
+    checkResult: last ? t('hm.check.result', {s: Math.max(0, Math.floor((nowUtcMs - last.atUtcMs) / 1000)), result: hardModeVerificationText(last, language, ' — ')}, language) : null};
 }
 export function hardModeView(status: Pick<HardModeStatus, 'assessment' | 'trip'> & Partial<Pick<HardModeStatus, 'verification'>>, nowUtcMs: number, language: AppLanguage = 'en') {
   const a = status.assessment, passed = a.rules.filter(r => r.state === 'pass').length, lost = status.trip?.version === 1 ? status.trip.firstLoss : null;
