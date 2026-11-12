@@ -519,7 +519,7 @@ describe('ET-112g schema-9 segments', () => {
   });
 });
 
-describe('ET-112g2 engine-1 recalculation of legacy distance and fuel (REG-008, REG-011, REG-014)', () => {
+describe('ET-112g2 engine-1 recalculation of legacy distance and fuel (REG-008, REG-013, REG-014)', () => {
   const V9 = {single: '43265f5f-6ffb-5817-9842-4d7581240cb7', incident: 'ae6a1fad-c6eb-bbe9-ce7e-78fbae2b5bf4', open: '33a0f251-80e9-add1-9732-4c31af4c1102'};
   const V8 = {single: 'd48a4c37-f781-dd42-5768-27b0398c18b6', restarted: '3473a873-5e6b-b486-c372-aa76f7c20e08', proofless: '9bec0d1c-45a4-595f-c71c-5030c478c1b2',
     open: '7203d1a0-9072-5fa8-a3cc-cdecb58ed012'};
