@@ -33,6 +33,8 @@ export interface FaultWorkerData {
    * ends it.
    */
   closeHold?: true;
+  /** ET-112c: the distance and fuel engine of the groups this worker creates, for tests of legacy engine-0 accounting. */
+  accountingEngine?: 0 | 1;
   /** The test's control port; required with `hold`, with a `samplesFault` hold and with `closeHold`. */
   control?: MessagePort;
 }
@@ -65,7 +67,7 @@ function holdUntilRelease(control: MessagePort, notice: Record<string, unknown>)
 }
 const injected = (code: InjectedSqliteCode) => Object.assign(new Error('Injected storage fault'), {code});
 
-const {fault: faultConfig, hold: holdConfig, samplesFault, closeHold, control} = data;
+const {fault: faultConfig, hold: holdConfig, samplesFault, closeHold, accountingEngine, control} = data;
 if ((holdConfig || (samplesFault && 'hold' in samplesFault) || closeHold) && !control) throw new Error('The fault storage worker needs a control port to hold a command');
 // Only the blocking receive reads the control port; it must not keep the worker alive after the host closed.
 control?.unref();
@@ -120,6 +122,7 @@ function holdingClose(port: NonNullable<typeof parentPort>, control: MessagePort
 }
 
 serveStorage(closeHold && control ? holdingClose(parentPort, control) : parentPort, {
+  accountingEngine,
   commitOptions(command): CommitOptions | undefined {
     if (command.name === 'appendSamples') return sampleOptions();
     const hold = holdPending && holdConfig !== undefined && control !== undefined && covers(command, holdConfig.eventSeq);

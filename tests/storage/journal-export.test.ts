@@ -21,7 +21,7 @@ import {EUR, JOURNAL_TRIPS as T, seedJournalAnchors, seedSample} from '../shared
 import {BASE_UTC, ETS2_A, job, money, r, Script} from '../shared/trip-messages';
 import {tripExportProblems} from '../shared/trip-export-validator';
 import {readOnly, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
-import {storageWorker, terminateWorkers, until} from './recording-helpers';
+import {ENGINE_0, storageWorker, terminateWorkers, until} from './recording-helpers';
 
 /** The large open trip: its own plugin session, opened by its job at eventSeq 1, then 520 attributed tolls. */
 const LARGE_SESSION = '10000000-0000-4000-8000-0000000000f7';
@@ -52,8 +52,9 @@ beforeAll(async () => {
   ws = await workspace();
   exports = path.join(ws.directory, 'exports');
   mkdirSync(exports);
+  // The anchors set their distance totals through trip.update, the raw-total selection of legacy engine 0 (ET-112c, D14).
   history = new HistoryStorage({localAppData: ws.directory, target: {purpose: 'synthetic', name: 'export'}, appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS,
-    createWorker: () => storageWorker().handle, log: (event, _detail, facts) => { logs.push([event, facts]); }});
+    createWorker: () => storageWorker(ENGINE_0).handle, log: (event, _detail, facts) => { logs.push([event, facts]); }});
   history.start();
   await until(() => history.state !== 'idle' && history.state !== 'opening', 'the database open', HANG_GUARD_MS);
   expect(history.state).toBe('open');

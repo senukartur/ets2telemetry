@@ -124,6 +124,8 @@ export interface RecordingPlan {
   profileEvidence?:()=>ProfileObservation|undefined;
   /** workerData for the fault worker of the first service (R13); without it the production worker entry runs. */
   fault?: Record<string, unknown>;
+  /** ET-112c (D14): every service runs the fault worker pinned to this distance and fuel engine, for engine-0 subjects. */
+  accountingEngine?: 0;
   /** The coverage-item bound of the first service only; a restarted service has the production bound (MAX_PENDING_COMMITS). */
   maxPendingCommits?: number;
   /** After the connection with this 0-based index closes, the service stops and a new one cold-starts on the same file. */
@@ -280,8 +282,9 @@ export async function runRecording(input: Json, database: {path: string; backups
   };
   const start = async (): Promise<void> => {
     const first = services.length === 0, channel = plan.fault && first ? new MessageChannel() : undefined;
-    const worker = channel ? new Worker(FAULT_WORKER, {workerData: {kind: 'storage', ...plan.fault, control: channel.port2}, transferList: [channel.port2]})
-      : new Worker(WORKER, {workerData: {kind: 'storage'}});
+    const engine = plan.accountingEngine === undefined ? {} : {accountingEngine: plan.accountingEngine};
+    const worker = channel ? new Worker(FAULT_WORKER, {workerData: {kind: 'storage', ...plan.fault, ...engine, control: channel.port2}, transferList: [channel.port2]})
+      : new Worker(plan.accountingEngine === undefined ? WORKER : FAULT_WORKER, {workerData: {kind: 'storage', ...engine}});
     live.add(worker); void once(worker, 'exit').then(() => live.delete(worker));
     const exit = once(worker, 'exit').then(([code]) => code as number), client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
     ok(await client.open({path: database.path, purpose: 'synthetic', backupsDirectory: database.backups, appVersion: '0.1.0-test'}));
@@ -365,6 +368,11 @@ export async function until(ready: () => boolean, what: string, ms: number): Pro
   }
 }
 
+/**
+ * The fault worker data that pins a test-only worker to legacy engine-0 distance and fuel accounting (ET-112c, D14): for
+ * tests whose subject is engine-0 accounting, through `storageWorker(ENGINE_0)`.
+ */
+export const ENGINE_0 = {accountingEngine: 0} as const;
 /** A storage worker for a recording runtime: the production entry, or the fault worker with its control port. */
 export function storageWorker(fault?: Record<string, unknown>): {handle: StorageWorkerHandle; exit: Promise<number>; control?: MessagePort} {
   const channel = fault ? new MessageChannel() : undefined;

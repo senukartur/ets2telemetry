@@ -402,9 +402,13 @@ const localTime = utcMs => {
 const journeyTripUuid = session => uuidOf(createHash('sha256').update(`ets2telemetry-trip-v1:${session}:3`, 'utf8').digest('hex'));
 /** The job market badge of trip@3's header (ET-072): the job of eventSeq 3 sends no job.market, so the header names it unavailable. */
 const JOURNEY_JOB_TYPE = `Job market: ${NOT_OBSERVED}`;
-/** trip@3's list row: delivered and partial after the service restart, observed 0 m, no city, cargo or market names; the Job type column (ET-076) states only the reason. */
+/**
+ * trip@3's list row: delivered and partial after the service restart, no city, cargo or market names; the Job type column
+ * (ET-076) states only the reason. Its observed distance is the engine-1 ledger (ET-112c): the journey's frames carry no
+ * fuel or position, so no sample is a complete anchor and the distance is not observed (the raw row keeps 0 m).
+ */
 const journalRow = trip => ({trip, started: localTime(labelAt(30)), game: 'ETS2', route: JOURNEY_ROUTE, outcome: 'Delivered', completeness: 'Partial',
-  observed: '0.0 km', cargo: NOT_OBSERVED, jobType: NOT_OBSERVED});
+  observed: NOT_OBSERVED, cargo: NOT_OBSERVED, jobType: NOT_OBSERVED});
 /**
  * trip@3's detail: every field of the summary. The job of eventSeq 3 has ids, 152 km planned, income 12345 and cargo not
  * loaded; job.delivered (8) has revenue 12000, 250 XP, damage 0.03125, 152.5 km and 300 game minutes; the truck has a
@@ -414,7 +418,7 @@ function journalDetail(session, trip, sampleCount) {
   const fields = {
     'trip-game': 'Euro Truck Simulator 2', 'trip-gameMode': 'Unknown', 'trip-outcome': 'Delivered', 'trip-completeness': 'Partial', 'trip-started': localTime(labelAt(30)),
     'trip-ended': localTime(labelAt(600)), 'trip-openedBy': 'job event 3', 'trip-session': session, 'trip-tripId': trip,
-    'distance-plannedDistance': '152.0 km', 'distance-observedDistance': '0.0 km', 'distance-deliveredDistance': '152.5 km', 'fuel-fuelUsed': NOT_OBSERVED,
+    'distance-plannedDistance': '152.0 km', 'distance-observedDistance': NOT_OBSERVED, 'distance-deliveredDistance': '152.5 km', 'fuel-fuelUsed': NOT_OBSERVED,
     'money-expectedIncome': '12345 (currency unknown)', 'money-revenue': '12000 (currency unknown)', 'money-fine': 'none recorded', 'money-toll': 'none recorded',
     'money-ferry': 'none recorded', 'money-train': 'none recorded',
     'job-sourceCity': NOT_OBSERVED, 'job-sourceCompany': NOT_OBSERVED, 'job-destinationCity': NOT_OBSERVED, 'job-destinationCompany': NOT_OBSERVED, 'job-cargo': NOT_OBSERVED,
@@ -525,7 +529,7 @@ const DELIVERED_RECORD = {type: 'job.delivered', revenue: unknownMoney('12000', 
 /** The trip section of the export: the hand-written trip row with its stable identifiers and the close carrier, job.delivered (8). */
 const exportTripSection = (session, trip, audit) => ({is_hard_mode: false, hard_mode_details: audit, tripUuid: trip, pluginSessionId: session, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
   gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: labelAt(30), endedUtcMs: labelAt(600),
-  observedDistanceM: {available: true, value: 0}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
+  observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
   closedBy: {pluginSessionId: session, eventSeq: '8'}});
 /** Independent oracle: no Hard Mode fixture is enabled, so the normal reader refuses this synthetic source before
  * process/filesystem access. Opening has no eligible proof and is historical; ordered monitor failures publish all

@@ -313,7 +313,8 @@ it.each([false,true])('REG-005/008/011 classifies each material version independ
 });
 
 it('REG-004/005/010 allocates first terminal revision 1 and a later terminal correction without reopening',async()=>{
-  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
+  // The correction comes from a trip.update total, the raw-total selection of legacy engine 0 (ET-112c, D14).
+  const conn=await openConnection(ws.options({purpose:'history',accountingEngine:0})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
   ok(storage.commitEvent({message:game(source.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'complete',endedUtcMs:2000}]}));
   let workId=await complete(storage,source),frozen=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:2000}));expect(frozen.status).toBe('frozen');ok(storage.releaseUploadMaterialization({workId}));
   const wire=(id:string|null)=>JSON.parse(Buffer.from(db.prepare('SELECT payload FROM upload_envelopes WHERE event_id=?').pluck().get(id) as Uint8Array).toString()) as UploadEnvelope;
@@ -412,7 +413,8 @@ it.each(['authentication','validation'] as const)('REG-005/010/011/012 records a
 
 
 it('TEL-034 does not starve a proven baseline-backed OPEN preparation or freeze on ordinary native/counter progress',async()=>{
-  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
+  // The counter progress is a trip.update total, the raw-total selection of legacy engine 0 (ET-112c, D14).
+  const conn=await openConnection(ws.options({purpose:'history',accountingEngine:0})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
   // Seed cursor filler atomically; the progress commits between materialization advances remain independent.
   db.transaction(()=>{
     for(let i=0;i<180;i++)ok(storage.commitEvent({message:game(source.s.event(r.paused()))}));

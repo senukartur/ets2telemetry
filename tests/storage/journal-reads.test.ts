@@ -30,7 +30,8 @@ let fillers: FillerTrip[];
 beforeAll(async () => {
   ws = await workspace();
   ws.copyFixture(REPRESENTATIVE, ws.database);
-  storage = await ws.open();
+  // The seed sets its distance totals through trip.update, the raw-total selection of legacy engine 0 (ET-112c, D14).
+  storage = await ws.open({accountingEngine: 0});
   expect(storage.summary).toMatchObject({schemaVersion: 10, migratedFrom: 1});
   await seedJournalAnchors(storage);
   fillers = await seedJournalFillers(storage, 110);

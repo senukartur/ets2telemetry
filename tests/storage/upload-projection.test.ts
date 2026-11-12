@@ -15,7 +15,7 @@ import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-
 import {attachTripUuidFor, tripUuidFor, type ProfileObservation} from '../../packages/telemetry-core/src';
 import {ETS2_A, ETS2_B, job, r, Script, trailer} from '../shared/trip-messages';
 import {failed, ok, readOnly, TEST_CLOSE_GRACE_MS, withEventSeq, workspace} from './helpers';
-import {storageWorker, terminateWorkers} from './recording-helpers';
+import {ENGINE_0, storageWorker, terminateWorkers} from './recording-helpers';
 
 const directStorage:Storage[]=[];
 function tracked(connection:ConstructorParameters<typeof Storage>[0]){const storage=new Storage(connection);directStorage.push(storage);return storage;}
@@ -27,8 +27,8 @@ const absent = {available:false,reason:'not-observed'} as const;
 const gameShaped = <T extends {source:{origin:string}}>(message:T):T => ({...message,source:{...message.source,origin:'game'}});
 function proof(s:Script):ProfileObservation {const source=s.welcome().source;return {version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:source.game,
   pluginSessionId:source.pluginSessionId,processInstanceId:source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1};}
-async function start(purpose:'history'|'synthetic'|'replay'='history') {
-  const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
+async function start(purpose:'history'|'synthetic'|'replay'='history',worker=storageWorker()) {
+  const client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
   ok(await client.open({path:ws.database,purpose,backupsDirectory:ws.backups,appVersion:'0.1.0-test'}));return client;
 }
 async function open(client:Storage|StorageClient,s:Script,verified=true,seq=1,rawTripUuid?:string) {
@@ -384,7 +384,8 @@ describe('immutable private upload projections through the SQLite worker', () =>
     await client.close();
   });
   it('preserves selected save accounting and unavailable fuel instead of summing member totals', async () => {
-    const client=await start(),s=new Script(ETS2_A),uuid=await open(client,s);
+    // Its subject is the engine-0 save rollback against a raw total (ET-112c, D14).
+    const client=await start('history',storageWorker(ENGINE_0)),s=new Script(ETS2_A),uuid=await open(client,s);
     const append=(second:number,odo:number)=>appendSample(client,s,uuid,second,odo);
     await append(1,1000000);await append(2,1000050);await append(3,1000100);
     const first=ok(await prepare(client,uuid)),oldPages=await pages(client,first);
