@@ -581,6 +581,39 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(intervals.filter(note=>note.cause==='accounting-chain-break')).toEqual([]);
     expect(await client.close()).toEqual({clean:true});
   });
+  // ET-112c1: a proven load-generation change between two consecutive running samples ends the live link, so storage
+  // sees no predecessor and cannot carry the totals across it (REG-005, REG-008).
+  it('stores the first running sample after a proven load-generation change without a predecessor',async()=>{
+    const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
+    ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
+    const token={},first=proof(s),reloaded={...first,loadGeneration:2};let captured=first;const written:SampleInput[]=[];
+    const append=client.appendSamples.bind(client);client.appendSamples=(session,rows,options)=>{written.push(...structuredClone(rows));return append(session,rows,options);};
+    const recorder=new TripRecorderSink(client,{profileEvidence:()=>captured,profileStatus:()=>({phase:'admitted',token})});
+    succeeded(await recorder.openSession(s.welcome()));succeeded(recorder.observe(s.checkpoint(null),context));
+    succeeded(await recorder.commit(s.event(r.started()),context));const configured=s.event(r.jobConfigured());succeeded(await recorder.commit(configured,context));
+    const uuid=tripUuidFor(s.session,configured.data.eventSeq),configuration=s.checkpoint(job()).data.state.configuration;
+    for(let step=0;step<4;step++){
+      captured=step<2?first:reloaded;
+      succeeded(recorder.observe(s.snapshot({configuration,simulation:'running',odometer:{available:true,value:1000000+step*20,unit:'m'},fuel:{available:true,value:100-step*0.01,unit:'L'},
+        speed:{available:true,value:20,unit:'m/s'},gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},
+        worldPlacement:{available:true,value:{position:{x:step*20,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}}),context));
+      if(recorder.attach.due())succeeded(await recorder.attach.open(context));
+    }
+    succeeded(await recorder.samples.write(3600,true));
+    expect(written.map(row=>row.recording?.previous!==undefined)).toEqual([false,true,false,true]);
+    expect(written[2].recording?.predecessorReset).toBe('profile-changed');
+    const intervals=ok(await client.journalIntervals(uuid,{limit:100})).intervals.filter(note=>note.cause==='accounting-chain-break');
+    expect(intervals).toHaveLength(1);
+    expect(intervals[0]).toMatchObject({detail:{reason:'missing-predecessor',recorderReset:'profile-changed',predecessorPresent:false,profileQualified:true,
+      distanceLost:true,fuelLost:true,elapsedSeconds:1,odometerDeltaM:20}});
+    succeeded(await recorder.commit(s.event(r.delivered(),{simulation:'running',advanceMs:0}),context));
+    expect(ok(await client.journalTrip(uuid)).trip).toMatchObject({outcome:'delivered',observedDistanceM:{available:false},fuelUsedL:{available:false}});
+    expect(await client.close()).toEqual({clean:true});
+    readOnly(ws.database,db=>{
+      const head=db.prepare('SELECT p.distance_m,p.fuel_used_l FROM logical_trips t JOIN logical_progress p ON p.id=t.progress_head WHERE t.trip_uuid=?').get(uuid) as {distance_m:number|null;fuel_used_l:number|null};
+      expect(head).toEqual({distance_m:null,fuel_used_l:null});
+    });
+  });
   it('names a missing wired stage with real timers while scenario time is stopped',async()=>{
     vi.useFakeTimers();
     await expect(wiredGuarded(new Promise<void>(()=>undefined),'synthetic: missing callback',realNow()+1)).rejects.toThrow('Hang guard: synthetic: missing callback');

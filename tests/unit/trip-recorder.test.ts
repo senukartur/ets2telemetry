@@ -543,6 +543,60 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,undefined,undefined]);
   });
 
+  /**
+   * Running readings of one truck 1 s apart with a 20 m step; reading i carries the profile evidence `proofs(s)[i]`
+   * (undefined: no proof) and, with a status, is admitted while proven and pending otherwise.
+   */
+  const runningRows=async(proofs:(s:Script)=>(ProfileObservation|undefined)[],withStatus:boolean)=>{
+    const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},token={},list=proofs(s);let index=0;
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const recorder=new TripRecorderSink(storage,{profileEvidence:()=>list[index],
+      ...(withStatus?{profileStatus:()=>({phase:list[index]?'admitted' as const:'pending' as const,token})}:{})});
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    const configuration=s.checkpoint(job()).data.state.configuration;
+    for(index=0;index<list.length;index++){
+      const odo=1000000+index*20;
+      accept(recorder.observe(s.snapshot({configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'},speed:{available:true,value:20,unit:'m/s'},
+        gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x:odo-1000000,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}}),context));
+    }
+    accept(await recorder.samples.write(3600,true));
+    return storage.model.samples;
+  };
+  const proven=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,
+    processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
+  const changes={'load generation':{loadGeneration:2},binding:{binding:'c'.repeat(64)}} as const;
+
+  // ET-112c1: a proven change of the profile identity ends the live link between consecutive running samples, as before
+  // c1, whether or not an admitted handoff is retained (REG-005, REG-008).
+  it.each([['load generation',false],['load generation',true],['binding',false],['binding',true]] as const)(
+    'breaks the running sample link when the proven %s changes (profile status: %s)',async(field,withStatus)=>{
+      const rows=await runningRows(s=>{const p=proven(s),q={...p,...changes[field]};return [p,p,q,q];},withStatus);
+      expect(rows.map(row=>row.recording?.previous?.monotonicNs)).toEqual([undefined,rows[0].monotonicNs,undefined,rows[2].monotonicNs]);
+      expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,'profile-changed',undefined]);
+    });
+
+  // ET-112c1: a run of readings without proof that spans more than 5 s still links each row to the one just before it;
+  // storage checks each linked step on its own (REG-005).
+  it.each([false,true])('links every row of a proof-less running run longer than 5 s (profile status: %s)',async withStatus=>{
+    const rows=await runningRows(s=>{const p=proven(s);return [p,undefined,undefined,undefined,undefined,undefined,undefined,undefined,p];},withStatus);
+    expect(rows).toHaveLength(9);
+    expect(BigInt(rows[8].monotonicNs)-BigInt(rows[1].monotonicNs)).toBeGreaterThanOrEqual(6_000_000_000n);
+    expect(rows.map(row=>row.recording?.profile!==undefined)).toEqual([true,false,false,false,false,false,false,false,true]);
+    expect(rows.map(row=>row.recording?.previous?.monotonicNs)).toEqual([undefined,...rows.slice(0,8).map(row=>row.monotonicNs)]);
+    expect(rows.map(row=>row.recording?.predecessorReset)).toEqual(Array(9).fill(undefined));
+  });
+
+  // ET-112c1: when proof returns after a proof-less run, the identity it is compared with is the last proven one of the
+  // live link; only a different binding ends the link (REG-005, REG-008).
+  it.each([['different',false],['different',true],['same',false],['same',true]] as const)(
+    'compares returning proof with the last proven identity of the live link: %s binding (profile status: %s)',async(variant,withStatus)=>{
+      const rows=await runningRows(s=>{const p=proven(s);return [p,undefined,undefined,undefined,variant==='different'?{...p,...changes.binding}:p];},withStatus);
+      expect(rows.map(row=>row.recording?.previous?.monotonicNs)).toEqual([undefined,rows[0].monotonicNs,rows[1].monotonicNs,rows[2].monotonicNs,
+        variant==='different'?undefined:rows[3].monotonicNs]);
+      expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,undefined,undefined,variant==='different'?'profile-changed':undefined]);
+    });
+
   it('retains the reset reason across a sampled row without recording evidence',async()=>{
     const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
     expect((await recorder.openSession(s.welcome())).ok).toBe(true);expect(recorder.observe(s.checkpoint(null),context).ok).toBe(true);
