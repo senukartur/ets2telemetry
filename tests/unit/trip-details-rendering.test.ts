@@ -25,17 +25,36 @@ const kpis = (detail: JournalTripDetail, language: AppLanguage) => renderToStati
 const hardMode = (assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), 0, 'fixture')) => newHardModeDetails(assessment, null);
 
 describe('compact trip page (ET-077)', () => {
+  // ET-112e: a delivered trip's distance tile shows the game's delivery distance as its hero and the odometer distance
+  // (the fixture's 0 m) as a note; the game value is not repeated as a note.
   it.each([
-    ['en', ['Distance observed', 'planned 152.0 km', 'game reported 150.0 km', 'Revenue', 'expected 12345 (currency unknown)', 'Recorded time', 'from 1 Hz samples, without pauses and gaps; may include samples not counted in distance and fuel', '7 h 51 min game time', 'Fuel used', 'from samples, refuels excluded']],
-    ['ru', ['Пройдено по одометру', 'по заказу 152.0 км', 'по данным игры 150.0 км', 'Выручка', 'ожидалось 12345 (валюта неизвестна)', 'Записано времени', 'по сэмплам 1 Гц, без пауз и пропусков; могут входить сэмплы, не учтённые в дистанции и расходе', '7 ч 51 мин игрового', 'Израсходовано', 'по сэмплам, без заправок']]
-  ] as const)('labels the planned, game-reported and observed totals separately in %s', (language, texts) => {
+    ['en', ['<span>According to the game</span><strong>150.0 km</strong><small>odometer 0.0 km</small><small>planned 152.0 km</small>', 'Revenue', 'expected 12345 (currency unknown)', 'Recorded time', 'from 1 Hz samples, without pauses and gaps; may include samples not counted in distance and fuel', '7 h 51 min game time', 'Fuel used', 'from samples, refuels excluded'], ['Distance observed', 'game reported']],
+    ['ru', ['<span>По данным игры</span><strong>150.0 км</strong><small>одометр 0.0 км</small><small>по заказу 152.0 км</small>', 'Выручка', 'ожидалось 12345 (валюта неизвестна)', 'Записано времени', 'по сэмплам 1 Гц, без пауз и пропусков; могут входить сэмплы, не учтённые в дистанции и расходе', '7 ч 51 мин игрового', 'Израсходовано', 'по сэмплам, без заправок'], ['Пройдено по одометру', 'по данным игры 150.0 км']]
+  ] as const)('labels the planned, game-reported and observed totals separately in %s', (language, texts, absent) => {
     const html = kpis(DELIVERED, language);
     for (const text of texts) expect(html).toContain(text);
+    for (const text of absent) expect(html).not.toContain(text);
     expect(html.match(/data-testid="trip\.tile\./g)).toHaveLength(4);
   });
   it('does not show a game-reported distance for a trip the game never delivered, and says that game time is missing', () => {
     const html = kpis(OPEN, 'en');
     expect(html).not.toContain('game reported'); expect(html).toContain('game time not available');
+    expect(html).toContain('<span>Distance observed</span><strong>0.0 km</strong><small>planned 152.0 km</small></div>');
+  });
+  it('adds the partial notes to the distance and fuel tiles (ET-112e)', () => {
+    // The fixture's 0 m distance and an assumed 2 L of fuel used, both partial after a truck change.
+    const accounting = {engine: 1 as const, distance: {status: 'partial' as const, breaks: ['truck-change' as const], quality: []}, fuel: {status: 'partial' as const, breaks: ['truck-change' as const], quality: []}};
+    const open = {...OPEN, trip: {...OPEN.trip, fuelUsedL: {available: true as const, value: 2}, accounting}};
+    const html = kpis(open, 'en');
+    expect(html).toContain('<span>Distance observed</span><strong>0.0 km</strong><small>planned 152.0 km</small><small>partial: truck changed</small></div>');
+    expect(html).toContain('<small>from samples, refuels excluded</small><small>partial: truck changed</small></div>');
+    expect(kpis({...DELIVERED, trip: {...DELIVERED.trip, accounting}}, 'ru')).toContain('<small>одометр 0.0 км · частично</small><small>по заказу 152.0 км</small>');
+  });
+  it.each([['en', 'Profile check pending'], ['ru', 'Ожидает проверки профиля']] as const)('shows the pending profile check chip only when the trip carries it in %s', (language, chip) => {
+    const heading = (detail: JournalTripDetail) => renderToStaticMarkup(React.createElement(TripHeading, {game: 'ets2', outcome: detail.trip.outcome, isHardMode: false, cargo: 'Synthetic Cargo',
+      text: journalDetailText(detail, {language}), side: journalTripSideText(detail, {language}), language}));
+    expect(heading({...DELIVERED, trip: {...DELIVERED.trip, membership: 'pending'}})).toMatch(new RegExp(`data-testid="journal-detail-membership"[^>]*><svg.*?<span>${chip}</span>`));
+    expect(heading(DELIVERED)).not.toContain('journal-detail-membership');
   });
 
   it.each([['en', 'Delivered', 'Complete', 'started'], ['ru', 'Доставлен', 'Полная', 'начат']] as const)('shows the cargo title and every chip with a word and an icon in %s', (language, outcome, completeness, started) => {

@@ -49,10 +49,12 @@ export function TripTable({rows, sync, language, onOpen}: {
           {row.jobType.sub ? <small data-testid="journal-row-job-sub">{row.jobType.sub}</small> : null}
           {row.specialTransport ? <div className="yu-journal-special" data-testid="journal-row-special"><Construction aria-hidden="true" strokeWidth={1.8} />{row.specialTransport}</div> : null}</TableCell>
         <TableCell><div data-testid="journal-row-route">{row.route}</div><small data-testid="journal-row-companies">{row.companies}</small></TableCell>
-        <TableCell className="yu-journal-num"><div data-testid="journal-row-observed">{row.observedDistance}</div><small data-testid="journal-row-planned">{row.plannedOf}</small></TableCell>
+        <TableCell className="yu-journal-num"><div data-testid="journal-row-observed">{row.observedDistance}</div><small data-testid="journal-row-planned">{row.plannedOf}</small>
+          {row.distancePartial ? <small data-testid="journal-row-distance-partial">{row.distancePartial}</small> : null}</TableCell>
         <TableCell className="yu-journal-num" data-testid="journal-row-expected">{row.expectedIncome}</TableCell>
         <TableCell data-testid="journal-row-outcome"><Badge variant={row.outcomeKind === 'delivered' ? 'ok' : row.outcomeKind === 'cancelled' ? 'error' : 'neutral'}><OutcomeIcon aria-hidden="true" className="size-3" />{row.outcome}</Badge></TableCell>
-        <TableCell><Badge variant={completenessVariant(row.completeness)} data-testid="journal-row-completeness">{row.completeness.text}</Badge></TableCell>
+        <TableCell><Badge variant={completenessVariant(row.completeness)} data-testid="journal-row-completeness">{row.completeness.text}</Badge>
+          {row.membership ? <div className="yu-journal-mode-line"><Badge variant="neutral" data-testid="journal-row-membership">{row.membership}</Badge><InfoHint label={t('ui.moreAbout', {v: row.membership}, language)}>{text('j.membershipPendingHint')}</InfoHint></div> : null}</TableCell>
         {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={language} /></TableCell> : null}
         <TableCell><Button size="icon-sm" variant="ghost" className="yu-journal-open" aria-label={t('j.openTrip', {v: row.cargo}, language)} data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}><ChevronRight aria-hidden="true" /></Button></TableCell>
       </TableRow>;

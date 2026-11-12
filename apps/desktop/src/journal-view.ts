@@ -1,6 +1,6 @@
 import {sameDashboardOwner, type DashboardOwner, type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
 import type {
-  AppLanguage, JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
+  AppLanguage, JournalAccounting, JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
   JournalOutcome, JournalSample, JournalSamplePage, JournalSyncRow, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalTripTotals, JournalWindow, RecordingHealth, UnitProfiles
 } from '../../../packages/contracts/src';
 import {JOURNAL_MARKET_KINDS, JOURNAL_TRIP_PAGE} from '../../../packages/contracts/src/journal';
@@ -14,7 +14,7 @@ import type {MoneyCurrency} from '../../../packages/telemetry-core/src/readings'
 import * as BASE_COPY from './strings';
 import {copyTable, localizedMeasurement} from './screens/app-copy';
 import {DEFAULT_UNIT_PROFILES} from './unit-profiles';
-import {formatLocalizedBoolean, formatLocalizedGameDuration, formatLocalizedGameTime, t} from './i18n';
+import {formatLocalizedBoolean, formatLocalizedGameDuration, formatLocalizedGameTime, t, type I18nKey} from './i18n';
 
 // Text of the trip journal (ET-016 PR-4, J12-J14): every string the Journal tab shows, built from one journal page or
 // trip detail at a time. Pure, safe for renderer bundles and plain Node tests: type imports, telemetry-core formatting
@@ -67,10 +67,16 @@ export interface JournalTripRow {
   /** `of <planned distance>`, the line under the observed distance. */
   plannedOf: string;
   observedDistance: string; expectedIncome: string;
+  /** `partial` under the observed distance when the engine-1 distance is partial; absent otherwise. */
+  distancePartial?: string;
+  /** `Profile check pending` for a closed recording that can still join an earlier trip; absent otherwise. */
+  membership?: string;
 }
 export interface JournalListText {rows: JournalTripRow[]; empty: string | null; emptyNote: string | null; hasNext: boolean}
 export interface JournalDetailText {
   mode: JournalModeBadge; jobType: JournalJobBadge; specialTransport: string | null; title: string; outcome: string; completeness: JournalBadge; sections: JournalSection[];
+  /** The pending profile check chip, as on the list row; absent otherwise. */
+  membership?: string;
 }
 export interface JournalIntervalRow {id: string; kind: string; cause: string; start: string; end: string; events: string}
 export interface JournalIntervalText {total: string; rows: JournalIntervalRow[]; empty: string | null; hasNext: boolean}
@@ -230,6 +236,21 @@ function jobLine(market: Avail<string>): JournalJobLine {
   const kind = JOB_KINDS[market.value], label = BASE_COPY.getJobMarketText(market.value, language);
   return kind === 'world-of-trucks' ? {kind, text: t('j.worldOfTrucks', undefined, language), sub: label} : {kind, text: label, sub: null};
 }
+type Provenance = JournalAccounting['distance'] | JournalAccounting['fuel'];
+/** The names of a quantity's breaks or quality notes, joined. */
+const quantityNames = (names: readonly string[]) => names.map(item => t(`j.qty.${item}` as I18nKey, undefined, language)).join(', ');
+/** `partial: <reasons>` for a partial quantity; null otherwise. */
+const partialText = (p: Provenance | undefined) => p?.status === 'partial' ? t('j.qty.partialReasons', {v: quantityNames(p.breaks)}, language) : null;
+/**
+ * A quantity field's note (ET-112e): `base`, then the reasons of a partial value (`partial: …`) or of an unavailable one,
+ * then its quality notes except `hidden` ones that `base` already states. Without provenance it is `base` alone.
+ */
+function provenanceNote(base: string, p: Provenance | undefined, hidden: readonly string[] = []): string {
+  if (!p) return base;
+  const quality = (p.quality as readonly string[]).filter(item => !hidden.includes(item));
+  return [base, ...(p.breaks.length ? [partialText(p) ?? quantityNames(p.breaks)] : []), ...(quality.length ? [quantityNames(quality)] : [])].join('; ');
+}
+
 /** `Special transport` only when the game marked the job as special; false and unavailable show nothing. */
 const specialTransport = (special: Avail<boolean>) => special.available && special.value ? t('j.specialTransport', undefined, language) : null;
 
@@ -241,7 +262,9 @@ function tripRow(trip: JournalTripListItem, options: JournalTextOptions): Journa
     companies: `${nameOf(trip.job.sourceCompany)} · ${nameOf(trip.job.destinationCompany)}`,
     isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), outcomeKind: trip.outcome, completeness: completenessBadge(trip.recordingCompleteness),
     plannedDistance, plannedOf: t('j.of', {v: plannedDistance}, language), observedDistance: show(trip.observedDistanceM, distance(units)),
-    expectedIncome: show(trip.job.expectedIncome, moneyText)
+    expectedIncome: show(trip.job.expectedIncome, moneyText),
+    ...(trip.accounting?.distance.status === 'partial' ? {distancePartial: t('j.qty.partial', undefined, language)} : {}),
+    ...(trip.membership === 'pending' ? {membership: t('j.membershipPending', undefined, language)} : {})
   };
 }
 
@@ -292,10 +315,11 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
     ], [JOURNAL_STRINGS.timeNote]),
     section('distance', [
       field('plannedDistance', show(job.plannedDistance, distance(units)), JOURNAL_NOTE_TEXT.plannedDistance),
-      field('observedDistance', show(trip.observedDistanceM, distance(units)), JOURNAL_NOTE_TEXT.observedDistance),
+      field('observedDistance', show(trip.observedDistanceM, distance(units)), provenanceNote(JOURNAL_NOTE_TEXT.observedDistance, trip.accounting?.distance)),
       field('deliveredDistance', delivered ? show(delivered.distance, distance(units)) : JOURNAL_STRINGS.notDelivered, JOURNAL_NOTE_TEXT.deliveredDistance)
     ]),
-    section('fuel', [field('fuelUsed', show(trip.fuelUsedL, volume(units)), JOURNAL_NOTE_TEXT.fuelUsed)])
+    // The base note already says that refuels are excluded.
+    section('fuel', [field('fuelUsed', show(trip.fuelUsedL, volume(units)), provenanceNote(JOURNAL_NOTE_TEXT.fuelUsed, trip.accounting?.fuel, ['refuel-excluded']))])
   ];
   const money = moneyLines(detail.money);
   const outcomeMoney = delivered ? field('revenue', show(delivered.revenue, moneyText), JOURNAL_NOTE_TEXT.revenue)
@@ -342,7 +366,8 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
     field('sampleCount', String(samples.count)),
     ...(samples.firstUtcMs !== null && samples.lastUtcMs !== null ? [field('firstSample', localTime(samples.firstUtcMs, zone)), field('lastSample', localTime(samples.lastUtcMs, zone))] : [])
   ]));
-  return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(job.market), specialTransport: specialTransport(job.isSpecialJob), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections};
+  return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(job.market), specialTransport: specialTransport(job.isSpecialJob), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections,
+    ...(trip.membership === 'pending' ? {membership: t('j.membershipPending', undefined, language)} : {})};
 }
 
 /** The available values joined by `separator`, or the first value's `unavailable (reason)` when none is available. */
@@ -559,7 +584,7 @@ function journalSampleText(page: JournalSamplePage, game: JournalGame, options: 
     hasNext: page.nextCursor !== null};
 }
 
-  return {localTime, journalErrorText, journalExportText, journalBannerText, outcomeText, completenessBadge, gameModeText, journalListText, journalDetailText, journalTripSideText, journalIntervalText, journalEventText, journalTimelineItems, journalCompletenessText, journalSiteSaved, journalSampleText};
+  return {partialText, localTime, journalErrorText, journalExportText, journalBannerText, outcomeText, completenessBadge, gameModeText, journalListText, journalDetailText, journalTripSideText, journalIntervalText, journalEventText, journalTimelineItems, journalCompletenessText, journalSiteSaved, journalSampleText};
 }
 const texts = {en: createJournalText('en'), ru: createJournalText('ru')};
 export const journalListText = (...args: Parameters<typeof texts.en.journalListText>): ReturnType<typeof texts.en.journalListText> => texts[args[1]?.language ?? 'en'].journalListText(...args);
@@ -577,6 +602,8 @@ export const journalBannerText = (database: JournalDatabase | undefined, languag
 export const outcomeText = (trip: Pick<JournalTripListItem, 'outcome' | 'closeReason'>, language: AppLanguage = 'en'): ReturnType<typeof texts.en.outcomeText> => texts[language].outcomeText(trip);
 export const completenessBadge = (completeness: JournalTripListItem['recordingCompleteness'], language: AppLanguage = 'en'): ReturnType<typeof texts.en.completenessBadge> => texts[language].completenessBadge(completeness);
 export const localTime = texts.en.localTime;
+/** `partial: <reasons>` for a partial engine-1 quantity, null otherwise (the trip tiles, ET-112e). */
+export const journalPartialText = (p: JournalAccounting['distance'] | JournalAccounting['fuel'] | undefined, language: AppLanguage = 'en'): string | null => texts[language].partialText(p);
 export const gameModeText = (mode: JournalGameMode, ambiguous: boolean, language: AppLanguage = 'en'): string => texts[language].gameModeText(mode, ambiguous);
 
 const LOCALES: Readonly<Record<AppLanguage, string>> = {en: 'en-US', ru: 'ru-RU'};

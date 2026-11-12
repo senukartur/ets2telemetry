@@ -569,6 +569,8 @@ it('separates typed hero amounts and missing values from their provenance withou
   expect(journalTileValues(DELIVERED_DETAIL, {language: 'ru'})).toEqual({distance: {value: '152.0 км', note: null},
     fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'},
     planned: '152.0 км', gameDistance: '151.3 км', expected: '12345 (валюта неизвестна)',
+    // ET-112e: the game's delivery distance is the hero of a delivered trip, and the odometer distance is a separate note.
+    distanceTile: {label: 'По данным игры', value: '151.3 км', notes: ['одометр 152.0 км', 'по заказу 152.0 км']}, fuelPartial: null,
     recorded: {value: '3 с', note: 'по сэмплам 1 Гц, без пауз и пропусков; могут входить сэмплы, не учтённые в дистанции и расходе'}, gameTime: '7 ч 51 мин игрового'});
   expect(journalTileValues(ZERO_DETAIL).distance).toEqual({value: '0.0 mi', note: null});
   expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
@@ -805,5 +807,75 @@ describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
     expect(journalSiteSaved({...row, latestRevision: null}, {timeZone: ZONE})).toBe('Saved by the site 2026-10-11 02:00:05');
     expect(journalSiteSaved({...row, state: 'sending'})).toBeNull();
     expect(journalSiteSaved({...row, lastDurableUploadUtcMs: null})).toBeNull();
+  });
+});
+
+describe('distance and fuel provenance and the pending profile check (ET-112e; REG-009, REG-014)', () => {
+  type Accounting = NonNullable<JournalTripListItem['accounting']>;
+  // As Q2 without the recorder link: both quantities keep their subtotal across a reading hole.
+  const HOLE: Accounting = {engine: 1, distance: {status: 'partial', breaks: ['reading-hole'], quality: []}, fuel: {status: 'partial', breaks: ['reading-hole'], quality: []}};
+  const COMPLETE: Accounting = {engine: 1, distance: {status: 'complete', breaks: [], quality: []}, fuel: {status: 'complete', breaks: [], quality: []}};
+  const page = (trips: JournalTripListItem[]): JournalTripPage => ({database: DATABASE, trips, nextCursor: null});
+  const row = (trip: JournalTripListItem, language: 'en' | 'ru' = 'en') => journalListText(page([trip]), {units: DEFAULT, timeZone: ZONE, filtered: false, language}).rows[0];
+  const detailOf = (base: JournalTripDetail, trip: Partial<JournalTripListItem>): JournalTripDetail => ({...base, trip: {...base.trip, ...trip}});
+  const notes = (detail: JournalTripDetail, language: 'en' | 'ru' = 'en') => {
+    const sections = journalDetailText(detail, {units: DEFAULT, timeZone: ZONE, language}).sections;
+    const note = (section: string, id: string) => sections.find(s => s.id === section)!.fields.find(f => f.id === id)!;
+    return {distance: note('distance', 'observedDistance'), fuel: note('fuel', 'fuelUsed')};
+  };
+  // The delivered anchor with 30 L of fuel used, so both values are available.
+  const DELIVERED_FUEL = detailOf(DELIVERED_DETAIL, {fuelUsedL: value(30)});
+
+  it.each([['en', 'partial', '152.0 km'], ['ru', 'частично', '152.0 км']] as const)('marks a partial distance on the list row without changing its value in %s', (language, partial, observed) => {
+    const text = row({...DELIVERED, fuelUsedL: value(30), accounting: HOLE}, language);
+    expect(text.distancePartial).toBe(partial);
+    expect(text.observedDistance).toBe(observed);
+  });
+  it('marks nothing for a complete zero distance or a trip without provenance', () => {
+    const zero = row({...ZERO, accounting: COMPLETE});
+    expect(zero.observedDistance).toBe('0.0 mi'); expect(zero).not.toHaveProperty('distancePartial');
+    expect(row(DELIVERED)).not.toHaveProperty('distancePartial'); expect(row(DELIVERED)).not.toHaveProperty('membership');
+  });
+  it.each([['en', 'odometer while recording; partial: readings missing', 'while recording, refuels excluded; partial: readings missing'],
+    ['ru', 'одометр во время записи; частично: пропуск показаний', 'во время записи, без заправок; частично: пропуск показаний']] as const)(
+    'names the reasons of a partial value in the detail notes and keeps the values in %s', (language, distance, fuel) => {
+      const found = notes(detailOf(DELIVERED_FUEL, {accounting: HOLE}), language), plain = notes(DELIVERED_FUEL, language);
+      expect([found.distance.note, found.fuel.note]).toEqual([distance, fuel]);
+      expect([found.distance.value, found.fuel.value]).toEqual([plain.distance.value, plain.fuel.value]);
+    });
+  it('adds quality notes, leaves out the refuel the fuel note already states and names the reasons of an unavailable value', () => {
+    const quality = notes(detailOf(DELIVERED_FUEL, {accounting: {engine: 1, distance: {status: 'complete', breaks: [], quality: ['bridged', 'restored']},
+      fuel: {status: 'complete', breaks: [], quality: ['refuel-excluded']}}}));
+    expect([quality.distance.note, quality.fuel.note]).toEqual(['odometer while recording; bridged across missing readings, restored after a save load', 'while recording, refuels excluded']);
+    // An unproven rollback (E7): both values unavailable, with the reasons, never zero.
+    const unproven = notes(detailOf(DELIVERED_DETAIL, {observedDistanceM: NO, fuelUsedL: NO, accounting: {engine: 1,
+      distance: {status: 'unavailable', breaks: ['recording-gap', 'unsupported'], quality: []}, fuel: {status: 'unavailable', breaks: ['recording-boundary', 'unsupported'], quality: []}}}));
+    expect(unproven.distance).toMatchObject({value: 'unavailable (not observed)',
+      note: 'odometer while recording; gap between recordings, progress could not be matched after a save load or truck change'});
+    expect(unproven.fuel).toMatchObject({value: 'unavailable (not observed)',
+      note: 'while recording, refuels excluded; not continuous between recordings, progress could not be matched after a save load or truck change'});
+    // Unavailable without a reason (no complete reading yet) keeps today's note.
+    const none = notes(detailOf(DELIVERED_DETAIL, {observedDistanceM: NO, accounting: {...COMPLETE, distance: {status: 'unavailable', breaks: [], quality: []}}}));
+    expect(none.distance).toMatchObject({value: 'unavailable (not observed)', note: 'odometer while recording'});
+  });
+  it('keeps the notes of a trip without provenance', () => {
+    const plain = notes(DELIVERED_FUEL);
+    expect([plain.distance.note, plain.fuel.note]).toEqual(['odometer while recording', 'while recording, refuels excluded']);
+  });
+  it.each([['en', 'Profile check pending'], ['ru', 'Ожидает проверки профиля']] as const)('shows the pending profile check on the row and the detail in %s', (language, text) => {
+    expect(row({...DELIVERED, membership: 'pending'}, language).membership).toBe(text);
+    expect(journalDetailText(detailOf(DELIVERED_DETAIL, {membership: 'pending'}), {language}).membership).toBe(text);
+    expect(journalDetailText(DELIVERED_DETAIL, {language})).not.toHaveProperty('membership');
+  });
+  it('labels a partial distance on the tile and keeps the odometer distance apart from the game distance', () => {
+    expect(journalTileValues(detailOf(DELIVERED_FUEL, {accounting: HOLE}))).toMatchObject({
+      distanceTile: {label: 'According to the game', value: '151.3 km', notes: ['odometer 152.0 km · partial', 'planned 152.0 km']}, fuelPartial: 'partial: readings missing'});
+    const cancelled = detailOf(CANCELLED_DETAIL, {observedDistanceM: value(152_000.5), fuelUsedL: value(30), accounting: HOLE});
+    expect(journalTileValues(cancelled)).toMatchObject({
+      distanceTile: {label: 'Distance observed', value: '152.0 km', notes: ['planned 152.0 km', 'partial: readings missing']}, fuelPartial: 'partial: readings missing'});
+    expect(journalTileValues(cancelled, {language: 'ru'}).distanceTile).toEqual({label: 'Пройдено по одометру', value: '152.0 км', notes: ['по заказу 152.0 км', 'частично: пропуск показаний']});
+    // A delivery without the game's distance keeps the observed hero and names the missing game value.
+    expect(journalTileValues(ZERO_DETAIL).distanceTile).toEqual({label: 'Distance observed', value: '0.0 mi', notes: ['planned 0.0 mi', 'game reported unavailable (not provided by the game)']});
+    expect(journalTileValues(OPEN_DETAIL).distanceTile).toEqual({label: 'Distance observed', value: '—', notes: ['unavailable (not observed)', 'planned 152.0 km']});
   });
 });
