@@ -1,8 +1,8 @@
 // Engine 1 distance and fuel in storage (ET-112c): the per-sample ledger of a logical trip in logical_progress, the replay
 // of a joining member's recorded samples into its target (the splice), the reads of a ledger head and the read-only
 // reconstruction that package g reuses. The rules are advanceQuantities in telemetry-core; live recording, the splice and
-// the reconstruction feed it the same stored inputs (the sample, its truck and the recorder link bit 15), and apply the
-// same gap rule to a member whose pre-join samples are not replayed, so the reconstruction equals the live head.
+// the reconstruction feed it the same stored inputs (the sample, its truck and the recorder link bit 15), and the
+// reconstruction replaces a member's stored gap row with the same gap point, so it equals the live head.
 // See docs/storage.md, Schema version 10.
 import type Database from 'better-sqlite3';
 import {advanceQuantities, completeAnchor, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAGS, memoryPath, QUANTITY_FLAGS, QUANTITY_POINT_LIMIT, QUANTITY_RUN_LIMIT, quantityStatus,
@@ -12,7 +12,7 @@ import {registeredAccountingEngine} from './connection';
 import {cleanLoadWindow, COVERAGE_LOSS, type LogicalCoverage} from './logical-coverage';
 
 type Row = Record<string, unknown>;
-const F = QUANTITY_FLAGS, CUMULATIVE = 0x3fff, BREAKS = DISTANCE_BREAK_FLAGS | FUEL_BREAK_FLAGS;
+const F = QUANTITY_FLAGS, CUMULATIVE = 0x3fff, BREAKS = DISTANCE_BREAK_FLAGS | FUEL_BREAK_FLAGS, GAP = F.distanceGap | F.fuelBoundary;
 /**
  * The most recorded samples one splice replays, and the replay budget of one resolve call: a full resolve page of members
  * with one sample batch each. A longer member keeps the target's subtotal as partial instead.
@@ -113,25 +113,25 @@ const anchorOf = (db: Database.Database, head: Row | undefined) => head ? stored
 const pointAt = (head: Row | undefined, a: Stored | undefined): QuantityPoint | null => head && a
   ? {anchor: a.anchor, distanceM: real(head.distance_m), fuelUsedL: real(head.fuel_used_l), flags: Number(head.quantity_flags)} : null;
 /**
- * The junction of a member whose recorded samples before the join are not replayed (more than SPLICE_SAMPLE_LIMIT, an
- * engine-0 member, or no complete reading): a new run at `anchor` that keeps the supported subtotal, marked partial.
+ * The junction of a member whose recorded samples before the join are not replayed (more than SPLICE_SAMPLE_LIMIT, or
+ * at a retroactive join an engine-0 member or one without a complete reading): a new run at `anchor` that keeps the
+ * supported subtotal, marked partial.
  */
 function gapAdvance<R extends QuantityRun>(previous: QuantityPoint | null, anchor: QuantityAnchor): QuantityAdvance<R> {
-  const gap = F.distanceGap | F.fuelBoundary;
-  const point = previous ? {anchor, distanceM: previous.distanceM, fuelUsedL: previous.fuelUsedL, flags: (previous.flags & CUMULATIVE) | gap}
-    : {anchor, distanceM: 0, fuelUsedL: 0, flags: F.base | gap};
-  return {point, run: 'new', cut: null, unproven: false, savePoint: false, added: gap & ~(previous?.flags ?? 0) & BREAKS};
+  const point = previous ? {anchor, distanceM: previous.distanceM, fuelUsedL: previous.fuelUsedL, flags: (previous.flags & CUMULATIVE) | GAP}
+    : {anchor, distanceM: 0, fuelUsedL: 0, flags: F.base | GAP};
+  return {point, run: 'new', cut: null, unproven: false, savePoint: false, added: GAP & ~(previous?.flags ?? 0) & BREAKS};
 }
 /**
- * Advances the engine-1 ledger of `logical` by the stored sample `b` of raw trip `trip` (or by the gap point, with `gap`),
- * then writes its row, a cut row for a rollback, the progress head, the unproven latch and one version 2 annotation of the
+ * Advances the engine-1 ledger of `logical` by the stored sample `b` of raw trip `trip` (or by the gap point at `b`, with
+ * `gap`, the member sample whose session, clock and time the annotation carries), then writes its row, a cut row for a rollback, the progress head, the unproven latch and one version 2 annotation of the
  * newly set break bits. A sample before the first complete anchor writes nothing. A replayed sample keeps `sample_ref`
  * NULL (its row in the member's chain owns it) and starts a run at its own row there, so ACCOUNTING_PATH reads the run's
  * sample range. `carried` is the head a replay keeps in memory; live recording reads it. Returns the savePoint of a member
  * junction, null for any other step and undefined when nothing was written, with the head after the step.
  */
 function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Stored, truckRef: unknown, link: (a: Stored) => boolean, replay: Replay | null, now: unknown,
-  carried?: Carried, gap?: true): {decided: boolean | null | undefined; carried: Carried} {
+  carried?: Carried, gap?: Stored): {decided: boolean | null | undefined; carried: Carried} {
   const headId = carried ? carried.headId : get(db, 'SELECT progress_head FROM logical_trips WHERE id=?', logical)!.progress_head;
   const head = headId === null ? undefined : ledgerRow(db, headId), a = carried ? carried.a : anchorOf(db, head);
   const previous = pointAt(head, a);
@@ -166,8 +166,9 @@ function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Sto
   const added = advance.added & ~(replay?.annotated ?? 0);
   if (added) {
     const detail = {annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, distanceFlags: added & DISTANCE_BREAK_FLAGS, fuelFlags: added & FUEL_BREAK_FLAGS};
+    const at = gap ?? b;
     run(db, `INSERT INTO completeness_intervals(plugin_session_ref,trip_ref,kind,end_utc_ms,end_monotonic_ns,source_clock_ref,detail_json,created_utc_ms)
-      VALUES(?,?,'discontinuity',?,?,?,?,?)`, b.session, trip.id, b.utcMs, b.anchor.monotonicNs.padStart(20, '0'), b.clock, JSON.stringify(detail), now);
+      VALUES(?,?,'discontinuity',?,?,?,?,?)`, at.session, trip.id, at.utcMs, at.anchor.monotonicNs.padStart(20, '0'), at.clock, JSON.stringify(detail), now);
   }
   const decided = gap ? false : previous && step.kind === 'member' && completeAnchor(b.anchor) ? advance.savePoint : null;
   return {decided, carried: {headId: inserted.lastInsertRowid, a: completeAnchor(b.anchor) ? b : a}};
@@ -201,21 +202,25 @@ const headRow = (db: Database.Database, logical: unknown) => get(db, 'SELECT p.*
  * Splices raw member `member`, which has just joined engine-1 group `target`, into the target's ledger: its samples
  * recorded in its own engine-1 chain before the join are replayed in order through the same step as live samples, with
  * their stored truck and link inputs and the head carried in memory. The member's own chain stays unchanged. A member
- * whose earlier samples are not replayed (more than SPLICE_SAMPLE_LIMIT own rows, an engine-0 member, or samples without
- * a complete reading) keeps the target's subtotal as partial instead: one gap row at its own last anchor, or at the
- * target head. A member without samples before the join (`current` is the sample being recorded) is not spliced, and
- * nothing is spliced into an engine-0 target or before the target's first complete reading. Returns the junction's
- * savePoint, or null.
+ * with more than SPLICE_SAMPLE_LIMIT own rows keeps the target's subtotal as partial instead, with one gap row at its own
+ * last anchor. At a `retroactive` join, a member with samples but no own rows (an engine-0 member, or no complete
+ * reading) gets one gap row at the target head, annotated at its latest sample; at a live join its next complete reading
+ * is the junction instead. Nothing is spliced into an engine-0 target, and a member without own rows adds nothing
+ * before the target's first complete reading. Returns the junction's savePoint, or null.
  */
-export function spliceMember(db: Database.Database, target: bigint, member: Row, current?: bigint): boolean | null {
+export function spliceMember(db: Database.Database, target: bigint, member: Row, retroactive = false): boolean | null {
   // SELECT *: below schema 10 the column is absent, and nothing is spliced.
   if (get(db, 'SELECT * FROM logical_trips WHERE id=?', target)?.accounting_engine !== 1n) return null;
-  const rows = ownRows(db, member.id), now = member.updated_utc_ms;
-  if (rows.length === 0 || rows.length > SPLICE_SAMPLE_LIMIT) {
-    const own = rows.length ? headRow(db, member.id) : undefined, head = own ? undefined : headRow(db, target);
-    if (!own && (!head || !get(db, 'SELECT 1 FROM samples WHERE trip_ref=? AND id IS NOT ? LIMIT 1', member.id, current ?? null))) return null;
-    const anchor = anchorOf(db, own ?? head)!;
-    return advanceLedger(db, target, member, anchor, sampleTruckRef(db, anchor.id), () => false, {own: null, annotated: 0}, now, undefined, true).decided ?? null;
+  const rows = ownRows(db, member.id), now = member.updated_utc_ms, gap = (anchor: Stored, at: Stored) =>
+    advanceLedger(db, target, member, anchor, sampleTruckRef(db, anchor.id), () => false, {own: null, annotated: 0}, now, undefined, at).decided ?? null;
+  if (rows.length > SPLICE_SAMPLE_LIMIT) {
+    const anchor = anchorOf(db, headRow(db, member.id))!;
+    return gap(anchor, anchor);
+  }
+  if (rows.length === 0) {
+    const head = retroactive ? headRow(db, target) : undefined;
+    const latest = head && get(db, 'SELECT id FROM samples WHERE trip_ref=? ORDER BY id DESC LIMIT 1', member.id);
+    return latest ? gap(anchorOf(db, head)!, stored(db, latest.id, null)) : null;
   }
   let junction: boolean | null = null, previousFlags = 0, carried: Carried | undefined;
   for (const row of rows) {
@@ -270,9 +275,9 @@ export function quantitiesIncomplete(db: Database.Database, head: bigint | null)
 /**
  * Read-only reconstruction of a logical trip's engine-1 quantities from its stored samples: the members in join order,
  * each member's samples with a ledger row in id order, through advanceQuantities and memoryPath(). A joined member's
- * own-chain rows come first, as the splice replayed them; where the splice wrote a gap row instead (more than
- * SPLICE_SAMPLE_LIMIT own rows, an engine-0 member, or earlier samples without a complete reading), the same gap point
- * replaces them. It writes nothing. Returns the last point, or null before any complete anchor.
+ * own-chain rows come first, as the splice replayed them; where the splice wrote a gap row instead (the member's row in
+ * the group without a sample or a run start, with the gap bits), the same gap point at that row's anchor replaces them.
+ * It writes nothing. Returns the last point, or null before any complete anchor.
  */
 export function reconstructQuantities(db: Database.Database, logical: bigint): QuantityPoint | null {
   const path = memoryPath();
@@ -290,16 +295,13 @@ export function reconstructQuantities(db: Database.Database, logical: bigint): Q
     // The member's rows recorded into this trip, live or after its join; replayed rows have no sample_ref.
     const rows = all(db, `SELECT p.sample_ref,p.truck_ref,p.quantity_flags FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=?
       ORDER BY s.id`, member, logical);
-    const own = member === logical ? [] : ownRows(db, member);
-    if (own.length > SPLICE_SAMPLE_LIMIT) {
-      last = anchorOf(db, headRow(db, member))!;
+    // Only the splice's gap row has neither a sample nor a run start: replayed rows start their runs at the member's own rows.
+    const gap = member === logical ? undefined : get(db, `SELECT anchor_sample_ref FROM logical_progress WHERE logical_ref=? AND trip_ref=? AND sample_ref IS NULL
+      AND start_ref IS NULL AND quantity_flags&?=? LIMIT 1`, logical, member, GAP, GAP);
+    if (gap) {
+      last = anchorOf(db, gap)!;
       path.record(String(member), last.anchor, gapAdvance(path.head, last.anchor));
-    } else if (own.length > 0) fold(member, own);
-    else if (member !== logical && path.head && get(db, 'SELECT 1 FROM samples WHERE trip_ref=? AND id<coalesce(?,id+1) LIMIT 1', member, rows[0]?.sample_ref ?? null)) {
-      // Samples before the member's first row in this trip were recorded before its join and not replayed.
-      const anchor = path.head.anchor;
-      path.record(String(member), anchor, gapAdvance(path.head, anchor));
-    }
+    } else if (member !== logical) fold(member, ownRows(db, member));
     fold(member, rows);
   }
   return path.head;

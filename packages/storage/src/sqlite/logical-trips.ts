@@ -70,7 +70,7 @@ export function admittedProfile(proof: ProfileObservation | undefined, source: {
  * Bounded unresolved slot lookup; migrated history and already decided recordings never participate. Candidates share the
  * segment's game, profile scope and job fingerprint; decideMembership owns the rules.
  */
-export function associate(db: Database.Database, row: LogicalRow, proof: ProfileObservation | undefined, currentJob: JobConfiguration, sampleId?: bigint): bigint {
+export function associate(db: Database.Database, row: LogicalRow, proof: ProfileObservation | undefined, currentJob: JobConfiguration): bigint {
   if(syncEnabled(db))uploadCandidate(db,row.id);
   createGroup(db, row);
   let id = logicalFor(db, row.id);const group=get(db,'SELECT * FROM logical_trips WHERE id=?',id)!;
@@ -139,7 +139,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   }
   db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), row.id);
   db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,decision.fingerprint,JSON.stringify(decision.state === 'joined' ? combined : learned ?? recorded ?? known),id);
-  if (decision.state === 'joined') pendingCoverage = junctionCoverage(db, row, pendingCoverage, spliceMember(db, id, row, sampleId), true) ?? pendingCoverage;
+  if (decision.state === 'joined') pendingCoverage = junctionCoverage(db, row, pendingCoverage, spliceMember(db, id, row), true) ?? pendingCoverage;
   if (pendingCoverage) revise(db, id, pendingCoverage);
   if (decisions) recordDecision(db, row.id, decision.state, decision.reason, decision.state === 'joined' ? id : null);
   return id;
@@ -208,7 +208,7 @@ export function resolveClosed(db: Database.Database, tripRef: bigint, proof: Pro
   // The terminal of S ends the continued trip as it would have live; another close leaves the target unresolved.
   if (row.outcome === 'delivered' || row.outcome === 'cancelled') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 0 WHERE id = ?').run(targetId);
   else if (row.close_reason === 'different-job') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 1 WHERE id = ?').run(targetId);
-  spliceMember(db, targetId, row);
+  spliceMember(db, targetId, row, true);
   const prior = latestCoverage(db, targetId).value;
   revise(db, id);
   // S's quantities were recorded outside the target's accounting chain: the target stays partial with no endpoint.
@@ -227,10 +227,12 @@ export function resolvePendingInSession(db: Database.Database, sessionRef: bigin
   const args: unknown[] = before === undefined ? [sessionRef] : [sessionRef, before];
   const refs = db.prepare(`SELECT trip_ref FROM logical_membership_decisions ${where} ORDER BY trip_ref LIMIT ?`).pluck().all(...args, limit) as bigint[];
   let resolved = 0, replayed = 0;
-  // Engine 1: one call replays at most SPLICE_SAMPLE_LIMIT spliced samples; the rest stay pending for the next call.
+  // Engine 1: one call replays at most SPLICE_SAMPLE_LIMIT spliced samples, except that its first segment always
+  // resolves; the rest stay pending for the next call.
   for (const ref of refs) {
-    if (replayed >= SPLICE_SAMPLE_LIMIT) break;
-    replayed += spliceCost(db, ref);
+    const cost = spliceCost(db, ref);
+    if (replayed > 0 && replayed + cost > SPLICE_SAMPLE_LIMIT) break;
+    replayed += cost;
     if (resolveClosed(db, ref, proof) !== 'skipped') resolved++;
   }
   const remaining = Number(db.prepare(`SELECT count(*) FROM logical_membership_decisions ${where}`).pluck().get(...args));
@@ -346,7 +348,7 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   const row = get(db, 'SELECT * FROM trips WHERE trip_uuid = ?', sample.tripUuid)!;
   if(sample.recording.processInstanceId!==session.process_instance_uuid) fail('INVALID_INPUT');
   const proof = admittedProfile(sample.recording.profile, {game: session.game, processInstanceId: session.process_instance_uuid, pluginSessionId}, sample.sourceClockId, sample.monotonicNs);
-  const id = associate(db, row, proof, sample.recording.job, sampleId);
+  const id = associate(db, row, proof, sample.recording.job);
   let truckRef:unknown=null;
   if(sample.recording.truck!==null){db.prepare('INSERT OR IGNORE INTO logical_trucks(identity_key) VALUES(?)').run(sample.recording.truck);truckRef=get(db,'SELECT id FROM logical_trucks WHERE identity_key=?',sample.recording.truck)!.id;}
   const group = get(db, 'SELECT * FROM logical_trips WHERE id = ?', id)!;
