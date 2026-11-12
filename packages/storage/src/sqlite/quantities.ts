@@ -84,7 +84,8 @@ function pointOf(db: Database.Database, row: Row): QuantityPoint {
 interface LedgerRun extends QuantityRun {row: Row}
 /**
  * The retained runs of a ledger: its prefix chain from the head, at most QUANTITY_RUN_LIMIT run ends. A run's points are
- * its self-anchored rows, found through logical_progress_cut by truck, run start odometer and odometer.
+ * its self-anchored engine-1 rows, found through logical_progress_cut by truck, run start odometer and odometer. The
+ * engine-0 rows of an upgraded group share samples and run starts with its engine-1 rows and are never points.
  */
 function ledgerPath(db: Database.Database, logical: bigint, head: Row | undefined): QuantityPath<LedgerRun> {
   return {
@@ -98,7 +99,7 @@ function ledgerPath(db: Database.Database, logical: bigint, head: Row | undefine
     },
     points(run, odometerM) {
       const rows = all(db, `SELECT * FROM logical_progress WHERE logical_ref=? AND truck_ref IS ? AND start_odometer_m=? AND odometer_m<=? AND coalesce(start_ref,id)=?
-        AND cut_odometer_m IS NULL AND anchor_sample_ref=bound_sample_ref ORDER BY odometer_m DESC, id DESC LIMIT ?`,
+        AND cut_odometer_m IS NULL AND anchor_sample_ref=bound_sample_ref AND quantity_flags IS NOT NULL ORDER BY odometer_m DESC, id DESC LIMIT ?`,
       logical, sampleTruckRef(db, run.row.anchor_sample_ref), run.row.start_odometer_m, odometerM, run.row.start_ref ?? run.row.id, QUANTITY_POINT_LIMIT);
       return rows.map(row => pointOf(db, row));
     }
@@ -315,12 +316,28 @@ export function quantitiesIncomplete(db: Database.Database, head: bigint | null)
   return quantityStatus(real(point.distance_m), flags, 'distance') !== 'complete' || quantityStatus(real(point.fuel_used_l), flags, 'fuel') !== 'complete';
 }
 
+/** The raw members of `logical` in join order: the order of reconstruction and of the upgrade's replay. */
+const membersOf = (db: Database.Database, logical: bigint) =>
+  db.prepare('SELECT trip_ref FROM logical_memberships WHERE logical_ref=? ORDER BY coalesce(joined_after_revision,0),trip_ref').pluck().all(logical) as bigint[];
+/**
+ * The recorded samples of raw trip `member` (ET-112g): every sample with a ledger row (its `sample_ref` row, unique, in
+ * whichever group recorded it), in id order, with that row's id, truck and flags; `logical` keeps only the rows in that
+ * group. A legacy engine-0 row has no link bit, so a reading hole after it is never bridged.
+ */
+function recordedSamples(db: Database.Database, member: bigint, logical?: bigint): Row[] {
+  return logical === undefined
+    ? all(db, 'SELECT p.id,p.sample_ref,p.truck_ref,p.quantity_flags FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? ORDER BY s.id', member)
+    : all(db, 'SELECT p.id,p.sample_ref,p.truck_ref,p.quantity_flags FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=? ORDER BY s.id', member, logical);
+}
+const linkedRow = (row: Row) => (Number(row.quantity_flags ?? 0) & F.linked) !== 0;
+
 /**
  * Read-only reconstruction of a logical trip's engine-1 quantities from its stored samples: the members in join order,
- * each member's samples with a ledger row in id order, through advanceQuantities and memoryPath(). A joined member's
- * own-chain rows come first, as the splice replayed them; where the splice wrote a gap row instead (the member's row in
- * the group without a sample or a run start, with the gap bits), the same gap point at that row's anchor replaces them.
- * It writes nothing. Returns the last point, or null before any complete anchor.
+ * each member's recorded samples (recordedSamples) through advanceQuantities and memoryPath(). For a native group these
+ * are a joined member's own-chain rows, as the splice replayed them, then its rows in the group; for an upgraded group
+ * they are the samples the upgrade replayed. Where the splice wrote a gap row instead (the member's row in the group
+ * without a sample or a run start, with the gap bits), the same gap point at that row's anchor replaces the member's
+ * samples outside the group. It writes nothing. Returns the last point, or null before any complete anchor.
  */
 export function reconstructQuantities(db: Database.Database, logical: bigint): QuantityPoint | null {
   const path = memoryPath();
@@ -328,24 +345,58 @@ export function reconstructQuantities(db: Database.Database, logical: bigint): Q
   const fold = (member: bigint, rows: Row[]) => {
     for (const row of rows) {
       const b = stored(db, row.sample_ref, truckOf(db, row.truck_ref));
-      const step = last ? stepOf(db, last, b, (Number(row.quantity_flags ?? 0) & F.linked) !== 0) : {kind: 'member' as const};
+      const step = last ? stepOf(db, last, b, linkedRow(row)) : {kind: 'member' as const};
       path.record(String(member), b.anchor, advanceQuantities(path.head, b.anchor, step, path));
       if (completeAnchor(b.anchor)) last = b;
     }
   };
-  const members = db.prepare('SELECT trip_ref FROM logical_memberships WHERE logical_ref=? ORDER BY coalesce(joined_after_revision,0),trip_ref').pluck().all(logical) as bigint[];
-  for (const member of members) {
-    // The member's rows recorded into this trip, live or after its join; replayed rows have no sample_ref.
-    const rows = all(db, `SELECT p.sample_ref,p.truck_ref,p.quantity_flags FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=?
-      ORDER BY s.id`, member, logical);
+  for (const member of membersOf(db, logical)) {
     // Only the splice's gap row has neither a sample nor a run start: replayed rows start their runs at the member's own rows.
     const gap = member === logical ? undefined : get(db, `SELECT anchor_sample_ref FROM logical_progress WHERE logical_ref=? AND trip_ref=? AND sample_ref IS NULL
       AND start_ref IS NULL AND quantity_flags&?=? LIMIT 1`, logical, member, GAP, GAP);
     if (gap) {
       last = anchorOf(db, gap)!;
       path.record(String(member), last.anchor, gapAdvance(path.head, last.anchor));
-    } else if (member !== logical) fold(member, ownRows(db, member));
-    fold(member, rows);
+    }
+    fold(member, recordedSamples(db, member, gap ? logical : undefined));
   }
   return path.head;
+}
+
+/** The most recorded samples one upgrade replays: the bound of one write transaction's replays (docs/storage.md, Schema version 10). */
+export const UPGRADE_SAMPLE_LIMIT = 2 * SPLICE_SAMPLE_LIMIT;
+export type QuantityUpgrade = {status: 'upgraded'} | {status: 'not-eligible'; reason: 'not-engine-0' | 'open-member' | 'too-large' | 'no-truck-evidence'};
+/**
+ * The history repair's legacy quantity upgrade (ET-112g2), inside the caller's transaction: an engine-0 group without
+ * engine-1 rows whose members are all closed, with at most `limit` recorded samples, is replayed with engine 1. Its
+ * money latch is cleared, then every member's recorded samples run in join order through the live step with their stored
+ * truck and link inputs, the head carried in memory; each row has `sample_ref` NULL and starts its run at the sample's
+ * own row, and new break bits are annotated as live recording does. The engine becomes 1; the caller revises the group.
+ * A group whose samples never reach a complete reading keeps engine 0 and its raw totals: nothing is written. The
+ * engine-0 rows stay, so the reconstruction (the same sequence) equals the new head.
+ */
+export function upgradeQuantities(db: Database.Database, logical: bigint, limit: number = UPGRADE_SAMPLE_LIMIT): QuantityUpgrade {
+  const group = quantitiesEnabled(db) ? get(db, 'SELECT * FROM logical_trips WHERE id=?', logical) : undefined;
+  if (group?.accounting_engine !== 0n || get(db, 'SELECT 1 FROM logical_progress WHERE logical_ref=? AND quantity_flags IS NOT NULL LIMIT 1', logical))
+    return {status: 'not-eligible', reason: 'not-engine-0'};
+  const members = membersOf(db, logical).map(member => get(db, 'SELECT * FROM trips WHERE id=?', member)!);
+  if (members.some(member => member.outcome === 'open')) return {status: 'not-eligible', reason: 'open-member'};
+  const count = Number(get(db, `SELECT count(*) AS n FROM (SELECT 1 FROM logical_memberships m JOIN samples s ON s.trip_ref=m.trip_ref JOIN logical_progress p ON p.sample_ref=s.id
+    WHERE m.logical_ref=? LIMIT ?)`, logical, limit + 1)!.n);
+  if (count > limit) return {status: 'not-eligible', reason: 'too-large'};
+  run(db, 'UPDATE logical_trips SET reconciliation_unknown=0 WHERE id=?', logical);
+  let carried: Carried = {headId: null, a: undefined};
+  for (const member of members) {
+    for (const row of recordedSamples(db, member.id as bigint)) {
+      const b = stored(db, row.sample_ref, truckOf(db, row.truck_ref));
+      carried = advanceLedger(db, logical, member, b, row.truck_ref, () => linkedRow(row), {own: row.id, annotated: 0}, member.updated_utc_ms, carried).carried;
+    }
+  }
+  // Nothing was written before the first complete reading, so only the cleared latch is put back.
+  if (carried.headId === null) {
+    run(db, 'UPDATE logical_trips SET reconciliation_unknown=? WHERE id=?', group.reconciliation_unknown, logical);
+    return {status: 'not-eligible', reason: 'no-truck-evidence'};
+  }
+  run(db, 'UPDATE logical_trips SET accounting_engine=1 WHERE id=?', logical);
+  return {status: 'upgraded'};
 }
