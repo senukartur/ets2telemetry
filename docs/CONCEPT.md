@@ -55,7 +55,7 @@ The Journal lists the recorded trips page by page with their count and recorded 
 
 ### Hard Mode
 
-Hard Mode checks whether the game's persisted profile settings meet twelve realistic-driving rules (for example realistic fuel, air brakes and Normal parking) and shows each rule's state; a rule that does not pass also shows its detected and required value. A delivered trip qualifies when at least 95% of its known scheduled checks pass, with all twelve rules required for each passing check. Unknown checks are counted separately and excluded from the ratio; the ratio can recover while the trip is open. Verified continuation preserves the accumulated checks across sessions. Parking is checked through settings only. Historical audits retain their original qualification policy. Hard Mode reads files only and is not anti-cheat proof.
+Hard Mode checks whether the game's persisted profile settings meet twelve realistic-driving rules (for example realistic fuel, air brakes and Normal parking) and shows each rule's state; a rule that does not pass also shows its detected and required value. A delivered trip qualifies when at least 95% of its known scheduled checks pass, with all twelve rules required for each passing check. Unknown checks are counted separately and excluded from the ratio; the ratio can recover while the trip is open. Verified continuation preserves the accumulated checks across sessions. A profile that cannot be verified is shown as such, with a reason, separately from a failing rule and a missing game connection. Parking is checked through settings only. Historical audits retain their original qualification policy. Hard Mode reads files only and is not anti-cheat proof.
 
 ### Account and synchronization
 
