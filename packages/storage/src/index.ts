@@ -11,12 +11,13 @@ import type {HardModeObservation} from '../../contracts/src/hard-mode';
 import {rmSync} from 'node:fs';
 import type {
   AttachInput, AttachResult, CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, DeleteTripOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage,
-  JournalTripsQuery, OpenSummary, ResolveMembershipsInput, ResolveMembershipsResult, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
+  JournalTripsQuery, OpenSummary, RepairActionResult, RepairJoinAction, RepairOptions, RepairScan, ResolveMembershipsInput, ResolveMembershipsResult, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from './api';
 import {classifyError} from './errors';
 import {restoreCopy} from './sqlite/backup';
 import {checkPath, openConnection, type OpenOptions, type StorageConnection} from './sqlite/connection';
 import * as journal from './sqlite/journal';
+import * as repair from './sqlite/history-repair';
 import * as reads from './sqlite/reads';
 import * as writes from './sqlite/writes';
 import * as upload from './sqlite/upload-projection';
@@ -27,6 +28,9 @@ export {MIGRATIONS, APPLICATION_ID, type Migration} from './sqlite/migrations';
 export {JOURNAL_QUERIES} from './sqlite/journal';
 export type {OpenOptions, OpenTestHooks} from './sqlite/connection';
 export {REOPEN_RETRYABLE_CODES, isReopenRetryable} from './errors';
+export {applyHistoryRepair, copyHistory, dryRunHistoryRepair, type ApplyOptions, type DryRunOptions, type RepairOutcome} from './history-repair';
+export {canonicalJson, parseRepairPlan, repairConfirmationCode} from './history-repair-plan';
+export {repairFingerprint} from './sqlite/history-repair';
 
 function attempt<T>(body: () => T): Result<T> {
   try { return {ok: true, value: body()}; } catch (error) { return {ok: false, error: classifyError(error)}; }
@@ -92,6 +96,13 @@ export class Storage {
   recoverUploadAttempt(input:UploadSyncCommands['recoverUploadAttempt']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.recoverUploadAttempt(this.connection,input,options));}
   commitUploadReceipt(input:UploadSyncCommands['commitUploadReceipt']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.commitUploadReceipt(this.connection,input,options));}
   reclaimUploadPayloads(input:UploadSyncCommands['reclaimUploadPayloads']['args']['input'],options?:CommitOptions) {return attempt(()=>queue.reclaimUploadPayloads(this.connection,input,options));}
+  /**
+   * History repair (ET-112g), dry run only: scans the closed proof-less singleton segments and applies every attested join
+   * the rules allow to this database, which must be a disposable scratch copy (dryRunHistoryRepair makes one).
+   */
+  planHistoryRepair(attest: readonly string[], options?: RepairOptions): Result<RepairScan> { return attempt(() => repair.planRepair(this.connection, attest, options)); }
+  /** History repair (ET-112g): applies one planned join in its own transaction; see RepairActionStatus. */
+  applyHistoryRepairAction(action: RepairJoinAction, options?: RepairOptions): Result<RepairActionResult> { return attempt(() => repair.applyRepairAction(this.connection, action, options)); }
   /** Closes the connection. SQLite checkpoints the WAL into the main file; further commands fail with STORAGE_CLOSED. */
   close(): Result<void> { return attempt(() => this.connection.close()); }
 }

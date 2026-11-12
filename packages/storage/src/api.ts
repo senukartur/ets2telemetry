@@ -184,6 +184,64 @@ export interface ResolveMembershipsInput {pluginSessionId: string; nextEventSeq:
  */
 export interface ResolveMembershipsResult {status: 'none' | 'resolved'; resolved: number; remaining: number}
 
+/**
+ * History repair (ET-112g): the user-visible values of one logical root, read from its Journal detail. `sources` counts its
+ * raw recordings; `deliveredDistanceM` and `revenue` come from its delivery record; `upload` is its source binding and
+ * reservation hold state.
+ */
+export interface RepairSummary {
+  outcome: TripOutcome; recordingCompleteness: RecordingCompleteness; sources: number;
+  distanceM: Available<number>; fuelUsedL: Available<number>;
+  deliveredDistanceM: Available<number> | null; revenue: Available<{raw: string; sdkType: string}> | null;
+  hardMode: {passingChecks: number; failingChecks: number; unknownChecks: number; qualified: boolean} | null;
+  upload: {bound: boolean; held: boolean; holdReason: string | null; identity: string | null};
+}
+/** One owner-attested join of a closed, proof-less singleton segment into the root of its earlier recordings. */
+export interface RepairJoinAction {
+  kind: 'join'; segmentTripUuid: string; targetTripUuid: string;
+  /** SHA-256 of the segment's and the target's rows when the dry run planned the join; any recording into either changes it. */
+  fingerprint: string;
+  before: {segment: RepairSummary; target: RepairSummary};
+  after: RepairSummary;
+}
+/**
+ * A segment the dry run reports without an action: `needs-attestation` (a candidate that needs the owner's evidence),
+ * `reconciliation-required` (the segment was published separately and is never joined), `wait` (its decision is still
+ * pending), `not-eligible` with the rule's reason, `already-joined`, or `unknown-trip` for an attested UUID.
+ */
+export interface RepairListing {
+  segmentTripUuid: string; targetTripUuid: string | null;
+  state: 'needs-attestation' | 'reconciliation-required' | 'wait' | 'not-eligible' | 'already-joined' | 'unknown-trip'; reason: string | null;
+}
+export const REPAIR_PLAN_FORMAT = 'ets2telemetry-history-repair-1';
+/** The dry run's plan file. `confirmation` is the first 8 hex digits of the SHA-256 of the canonical `actions`. */
+export interface RepairPlan {
+  format: typeof REPAIR_PLAN_FORMAT; databaseUuid: string; schemaVersion: number; createdUtcMs: number; appVersion: string;
+  attested: string[]; actions: RepairJoinAction[]; listings: RepairListing[]; confirmation: string;
+}
+/**
+ * The outcome of one planned action in its own transaction: `applied`; `already-applied` (the segment is already a member
+ * of the target, nothing written); `stale` (a fingerprinted row changed since the dry run); `differs` (the result is not
+ * the planned after-values, rolled back); `refused` (the rules no longer allow the join, such as a bound segment).
+ */
+export type RepairActionStatus = 'applied' | 'already-applied' | 'stale' | 'differs' | 'refused';
+export interface RepairActionResult {status: RepairActionStatus; after: RepairSummary | null}
+/** The candidates and the joins the dry run applied to its scratch copy, in order. */
+export interface RepairScan {actions: RepairJoinAction[]; listings: RepairListing[]}
+/** In-process test hooks of the history repair; `beforeCommit` runs inside each action's transaction after its join. */
+export interface RepairOptions {testHooks?: {beforeCommit?: () => void}}
+/** The result file written beside the pre-repair backup. */
+export interface RepairResult {
+  format: 'ets2telemetry-history-repair-result-1'; databaseUuid: string; backupFileName: string; confirmation: string; completedUtcMs: number;
+  actions: {segmentTripUuid: string; targetTripUuid: string; status: RepairActionStatus}[];
+}
+/** A history repair refusal that is not a storage failure; `message` is fixed text. */
+export interface RepairRefusal {
+  code: 'REPAIR_REFUSED';
+  reason: 'plan-invalid' | 'confirmation-mismatch' | 'database-mismatch' | 'working-history-flag' | 'working-history-schema' | 'path-invalid';
+  message: string;
+}
+
 export type CommitStatus = 'committed' | 'duplicate' | 'conflict' | 'covered';
 /**
  * `committed`: the row and its effects were inserted. `duplicate`: the same key already held an identical payload, and
