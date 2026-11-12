@@ -334,28 +334,66 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     expect(found.unknown).toBe(0n);
     expect(found.annotations).toEqual([GAP_ANNOTATION]);
   });
-  // Budget: 56,800 recorded samples; the first resolve call replays 28,000 and the second 28,800. It bounds work, not timing.
-  it('resolves the first pending segment of a call and leaves one that would exceed SPLICE_SAMPLE_LIMIT to the next call', {timeout: 600_000}, async () => {
-    const storage = await ws.open(), {root, members} = record(storage, [s(0), s(1)]);
+  /**
+   * Two closed pending segments of B's session after A's s(0) and s(1): B with one reading at A's save point, delivered,
+   * then `second` with 28,800 readings of its own, delivered.
+   */
+  function pendingSegments(storage: Storage) {
+    const {root, members} = record(storage, [s(0), s(1)]);
     closeMember(storage, members[0]);
     const b = openMember(storage, 'B', 'retro', []);
-    longMember(storage, b, 28_000, false);
+    longMember(storage, b, 1, false);
     deliver(storage, b);
-    // A second closed pending segment of B's session with 28,800 readings of its own, after B's delivery.
     const message = b.script.event(r.jobConfigured(job())), second = tripUuidFor(b.script.session, message.data.eventSeq);
     ok(storage.commitEvent({message, effects: [{kind: 'trip.open', tripUuid: second, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', startedUtcMs: 3000,
       recordingCompleteness: 'complete'}, {kind: 'event.attribute', tripUuid: second, attribution: 'trip'}]}));
-    longMember(storage, {...b, uuid: second, previous: undefined}, SPLICE_SAMPLE_LIMIT, false, 28_000);
+    longMember(storage, {...b, uuid: second, previous: undefined}, SPLICE_SAMPLE_LIMIT, false, 1);
     ok(storage.commitEvent({message: b.script.event(r.delivered(), {advanceMs: 1_000}), effects: [{kind: 'trip.close', tripUuid: second, outcome: 'delivered', closeReason: 'outcome',
       outcomeEvent: 'this-event', recordingCompleteness: 'partial', endedUtcMs: 4000}]}));
-    // 28,000 + 28,800 exceeds the budget: the second segment waits for the next call.
+    return {root, b, second};
+  }
+  // B continues A at A's save point: A's 20 m and 0.01 L, complete.
+  const continued: QuantityExpectation = {distanceM: 20, distance: 'complete', fuelUsedL: 0.01, fuel: 'complete', flags: [], cut: false};
+  // Budget: 28,801 recorded samples; the second resolve call charges 28,800. It bounds work, not timing.
+  it('resolves the first pending segment of a call and leaves one that would exceed SPLICE_SAMPLE_LIMIT to the next call', {timeout: 600_000}, async () => {
+    const storage = await ws.open(), {root, b} = pendingSegments(storage);
+    // 1 + 28,800 exceeds the budget: the second segment waits for the next call.
     expect(resolveAt(storage, b, 60_000)).toEqual({status: 'resolved', resolved: 1, remaining: 1});
     expect(resolveAt(storage, b, 60_000)).toEqual({status: 'resolved', resolved: 1, remaining: 0});
-    // B continues A at A's save point (20 m, 0.01 L), then 27,999 linked steps of 20 m and 0.1 ml each.
-    const expected: QuantityExpectation = {distanceM: 560_000, distance: 'complete', fuelUsedL: 2.8099, fuel: 'complete', flags: [], cut: false};
-    expectJournal(storage, root, expected);
+    expectJournal(storage, root, continued);
     expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe('partial');
-    expectLedger(ledger(storage, root), expected);
+    expectLedger(ledger(storage, root), continued);
+  });
+  // Budget: 28,805 recorded samples; one appendSamples transaction charges 1 and defers 28,800. It bounds work, not timing.
+  it('shares one replay budget among the resolutions of one appendSamples transaction and defers the rest to a later call', {timeout: 600_000}, async () => {
+    let storage = await ws.open();
+    const {root, b, second} = pendingSegments(storage);
+    // The session's next trip R; each reading of one batch carries proof, so each one runs I4.
+    const message = b.script.event(r.jobConfigured(job())), open = tripUuidFor(b.script.session, message.data.eventSeq);
+    ok(storage.commitEvent({message, effects: [{kind: 'trip.open', tripUuid: open, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', startedUtcMs: 5000,
+      recordingCompleteness: 'complete'}, {kind: 'event.attribute', tripUuid: open, attribution: 'trip'}]}));
+    const r0: Member = {...b, uuid: open, previous: undefined}, batch: SampleInput[] = [];
+    for (let i = 0; i < 3; i++) {
+      const reading = s(30_000 + i, {member: 'B', odometerM: 5000 + 20 * i, x: 5000 + 20 * i, linked: i > 0});
+      batch.push(sampleOf(r0, reading, true));
+      r0.previous = reading;
+    }
+    expect(ok(storage.appendSamples(b.script.session, batch, {uniqueSeconds: true}))).toEqual({appended: 3, skipped: 0});
+    // The batch resolved B (1 sample) and deferred the second segment: the next call resolves it and nothing is left.
+    expect(resolveAt(storage, b, 60_000)).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    const last = s(30_003, {member: 'B', odometerM: 5060, x: 5060});
+    ok(storage.appendSamples(b.script.session, [sampleOf(r0, last, true)], {uniqueSeconds: true}));
+    expectJournal(storage, root, continued);
+    ok(storage.close());
+    const db = new Database(ws.database, {readonly: true});
+    try {
+      const state = (uuid: string) => db.prepare('SELECT d.state FROM logical_membership_decisions d JOIN trips t ON t.id=d.trip_ref WHERE t.trip_uuid=?').pluck().get(uuid);
+      expect(state(b.uuid)).toBe('joined');
+      expect(state(second)).not.toBe('pending');
+      expect(state(open)).not.toBe('pending');
+    } finally { db.close(); }
+    storage = await ws.open();
+    expectLedger(ledger(storage, root), continued);
   });
 });
 
@@ -443,5 +481,40 @@ describe('ET-112c engine 1 member whose samples before the join are not replayed
     expect(found.head!.flags).toBe(F.linked);
     expect(found.reconstructed!.flags).toBe(found.head!.flags);
     expect(found.annotations).toEqual([]);
+  });
+});
+
+describe('ET-112c engine 1 captured pause before a reload', () => {
+  // Engine 1 stores no paused endpoint: the reload's first complete reading is compared with A's last running sample.
+  const stopped = [s(0), s(1), s(2), s(3, {speedMps: 0}), s(4, {odometerM: 1060, fuelL: 399.97, x: 60, speedMps: 0})];
+  const moving = [s(0), s(1), s(2), s(3, {speedMps: 1})];
+  // A stood still for a second before the pause: the reload at the paused point is A's save point, then B drives 20 m on 10 ml.
+  const resumed: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'complete', flags: [], cut: false};
+  // A moved 1 m after its last sample: the reload at 1061 m is a forward gap; A's 60 m and 0.03 L carry, then B adds 20 m and 10 ml.
+  const gapped: QuantityExpectation = {distanceM: 80, distance: 'partial', fuelUsedL: 0.04, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+  it.each([
+    ['stopped for a second before the pause', stopped, 4.5, {odometerM: 1060, x: 60}, resumed, 'complete'],
+    ['moving at 1 m/s in the last second before the pause', moving, 3.5, {odometerM: 1061, x: 61}, gapped, 'partial']
+  ] as const)('%s', async (_name, readings, pausedAt, paused, expected, completeness) => {
+    pausedOpen = true;
+    const storage = await ws.open(), a = openMember(storage, 'A', 'root', []);
+    for (const reading of readings) { ok(storage.appendSamples(a.script.session, [sampleOf(a, reading, true)], {uniqueSeconds: true})); a.previous = reading; }
+    const at = BigInt(ns(pausedAt));
+    ok(storage.commitEvent({message: a.script.event(r.paused(), {simulation: 'paused', advanceMs: Number((at - a.at) / 1_000_000n)})}));
+    ok(storage.openAttachedTrip({pluginSessionId: a.script.session, nextEventSeq: a.script.next.toString(), job: job(), effects: [], observeTripUuid: a.uuid, profile: proof(a.script),
+      sourceClockId: a.script.clockId, monotonicNs: (at + 1_000_000n).toString(), endpoint: {version: 1, simulation: 'paused', truck: 'T1', odometerM: paused.odometerM, fuelL: 399.97,
+        speedMps: 0, gameClockId: gameClock(CLOCK_A), gameMinutes: '600', position: {x: paused.x, y: 0, z: 0}}}));
+    closeMember(storage, a);
+    const b = openMember(storage, 'B', 'open', []);
+    for (const reading of [s(0, {member: 'B', ...paused, fuelL: 399.97, speedMps: 0, linked: false}),
+      s(1, {member: 'B', odometerM: paused.odometerM + 20, x: paused.x + 20, fuelL: 399.96})]) {
+      ok(storage.appendSamples(b.script.session, [sampleOf(b, reading, true)], {uniqueSeconds: true}));
+      b.previous = reading;
+    }
+    expect(ok(storage.journalTrip(a.uuid)).trip.recordingCompleteness).toBe(completeness);
+    expectJournal(storage, a.uuid, expected);
+    const found = ledger(storage, a.uuid);
+    expectLedger(found, expected);
+    expect(found.reconstructed!.flags).toBe(found.head!.flags);
   });
 });

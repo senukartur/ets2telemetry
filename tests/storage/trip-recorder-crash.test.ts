@@ -25,6 +25,7 @@ import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core
 import type {SampleInput,TripEffect} from '../../packages/storage/src';
 import {readHistoryRows} from './history-rows';
 import {ENGINE_0, recordingExpected, storedRows, storedSamples, tripExpected, withTransport} from './recording-helpers';
+import {reconstructQuantities} from '../../packages/storage/src/sqlite/quantities';
 
 /** Liveness bound for a child line; never a measured duration. */
 const CHILD_LIVENESS_MS = 20_000;
@@ -407,7 +408,7 @@ describe(`ET-019 seeded kill campaign (${RECOVERY_SEEDS} seeds)`, () => {
 });
 
 // The two process-death suites below check engine-0 accounting (a rollback-retained endpoint and the captured paused
-// endpoint), so their groups are pinned to engine 0, in the parent and in the child (ET-112c, D14).
+// endpoint), so their groups are pinned to engine 0, in the parent and in the child (ET-112c).
 describe('REG-005/006 atomic continuation and rollback across process death',()=>{
   for(const operation of ['open','observation','rollback','terminal']) for(const kind of ['inside','after']) it(`${kind} ${operation} commit recovers one logical result`,async()=>{
     const a=new Script(ETS2_A),b=new Script(ETS2_B),first=tripUuidFor(ETS2_A,'1'),second=tripUuidFor(ETS2_B,'1');
@@ -508,4 +509,77 @@ describe('REG-005/006 verified captured-pause coverage across process death',()=
     expect(detail.outcomeDetails?.record).toMatchObject({type:'job.delivered',revenue:{available:true,value:{raw:'12345'}}});
     expect(ok(reader.listSamples({tripUuid:first},{includeExcluded:true}))).toHaveLength(4);expect(ok(reader.committedThrough(b.session))).toBe('5');reader.close();expect(checks()).toEqual({integrity:'ok',foreignKeys:[]});
   },60_000);
+});
+
+// ET-112c: on the default engine 1, the join of a member, the replay of its earlier samples into the target and the live
+// row commit in the transaction of the joining sample. A kill inside or after it leaves one ledger equal to its
+// reconstruction. A drives 40 m on 20 ml and stops; B stands at that save point, drives 20 m on 10 ml without proof, and
+// its proof-bearing third reading joins A and adds 20 m on 10 ml: 80 m and 40 ml.
+describe('REG-005/006 engine 1 splice across process death', () => {
+  for (const kind of ['inside', 'after']) it(`${kind} the splicing append recovers one ledger equal to its reconstruction`, async () => {
+    const a = new Script(ETS2_A), b = new Script(ETS2_B), first = tripUuidFor(ETS2_A, '1'), second = tripUuidFor(ETS2_B, '1');
+    const proof = (s: Script): ProfileObservation => ({version: 1, scope: 'a'.repeat(64), binding: 'b'.repeat(64), game: 'ets2', pluginSessionId: s.session,
+      processInstanceId: s.welcome().source.processInstanceId, sourceClockId: s.clockId, afterMonotonicNs: '0', loadGeneration: 1});
+    const opening = (uuid: string): TripEffect[] => [{kind: 'trip.open', tripUuid: uuid, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
+      jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: 1000}];
+    const sample = (s: Script, uuid: string, second: number, odo: number, fuel: number, speed: number, withProof: boolean): SampleInput => {
+      const absent = {available: false, reason: 'not-observed'} as const;
+      return {tripUuid: uuid, utcMs: 1000 + second * 1000, sourceClockId: s.clockId, monotonicNs: String(BigInt(second) * 1_000_000_000n),
+        gameTime: {minutes: {available: true, value: 500}, clockId: '40000000-0000-4000-8000-000000000001'}, speed: {available: true, value: speed}, fuel: {available: true, value: fuel},
+        averageConsumption: absent, estimatedRange: absent, engineRpm: absent, gear: absent, position: {available: true, value: {x: odo - 1_000_000, y: 0, z: 0}},
+        odometer: {available: true, value: odo}, recording: {...(withProof ? {profile: proof(s)} : {}), job: job(), truck: 'verified-truck', processInstanceId: s.welcome().source.processInstanceId,
+          ...(second > 1 ? {previous: {tripUuid: uuid, sourceClockId: s.clockId, monotonicNs: String(BigInt(second - 1) * 1_000_000_000n)}} : {})}};
+    };
+    const storage = await ws.open();
+    ok(storage.upsertSession({message: a.welcome()}));
+    ok(storage.commitEvent({message: a.event(r.jobConfigured()), profile: proof(a), effects: opening(first)}));
+    ok(storage.appendSamples(ETS2_A, [sample(a, first, 1, 1_000_000, 100, 20, true), sample(a, first, 2, 1_000_020, 99.99, 20, true), sample(a, first, 3, 1_000_040, 99.98, 0, true)],
+      {uniqueSeconds: true}));
+    ok(storage.commitEvent({message: a.event(r.timersRestart()), effects: [{kind: 'trip.close', tripUuid: first, outcome: 'none', closeReason: 'restart', recordingCompleteness: 'partial',
+      endedUtcMs: 2000}]}));
+    ok(storage.close());
+    const operations = [{name: 'open', kind: 'event', session: ETS2_B, input: {message: b.event(r.jobConfigured()), effects: opening(second)}},
+      {name: 'before', kind: 'samples', session: ETS2_B, rows: [sample(b, second, 1, 1_000_040, 99.98, 0, false), sample(b, second, 2, 1_000_060, 99.97, 20, false)]},
+      {name: 'splice', kind: 'samples', session: ETS2_B, rows: [sample(b, second, 3, 1_000_080, 99.96, 20, true)]}];
+    const run = async (barrier: unknown, label: string) => {
+      const file = path.join(ws.directory, `${label}.json`);
+      writeFileSync(file, JSON.stringify({open: ws.options(), logical: {sessions: [b.welcome()], operations, barrier}}));
+      const child = spawn(process.execPath, [CHILD, file], {env: {...process.env, ELECTRON_RUN_AS_NODE: '1', LOCALAPPDATA: localAppData()}, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
+      const closed = once(child, 'close');
+      let output = '', errors = '', timer: ReturnType<typeof setTimeout> | undefined;
+      child.stdout.on('data', bytes => { output += String(bytes); });
+      child.stderr.on('data', bytes => { errors += String(bytes); });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const wanted = barrier ? `barrier ${kind} splice` : 'done';
+          timer = setTimeout(() => reject(new Error(`Splice child hang: ${output} ${errors}`)), CHILD_LIVENESS_MS);
+          child.stdout.on('data', () => { if (output.includes(wanted)) resolve(); });
+          child.once('exit', code => { if (code !== 0 && !output.includes(wanted)) reject(new Error(`Splice child exited ${code}: ${errors}`)); });
+        });
+      } finally { clearTimeout(timer); if (barrier) child.kill(); await closed; }
+      expect(errors).toBe('');
+    };
+    await run({kind, operation: 'splice'}, 'killed-splice');
+    await run(null, 'recovered-splice');
+    const reader = await ws.open(), trips = ok(reader.journalTrips()).trips;
+    expect(trips).toHaveLength(1);
+    expect(trips[0].tripUuid).toBe(first);
+    const detail = ok(reader.journalTrip(first));
+    expect(detail.trip.observedDistanceM).toEqual({available: true, value: expect.closeTo(80, 9)});
+    expect(detail.trip.fuelUsedL).toEqual({available: true, value: expect.closeTo(0.04, 9)});
+    ok(reader.close());
+    readOnly(ws.database, db => {
+      db.defaultSafeIntegers(true);
+      const logical = db.prepare('SELECT m.logical_ref FROM logical_memberships m JOIN trips t ON t.id=m.trip_ref WHERE t.trip_uuid=?').pluck().get(first) as bigint;
+      const head = db.prepare('SELECT p.distance_m,p.fuel_used_l,p.quantity_flags FROM logical_trips l JOIN logical_progress p ON p.id=l.progress_head WHERE l.id=?').get(logical) as
+        {distance_m: number; fuel_used_l: number; quantity_flags: bigint};
+      const reconstructed = reconstructQuantities(db, logical)!;
+      expect([reconstructed.distanceM, reconstructed.fuelUsedL, reconstructed.flags]).toEqual([expect.closeTo(Number(head.distance_m), 9), expect.closeTo(Number(head.fuel_used_l), 9),
+        Number(head.quantity_flags)]);
+      // A's three rows and B's two own rows, B's two replayed rows (no sample) and its live row: each written once.
+      expect(db.prepare('SELECT count(*) AS rows, count(sample_ref) AS sampled FROM logical_progress').get()).toEqual({rows: 8n, sampled: 6n});
+      expect(db.prepare('SELECT count(*) FROM samples').pluck().get()).toBe(6n);
+    });
+    expect(checks()).toEqual({integrity: 'ok', foreignKeys: []});
+  }, 60_000);
 });
