@@ -1320,6 +1320,31 @@ describe('ET-112d profile verification status of the monitor (REG-003, REG-008, 
     expect(reads).toHaveLength(0); expect(health.count).toBe(1);
     expect(m.status().verification).toEqual({...waiting, lastCheck: {atUtcMs: 10_000, state: 'waiting', reason: 'no-game'}});
   });
+  it.each(['verified', 'game-log'] as const)('V11 is still checking after an invalidation during a read, then shows the settled result: %s', async settled => {
+    const {m, reads, clock, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
+    clock.now = 5_000_000_000n; const scheduled = m.refresh(); expect(reads).toHaveLength(2);
+    // A profile load seen by the reader withdraws the proof while the last successful read left no failure code.
+    m.invalidate('profile-verification');
+    expect(m.status().verification).toEqual({state: 'waiting', reason: 'checking', checking: false, lastCheck: null});
+    expect(m.publication().verification).toMatchObject({state: 'waiting', reason: 'checking'});
+    const answer = (read: Pending) => settled === 'verified' ? read.resolve(failing()) : read.reject(new ProfileVerificationError(new Error('log'), LOG));
+    answer(reads[1]); await vi.advanceTimersByTimeAsync(0);
+    // The invalidation requested one follow-up read of the same source.
+    expect(reads).toHaveLength(3); answer(reads[2]); await scheduled;
+    expect(m.status().verification).toEqual(settled === 'verified' ? {state: 'verified', reason: null, checking: false, lastCheck: null}
+      : {state: 'unverified', reason: 'game-log', checking: false, lastCheck: null});
+  });
+  it('V11 is checking after an invalidation between reads until the next scheduled read settles', async () => {
+    const {m, reads, clock, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
+    m.invalidate('profile-verification'); expect(m.status().verification).toMatchObject({state: 'waiting', reason: 'checking'});
+    clock.now = 5_000_000_000n; const scheduled = m.refresh(); reads[1].resolve(failing()); await scheduled;
+    expect(m.status()).toMatchObject({assessment: {state: 'fail'}, verification: {state: 'verified', reason: null}});
+    // Without a failure code or a read in flight or due, the withdrawn proof did not finish in time; a failure code keeps its reason.
+    const withdrawn: HardModeObservation = {assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null, diagnostic: 'profile-verification'};
+    expect(hardModeVerificationResult(true, withdrawn, undefined, false)).toEqual({state: 'unverified', reason: 'timeout'});
+    expect(hardModeVerificationResult(true, withdrawn, undefined, true)).toEqual({state: 'waiting', reason: 'checking'});
+    expect(hardModeVerificationResult(true, withdrawn, LOG, true)).toEqual({state: 'unverified', reason: 'game-log'});
+  });
   it('V10 ends a manual check without a result when the source changes during it', async () => {
     const {m, reads, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
     const manual = m.refresh(true); expect(m.status().verification.checking).toBe(true);

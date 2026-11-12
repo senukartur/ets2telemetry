@@ -21,15 +21,17 @@ const FAILURE_REASONS: Partial<Record<ProfileDiagnosticCode, HardModeVerificatio
 /**
  * ET-112d: whether the current observation comes from a verified profile. No game is waiting, never unverified; a bound
  * observation is verified whatever its rules say; a source or settings transition is still checking; otherwise the
- * profile could not be verified, for the reason of the last failed read.
+ * profile could not be verified, for the reason of the last failed read. Without a failed read, an invalidated proof is
+ * still checking while a read is in flight or due (`rechecking`), and only otherwise did the check not finish in time.
  */
-export function hardModeVerificationResult(hasSource: boolean, observation: HardModeObservation, failure?: ProfileDiagnosticCode): HardModeVerificationResult {
+export function hardModeVerificationResult(hasSource: boolean, observation: HardModeObservation, failure?: ProfileDiagnosticCode, rechecking = false): HardModeVerificationResult {
   if (!hasSource) return {state: 'waiting', reason: 'no-game'};
   if (observation.binding !== null || observation.assessment.state !== 'unknown') return {state: 'verified', reason: null};
   const diagnostic = observation.diagnostic;
   if (diagnostic === 'session-transition' || diagnostic === 'settings-changing' || diagnostic === 'source-changed') return {state: 'waiting', reason: 'checking'};
   if (diagnostic === 'guard-deadline') return {state: 'unverified', reason: 'timeout'};
   const reason = failure === undefined ? undefined : FAILURE_REASONS[failure];
+  if (reason === undefined && diagnostic === 'profile-verification' && rechecking) return {state: 'waiting', reason: 'checking'};
   return {state: 'unverified', reason: reason ?? (diagnostic === 'settings-unavailable' ? 'settings-read' : 'timeout')};
 }
 export class HardModeMonitor {
@@ -55,6 +57,8 @@ export class HardModeMonitor {
   private failure: ProfileDiagnosticCode | undefined;
   private manualChecking = false;
   private lastCheck: HardModeVerification['lastCheck'] = null;
+  /** An invalidation withdrew the proof; the next settled read of this source answers it. */
+  private recheck = false;
   private pendingProof: {value: HardModeObservation; completedClientNs: bigint; deadlineClientNs: bigint; resolve: () => void; publish: (value: HardModeObservation, at: bigint) => void} | undefined;
   private bindProof(): void {
     if (this.guard && !this.guard.eligible()) {this.retireProof(); return;}
@@ -86,7 +90,7 @@ export class HardModeMonitor {
     }
     if (this.observation.binding !== null && this.expired()) this.publish(this.unknown());
   }
-  invalidate(diagnostic: HardModeDiagnosticCode = 'settings-changing'): void {this.followup ||= this.inFlight !== undefined; this.retireProof(); this.publish(this.unknown(diagnostic));}
+  invalidate(diagnostic: HardModeDiagnosticCode = 'settings-changing'): void {this.followup ||= this.inFlight !== undefined; this.recheck = true; this.retireProof(); this.publish(this.unknown(diagnostic));}
   select(next: MonitorSource | null): void {
     if (this.closed) return;
     this.guard?.select(next ? profileSourceKey(next) : undefined);
@@ -98,7 +102,7 @@ export class HardModeMonitor {
     if (key !== undefined && key !== this.cadenceKey) {this.lastScanNs = undefined; this.cadenceKey = key;}
     this.epoch++; this.followup = false; this.manualPending = false; clearTimeout(this.manualTimer); this.manualTimer = undefined;
     // A source change ends a manual check without a result; the new source has no failed read yet.
-    this.manualChecking = false; this.failure = undefined;
+    this.manualChecking = false; this.failure = undefined; this.recheck = false;
     this.controller?.abort(); this.retireProof(); this.publish(this.unknown('session-transition'));
     const epoch = this.epoch, draining = this.inFlight;
     if (draining) void draining.finally(() => {if (epoch === this.epoch && this.source) void this.refresh(this.manualPending);});
@@ -110,8 +114,9 @@ export class HardModeMonitor {
     return structuredClone(this.observation);
   }
   private verification(evidence: HardModeObservation): HardModeVerification {
-    return {...hardModeVerificationResult(this.source !== null, evidence, this.failure), checking: this.manualChecking, lastCheck: this.lastCheck && {...this.lastCheck}};
+    return {...hardModeVerificationResult(this.source !== null, evidence, this.failure, this.rechecking()), checking: this.manualChecking, lastCheck: this.lastCheck && {...this.lastCheck}};
   }
+  private rechecking(): boolean {return this.inFlight !== undefined || this.recheck;}
   publication(): Extract<HardModeServiceMessage, {update: 'assessment'}> {
     const age = this.healthNs === undefined ? -1n : this.nowNs() - this.healthNs;
     const remaining = age >= 0n && age < HARD_MODE_COVERAGE_NS ? HARD_MODE_COVERAGE_NS - age : 0n;
@@ -169,6 +174,7 @@ export class HardModeMonitor {
     const expire = () => {controller.abort(this.guard?.deadline?.(current.source)); if (epoch === this.epoch) {if (!this.retain()) complete(this.unknown('guard-deadline')); this.retireProof();}};
     let deadline = setTimeout(expire, HARD_MODE_DEADLINE_MS);
     this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal, manual).then(result => {
+      if (epoch === this.epoch) this.recheck = false;
       if (controller.signal.aborted || epoch !== this.epoch || this.guard && !this.guard.eligible()) return;
       this.failure = undefined;
       const value = 'observation' in result ? result.observation : result;
@@ -196,6 +202,7 @@ export class HardModeMonitor {
         });
       }
     }, error => {if (epoch !== this.epoch) return;
+      this.recheck = false;
       this.failure = error instanceof ProfileVerificationError && !(error instanceof UnchangedVerificationError) ? error.code : undefined;
       if (error instanceof UnchangedVerificationError) {complete(this.observation); return;}
       complete(this.unknown(error instanceof ProfileVerificationError && error.code === 'PROFILE_DEADLINE' ? 'guard-deadline' : error instanceof ProfileSettingsUnavailableError || !(error instanceof ProfileVerificationError) ? 'settings-unavailable' : 'profile-verification'));
@@ -208,7 +215,7 @@ export class HardModeMonitor {
       const requested = this.followup; this.followup = false;
       // A manual check ends with its own result unless another manual run follows it; manual runs never count a check.
       if (manual && epoch === this.epoch && !this.manualPending && !this.closed) {
-        this.lastCheck = {atUtcMs: Date.now(), ...hardModeVerificationResult(this.source !== null, this.evidence(), this.failure)};
+        this.lastCheck = {atUtcMs: Date.now(), ...hardModeVerificationResult(this.source !== null, this.evidence(), this.failure, this.rechecking())};
         this.manualChecking = false; this.publishHealth();
       }
       if (epoch === this.epoch && this.source && !this.closed) {
@@ -218,5 +225,5 @@ export class HardModeMonitor {
     });
     return this.inFlight;
   }
-  close(): void {this.closed = true; this.guard?.select(undefined); this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.manualChecking = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown('session-transition'));}
+  close(): void {this.closed = true; this.guard?.select(undefined); this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.manualChecking = false; this.recheck = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown('session-transition'));}
 }
