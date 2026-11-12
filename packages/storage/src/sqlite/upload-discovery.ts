@@ -36,7 +36,7 @@ function identityState(db:Database.Database,root:unknown,state:'unbound'|'pendin
   db.prepare('UPDATE upload_reservations SET identity_state=? WHERE candidate_ref=(SELECT ordinal FROM upload_candidates WHERE trip_ref=?) AND identity_state<>?').run(state,root,state);
 }
 export function resolveBinding(db:Database.Database,root:unknown):Row|undefined {
-  const t=get(db,`SELECT t.*,s.plugin_session_uuid,m.logical_ref,m.proof_json,l.retired FROM trips t JOIN logical_trips l ON l.id=t.id
+  const t=get(db,`SELECT t.*,s.plugin_session_uuid,m.logical_ref,m.proof_json,l.retired,l.member_count AS group_members FROM trips t JOIN logical_trips l ON l.id=t.id
     JOIN logical_memberships m ON m.trip_ref=t.id JOIN plugin_sessions s ON s.id=t.plugin_session_ref WHERE t.id=?`,root);
   if(!t)return undefined;
   const bound=get(db,'SELECT * FROM upload_source_bindings WHERE root_ref=?',root);
@@ -45,9 +45,23 @@ export function resolveBinding(db:Database.Database,root:unknown):Row|undefined 
     if(bound)db.prepare("UPDATE upload_source_bindings SET held=1,hold_reason='reconciliation-required' WHERE root_ref=?").run(root);
     return undefined;
   }
-  if(bound){identityState(db,root,'resolved');return bound;}
+  // A root whose group holds another member with its own source binding carries that member's evidence again. Hold it here,
+  // before begin, freeze and discovery publish anything and before an unbound root gets a binding, not only at the members fold.
+  // A singleton group (member_count 1) has no other member, so it never runs the group join.
+  const memberBound=(t.group_members as bigint)>1n&&get(db,`SELECT 1 FROM logical_memberships m JOIN upload_source_bindings b ON b.root_ref=m.trip_ref
+    WHERE m.logical_ref=? AND m.trip_ref<>? LIMIT 1`,root,root)!==undefined;
+  if(bound){
+    identityState(db,root,'resolved');
+    if(!memberBound||bound.held===1n)return bound;
+    db.prepare("UPDATE upload_source_bindings SET held=1,hold_reason='reconciliation-required' WHERE root_ref=?").run(root);
+    return required(get(db,'SELECT * FROM upload_source_bindings WHERE root_ref=?',root));
+  }
   const entry=candidate(db,root);if(!entry)return undefined;
-  const owner=reservation(db,entry);
+  let owner=reservation(db,entry);
+  if(memberBound&&owner.hold_reason===null){
+    db.prepare("UPDATE upload_reservations SET hold_reason='reconciliation-required' WHERE candidate_ref=?").run(entry.ordinal);
+    owner={...owner,hold_reason:'reconciliation-required'};
+  }
   // The bound check above returned already; a schema-9 pending decision holds the root like an unproven open trip.
   const pending=identityPending(t,decisionState(db,root),false);
   const state=owner.hold_reason!==null?'held':owner.registration_ref===null?'unbound':pending?'pending':'resolved';
