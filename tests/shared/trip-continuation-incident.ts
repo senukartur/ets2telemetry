@@ -5,7 +5,10 @@
 // of position difference, 9,978 revenue at delivery against a different expected income, and a delivered game distance of
 // 187,342.01049804688 m. Every ID, value and timestamp other than those is invented; the corpus holds no path, profile
 // name, account ID or game ID from the incident. The last process uses the sanitized ET-112a log timing: its profile
-// proof becomes available with the log header, 5,114 ms after process creation. Expected results are written by hand.
+// proof becomes available with the log header, 5,114 ms after process creation. The Hard Mode checks are a synthetic
+// split of the card's 178 passing checks over the first two processes (101 + 77), and 74 unknown checks while the last
+// process could not verify its profile. Expected results are written by hand.
+import type {HardModeCounts} from '../../packages/contracts/src/hard-mode';
 import type {EventRecord, JobConfiguration} from '../../packages/contracts/src/protocol-v1';
 import {tripUuidFor} from '../../packages/telemetry-core/src/index';
 import {incidentLocal, INCIDENT_PROCESS_CREATED_MS} from './profile-log-generation';
@@ -55,6 +58,10 @@ export interface IncidentSegment {
   serviceRestartBefore: boolean;
   end: 'game-exit' | 'delivered';
   readings: readonly IncidentReading[];
+  /** The cumulative Hard Mode checks of this process's member, written while its trip is open. */
+  checks: HardModeCounts;
+  /** Whether the process's Hard Mode assessment had verified profile evidence when its checks were written. */
+  profileVerified: boolean;
 }
 
 /** ET-112a: the header was written 5,114 ms after the process was created; the proof is admitted from then on. */
@@ -64,16 +71,19 @@ const SECOND_PROCESS_START = incidentLocal(1, 13, 40);
 
 // Driving at 20 m/s; every segment ends stopped at its save point and the next one resumes there.
 export const INCIDENT_SEGMENTS: readonly IncidentSegment[] = [
-  {session: INCIDENT_SESSIONS[0], startUtcMs: incidentLocal(0, 13, 0), profileFromMs: 0, serviceRestartBefore: false, end: 'game-exit', readings: [
+  {session: INCIDENT_SESSIONS[0], startUtcMs: incidentLocal(0, 13, 0), profileFromMs: 0, serviceRestartBefore: false, end: 'game-exit',
+    checks: {passingChecks: 101, failingChecks: 0, unknownChecks: 0}, profileVerified: true, readings: [
     {atMs: 2_000, odometerM: 812_000, fuelL: 420, x: 1_000, gameMinutes: 9_000, speedMps: 20},
     {atMs: 3_000, odometerM: 812_020, fuelL: 419.99, x: 1_020, gameMinutes: 9_000, speedMps: 20},
     {atMs: 4_000, odometerM: 812_040, fuelL: 419.98, x: 1_040, gameMinutes: 9_001, speedMps: 0}]},
-  {session: INCIDENT_SESSIONS[1], startUtcMs: SECOND_PROCESS_START, profileFromMs: 0, serviceRestartBefore: false, end: 'game-exit', readings: [
+  {session: INCIDENT_SESSIONS[1], startUtcMs: SECOND_PROCESS_START, profileFromMs: 0, serviceRestartBefore: false, end: 'game-exit',
+    checks: {passingChecks: 77, failingChecks: 0, unknownChecks: 0}, profileVerified: true, readings: [
     {atMs: 2_000, odometerM: 812_040, fuelL: 419.98, x: 1_040, gameMinutes: 9_001, speedMps: 0},
     {atMs: 3_000, odometerM: 812_060, fuelL: 419.97, x: 1_060, gameMinutes: 9_001, speedMps: 20},
     {atMs: 4_000, odometerM: 812_080, fuelL: 419.96, x: 1_080, gameMinutes: 9_002, speedMps: 0}]},
   // Fuel -0.0045 L and position +0.002 m against the previous save point; odometer and game minute are equal.
-  {session: INCIDENT_SESSIONS[2], startUtcMs: INCIDENT_PROCESS_CREATED_MS, profileFromMs: FINAL_PROCESS_PROFILE_DELAY_MS, serviceRestartBefore: true, end: 'delivered', readings: [
+  {session: INCIDENT_SESSIONS[2], startUtcMs: INCIDENT_PROCESS_CREATED_MS, profileFromMs: FINAL_PROCESS_PROFILE_DELAY_MS, serviceRestartBefore: true, end: 'delivered',
+    checks: {passingChecks: 0, failingChecks: 0, unknownChecks: 74}, profileVerified: false, readings: [
     {atMs: 2_000, odometerM: 812_080, fuelL: 419.9555, x: 1_080.002, gameMinutes: 9_002, speedMps: 0},
     {atMs: 3_000, odometerM: 812_100, fuelL: 419.9455, x: 1_100.002, gameMinutes: 9_002, speedMps: 20},
     {atMs: 6_000, odometerM: 812_160, fuelL: 419.9155, x: 1_160.002, gameMinutes: 9_003, speedMps: 20},
@@ -91,5 +101,7 @@ export const INCIDENT_EXPECTED = {
   outcome: 'delivered',
   deliveredEvents: 1,
   revenue: INCIDENT_REVENUE,
-  deliveredDistanceM: INCIDENT_DELIVERED_DISTANCE_M
+  deliveredDistanceM: INCIDENT_DELIVERED_DISTANCE_M,
+  /** One sum over the three members: 178 x 100 >= 178 x 95, so the delivered trip qualifies; unknown checks are not known checks. */
+  hardMode: {passingChecks: 178, failingChecks: 0, unknownChecks: 74, qualified: true}
 } as const;
