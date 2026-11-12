@@ -305,7 +305,7 @@ The sink is exercised only against temporary synthetic-purpose databases in test
 
 ## Migrations (OD-4)
 
-Migrations are forward-only and frozen once released: `MIGRATIONS = [{version: 1, name: '0001-initial'}, {version: 2, name: '0002-journal', foreignKeysOff: true}, {version: 3, name: '0003-hard-mode'}, {version: 4, name: '0004-logical-trips'}, {version: 5, name: '0005-upload-projections'}, {version: 6, name: '0006-upload-ownership-queue'}, {version: 7, name: '0007-trailer-baselines'}, {version: 8, name: '0008-haulmp-mode', foreignKeysOff: true}, {version: 9, name: '0009-membership-decisions'}]` ([schema version 2](#schema-version-2-et-016)). Each step sets `user_version` and inserts its `schema_migrations` row. A table-rebuild step declares `foreignKeysOff`; on the upgrade path the framework turns foreign keys off outside the transaction and runs `foreign_key_check` before commit. A new database runs every step with foreign keys on, which is safe only because its tables are empty. Tests may inject migration lists only through the in-process API.
+Migrations are forward-only and frozen once released: `MIGRATIONS = [{version: 1, name: '0001-initial'}, {version: 2, name: '0002-journal', foreignKeysOff: true}, {version: 3, name: '0003-hard-mode'}, {version: 4, name: '0004-logical-trips'}, {version: 5, name: '0005-upload-projections'}, {version: 6, name: '0006-upload-ownership-queue'}, {version: 7, name: '0007-trailer-baselines'}, {version: 8, name: '0008-haulmp-mode', foreignKeysOff: true}, {version: 9, name: '0009-membership-decisions'}, {version: 10, name: '0010-quantity-engine'}]` ([schema version 2](#schema-version-2-et-016)). Each step sets `user_version` and inserts its `schema_migrations` row. A table-rebuild step declares `foreignKeysOff`; on the upgrade path the framework turns foreign keys off outside the transaction and runs `foreign_key_check` before commit. A new database runs every step with foreign keys on, which is safe only because its tables are empty. Tests may inject migration lists only through the in-process API.
 
 - A new or zero-length file (or an empty SQLite file: application id 0, no user tables and user version 0, as the inspection and the locked re-check both require) receives every migration in one transaction, without a backup, with foreign keys on.
 - An existing database below the supported version is backed up and verified first (below), then every pending step runs in one `BEGIN IMMEDIATE` transaction that ends with `foreign_key_check` and `quick_check`. Any failure rolls back to the old version and content and returns `MIGRATION_FAILED` with the backup name. A backup failure migrates nothing. The file is not byte-identical afterwards, though: the writer open has already switched it to WAL (open sequence step 7), so header bytes, such as 18–19 (the WAL marker) and the change counter, can differ while every byte after the 100-byte header stays unchanged (ET-019 PR-6, `tests/storage/history-refusal.test.ts`).
@@ -434,3 +434,14 @@ Both event-sequence columns hold the 20-digit key of `events.event_seq`. The row
 - **Deletion.** Staging `deleteTrip` removes the decisions of the deleted trips and keeps the session boundaries.
 
 `schema-v8-representative.{sql,sqlite,expected.json}` freezes a schema 8 history for this migration: a proof-bearing two-member group closed by restarts, a proof-less delivered trip, a proof-less open trip and a complete delivered trip. It was written through the schema 8 storage commands, dumped to the SQL file and rebuilt from it.
+
+## Schema version 10 (ET-112)
+
+Migration `0010-quantity-engine` ([schema-v10.ts](../packages/storage/src/sqlite/schema-v10.ts)) adds two columns, without a backfill, a rebuild or a new index; the verified backup, the integrity checks and the `SCHEMA_NEWER` refusal of a schema 9 build apply unchanged.
+
+| Column | Contents |
+| --- | --- |
+| `logical_trips.accounting_engine` | `INTEGER NOT NULL DEFAULT 0`, 0 or 1: the distance and fuel engine of the group |
+| `logical_progress.quantity_flags` | `INTEGER`, NULL or 0-65535: the 16 engine-1 flag bits of a ledger row (`QUANTITY_FLAGS` in [quantities.ts](../packages/telemetry-core/src/trips/quantities.ts)) |
+
+Engine 0 with NULL flags is the schema 9 accounting, so every existing group and ledger row keeps its meaning. Nothing writes engine 1 yet. `schema-v9-representative.{sql,sqlite,expected.json}` freezes a schema 9 history for this migration: a delivered singleton whose ledger lost its predecessor while moving, the incident's live and retroactive join with its delivery, and a pending open trip. It was written through the schema 9 storage commands, dumped to the SQL file and rebuilt from it.
