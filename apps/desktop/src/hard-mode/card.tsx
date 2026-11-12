@@ -105,11 +105,11 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
               {t(busy || status.verification.checking ? 'hm.checking' : 'hm.recheck', undefined, language)}
             </Button>
           </div>
-          {view.verification.checkResult ? (
-            <p data-testid="hard-mode-check-result" className="text-xs text-[var(--yu-text-muted)]">
-              {view.verification.checkResult}
-            </p>
-          ) : null}
+          {/* The line keeps its height before the first result, so a result appearing never shifts the rules below it. */}
+          <p data-testid={view.verification.checkResult ? 'hard-mode-check-result' : undefined} aria-hidden={view.verification.checkResult ? undefined : true}
+            className="min-h-4 text-xs text-[var(--yu-text-muted)]">
+            {view.verification.checkResult}
+          </p>
 
           <div className="yu-hard-mode-progress">
             <progress

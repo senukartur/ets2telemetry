@@ -258,6 +258,10 @@ describe('ET-112d profile verification on the Hard Mode page (REG-009, REG-010)'
   });
   it.each(['en', 'ru'] as const)('shows a running check on the button and keeps the last result in place (%s)', language => {
     const text = TEXT[language];
+    // Before the first result the line is an empty, hidden placeholder of the same height, so the first result never shifts the page.
+    const first = render(language, {assessment: unknown, trip: null, verification: {...unverified, checking: true}});
+    expect(first).not.toContain('data-testid="hard-mode-check-result"');
+    expect(first).toContain('<p aria-hidden="true" class="min-h-4 text-xs text-[var(--yu-text-muted)]"></p>');
     const running = render(language, {assessment: unknown, trip: null, verification: {...unverified, checking: true, lastCheck}});
     expect(running).toMatch(new RegExp(`data-testid="hard-mode-refresh"[^>]*>${text.checking}</button>`));
     // The previous result stays while the new check runs, so a repeated Check again never shifts the rules below it.
