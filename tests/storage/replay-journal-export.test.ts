@@ -210,7 +210,7 @@ async function value<T>(journal: JournalService, query: JournalQuery): Promise<T
   if (!result.ok) throw new Error(`The journal ${query.kind} read failed with ${result.code}`);
   return result.value as T;
 }
-const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 9};
+const SYNTHETIC_V3 = {purpose: 'synthetic', schemaVersion: 10};
 const OUTCOMES = ['open', 'delivered', 'cancelled', 'none'] as const, COMPLETENESS = ['complete', 'partial', 'unknown'] as const, GAMES = ['ets2', 'ats'] as const;
 const withoutId = <T extends {id:string;pluginSessionId?:unknown;rawTripUuid?:unknown}>(rows:T[])=>rows.map(({id,pluginSessionId,rawTripUuid,...rest})=>{void id;void pluginSessionId;void rawTripUuid;return rest;});
 const eventTuple = (e: {eventSeq: string; type: string; attribution: Json | null}) => [e.eventSeq,e.type,e.attribution===null?null:{kind:e.attribution.kind,tripUuid:e.attribution.tripUuid}];

@@ -22,6 +22,8 @@ export * from './trips/continuation';
 export * from './trips/membership';
 export * from './trips/progress';
 export * from './trips/accounting';
+// The versioned distance and fuel engine of logical trips (ET-112c).
+export * from './trips/quantities';
 export * from './trips/types';
 export * from './trips/reducer';
 export * from './trips/view';

@@ -11,7 +11,7 @@
 //                  and at the barrier `config.barrier` writes "barrier <name> <facts JSON>" synchronously to stdout and
 //                  blocks until the test terminates the process. Barriers: afterInspect (the open test hook), afterCopy
 //                  (the backup test hook: the partial copy exists), afterBackupRename (the backup was renamed to .sqlite),
-//                  inside0002 (the real migration 0002 SQL has run inside
+//                  inside<NNNN> (the real migration NNNN SQL, 0002 or 0004-0007 or 0010, has run inside
 //                  the migration transaction, before the runner records the step and commits) and afterOpen (the open
 //                  returned, the database is never closed). The open runs in this process because the storage worker
 //                  copies open options field by field and never receives hooks or migrations (docs/storage.md).
@@ -85,9 +85,11 @@ async function migrate() {
     writeSync(2, `Barrier ${name} was not ended by the test\n`);
     process.exit(4);
   };
-  // The real 0002 statements, then the barrier, still inside the runner's migration transaction. The facts are read on
-  // the migrating connection, so they show the uncommitted state; the connection reads 64-bit integers as BigInt.
-  const real = MIGRATIONS[config.barrier==='inside0007'?6:config.barrier==='inside0006'?5:config.barrier==='inside0005'?4:config.barrier==='inside0004'?3:1];
+  // The real statements of migration NNNN, the last one of the list, then the barrier, still inside the runner's migration
+  // transaction. The facts are read on the migrating connection, so they show the uncommitted state; the connection reads
+  // 64-bit integers as BigInt.
+  const inside = /^inside(\d{4})$/.exec(config.barrier), version = inside ? Number(inside[1]) : 2;
+  const real = MIGRATIONS[version - 1];
   const wrapped = Object.freeze({...real, up(db) {
     // With `spill`, a page cache of a few pages makes SQLite write uncommitted pages of the transaction to the WAL before
     // the barrier, so the kill leaves frames without a commit record on disk instead of nothing at all.
@@ -95,7 +97,7 @@ async function migrate() {
     real.up(db);
     let walBytes = 0;
     try { walBytes = statSync(`${config.open.path}-wal`).size; } catch { /* no WAL file */ }
-    barrier(config.barrier==='inside0007'?'inside0007':config.barrier==='inside0006'?'inside0006':config.barrier==='inside0005'?'inside0005':config.barrier==='inside0004'?'inside0004':'inside0002', {
+    barrier(`inside${String(version).padStart(4, '0')}`, {
       userVersion: Number(db.pragma('user_version', {simple: true})),
       versions: db.prepare('SELECT version FROM schema_migrations ORDER BY version').pluck().all().map(Number),
       tripsOpenedBy: Number(db.prepare("SELECT count(*) FROM pragma_table_info('trips') WHERE name = 'opened_by'").pluck().get()),
@@ -103,7 +105,7 @@ async function migrate() {
     });
   }});
   const options = {...config.open, now: () => config.nowMs,
-    ...(config.barrier === 'inside0002' ? {migrations: [MIGRATIONS[0], wrapped]} : config.barrier==='inside0007'?{migrations:[...MIGRATIONS.slice(0,6),wrapped]}:config.barrier==='inside0006'?{migrations:[...MIGRATIONS.slice(0,5),wrapped]}:config.barrier==='inside0005'?{migrations:[...MIGRATIONS.slice(0,4),wrapped]}:config.barrier==='inside0004'?{migrations:[...MIGRATIONS.slice(0,3),wrapped]}:{}),
+    ...(inside ? {migrations: [...MIGRATIONS.slice(0, version - 1), wrapped]} : {}),
     testHooks: {afterInspect: () => barrier('afterInspect'), afterCopy: partial => barrier('afterCopy', {partial: path.basename(partial)}), afterBackupRename: backup => barrier('afterBackupRename', {backup: path.basename(backup)})}};
   const storage = must(await openStorage(options));
   barrier('afterOpen', {summary: storage.summary});

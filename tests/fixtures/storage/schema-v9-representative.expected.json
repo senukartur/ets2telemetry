@@ -1,0 +1,62 @@
+{
+  "provenance": "Synthetic schema 9 history for ET-112c2, written on 2026-11-12 with the storage commands of base 7991bff4 on the frozen migrations 0001-0009 (purpose and origin synthetic), dumped to schema-v9-representative.sql and rebuilt from that text; the database UUID was set by hand. Group 1 is a delivered complete singleton whose third of four moving readings had no predecessor (recorder reset snapshot-coalesced); group 2 is the ET-112 incident corpus (tests/shared/trip-continuation-incident.ts) on sessions 9002-9004, two live joins across game restarts and a service restart, then a retroactive join from a profile proof after the delivery; group 3 is an open trip of another job without profile proof. The profile scope and binding are constant synthetic hex; no real path, profile name or account ID.",
+  "schemaVersion": 9,
+  "databaseUuid": "f0000000-0000-4000-8000-000000000009",
+  "sessions": ["10000000-0000-4000-8000-000000009001", "10000000-0000-4000-8000-000000009002", "10000000-0000-4000-8000-000000009003",
+    "10000000-0000-4000-8000-000000009004", "10000000-0000-4000-8000-000000009005"],
+  "trips": [
+    {"id": 1, "trip_uuid": "43265f5f-6ffb-5817-9842-4d7581240cb7", "session": "10000000-0000-4000-8000-000000009001", "outcome": "delivered", "close_reason": "outcome",
+      "recording_completeness": "complete", "observed_distance_m": 60, "fuel_used_l": 0.03},
+    {"id": 2, "trip_uuid": "ae6a1fad-c6eb-bbe9-ce7e-78fbae2b5bf4", "session": "10000000-0000-4000-8000-000000009002", "outcome": "none", "close_reason": "restart",
+      "recording_completeness": "partial", "observed_distance_m": null, "fuel_used_l": null},
+    {"id": 3, "trip_uuid": "d3a53e2b-e537-1268-cb5e-efb5ffb29de8", "session": "10000000-0000-4000-8000-000000009003", "outcome": "none", "close_reason": "restart",
+      "recording_completeness": "partial", "observed_distance_m": null, "fuel_used_l": null},
+    {"id": 4, "trip_uuid": "a309a4c1-d9a2-0ca2-4de0-68486dd7f55b", "session": "10000000-0000-4000-8000-000000009004", "outcome": "delivered", "close_reason": "outcome",
+      "recording_completeness": "partial", "observed_distance_m": null, "fuel_used_l": null},
+    {"id": 5, "trip_uuid": "33a0f251-80e9-add1-9732-4c31af4c1102", "session": "10000000-0000-4000-8000-000000009005", "outcome": "open", "close_reason": null,
+      "recording_completeness": "complete", "observed_distance_m": null, "fuel_used_l": null}
+  ],
+  "memberships": [
+    {"trip_ref": 1, "logical_ref": 1, "previous_logical_ref": null, "proof": 1},
+    {"trip_ref": 2, "logical_ref": 2, "previous_logical_ref": null, "proof": 1},
+    {"trip_ref": 3, "logical_ref": 2, "previous_logical_ref": 3, "proof": 1},
+    {"trip_ref": 4, "logical_ref": 2, "previous_logical_ref": 4, "proof": 1},
+    {"trip_ref": 5, "logical_ref": 5, "previous_logical_ref": null, "proof": 0}
+  ],
+  "logicalTrips": [
+    {"id": 1, "latest_trip_ref": 1, "member_count": 1, "retired": 1, "accounting_rebased": 1, "reconciliation_unknown": 1},
+    {"id": 2, "latest_trip_ref": 4, "member_count": 3, "retired": 1, "accounting_rebased": 1, "reconciliation_unknown": 0},
+    {"id": 3, "latest_trip_ref": 3, "member_count": 1, "retired": 1, "accounting_rebased": 0, "reconciliation_unknown": 0},
+    {"id": 4, "latest_trip_ref": 4, "member_count": 1, "retired": 1, "accounting_rebased": 0, "reconciliation_unknown": 0},
+    {"id": 5, "latest_trip_ref": 5, "member_count": 1, "retired": 0, "accounting_rebased": 0, "reconciliation_unknown": 0}
+  ],
+  "decisions": [
+    {"trip_ref": 1, "state": "root", "reason": "no-candidate", "target_logical_ref": null},
+    {"trip_ref": 2, "state": "root", "reason": "no-candidate", "target_logical_ref": null},
+    {"trip_ref": 3, "state": "joined", "reason": "matched", "target_logical_ref": 2},
+    {"trip_ref": 4, "state": "joined", "reason": "matched", "target_logical_ref": 2},
+    {"trip_ref": 5, "state": "pending", "reason": "profile-unverified", "target_logical_ref": null}
+  ],
+  "profileBoundaries": [
+    {"session": "10000000-0000-4000-8000-000000009002", "through_event_seq": "00000000000000000002"},
+    {"session": "10000000-0000-4000-8000-000000009003", "through_event_seq": "00000000000000000002"}
+  ],
+  "chainBreaks": [
+    {"trip_ref": 1, "version": 1, "reason": "missing-predecessor", "recorderReset": "snapshot-coalesced", "distanceLost": true, "fuelLost": true}
+  ],
+  "deliveries": [
+    {"trip_uuid": "43265f5f-6ffb-5817-9842-4d7581240cb7", "revenue": {"raw": "5000", "sdkType": "s64"}, "distanceM": 151250.5},
+    {"trip_uuid": "a309a4c1-d9a2-0ca2-4de0-68486dd7f55b", "revenue": {"raw": "9978", "sdkType": "s64"}, "distanceM": 187342.01049804688}
+  ],
+  "journal": [
+    {"tripUuid": "43265f5f-6ffb-5817-9842-4d7581240cb7", "outcome": "delivered", "recordingCompleteness": "complete", "sources": ["10000000-0000-4000-8000-000000009001"],
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}},
+    {"tripUuid": "ae6a1fad-c6eb-bbe9-ce7e-78fbae2b5bf4", "outcome": "delivered", "recordingCompleteness": "partial",
+      "sources": ["10000000-0000-4000-8000-000000009002", "10000000-0000-4000-8000-000000009003", "10000000-0000-4000-8000-000000009004"],
+      "observedDistanceM": {"available": false, "reason": "not-observed"}, "fuelUsedL": {"available": false, "reason": "not-observed"}},
+    {"tripUuid": "33a0f251-80e9-add1-9732-4c31af4c1102", "outcome": "open", "recordingCompleteness": "complete", "sources": ["10000000-0000-4000-8000-000000009005"],
+      "observedDistanceM": {"available": true, "value": 20}, "fuelUsedL": {"available": true, "value": 0.009999999999990905}}
+  ],
+  "rowCounts": {"plugin_sessions": 5, "events": 9, "job_configurations": 5, "job_deliveries": 2, "event_amounts": 2, "trips": 5, "samples": 16, "completeness_intervals": 1,
+    "logical_trips": 5, "logical_memberships": 5, "logical_progress": 17, "logical_membership_decisions": 5, "session_profile_boundaries": 2, "schema_migrations": 9}
+}
