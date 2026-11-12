@@ -155,8 +155,45 @@ export function cleanLoadWindow(db: Database.Database, row: Row, requireStarted 
   return gaps.length === 0 || gaps.length === 1 && event.event_seq === '00000000000000000003'
     && gaps[0].first_event_seq === '00000000000000000001' && gaps[0].last_event_seq === '00000000000000000002';
 }
+const ALLOWED_IN_PAUSE = new Set(['job.configured', 'truck.configured', 'trailer.configured', 'timers.restart']);
+/**
+ * A paused reconnect within one plugin session (docs/trips.md): the late-attach recording `row`, with an admitted proof
+ * of its group's scope, continues the group's previous member, which this session closed without an outcome as a
+ * discontinuity inside a pause. Every event from the pause to the checkpoint's nextEventSeq N is stored without a gap and
+ * is a job, truck or trailer configuration or a timer reset, and `row` carries exactly one late-attach and one not-merged
+ * continuation interval of that checkpoint; with `requireStarted` the event at N is a start. Returns the continued
+ * recording's UUID and the decimal N, or null.
+ */
+export function pausedReconnect(db: Database.Database, row: Row, requireStarted = true): {continuationOf: string; nextEventSeq: string} | null {
+  if (row.opened_by !== 'checkpoint' || row.opened_event_ref !== null) return null;
+  const n = get(db, "SELECT checkpoint_next_event_seq FROM job_configurations WHERE id=? AND plugin_session_ref=? AND source='checkpoint'", row.job_configuration_ref, row.plugin_session_ref)
+    ?.checkpoint_next_event_seq;
+  const membership = get(db, 'SELECT m.logical_ref,m.proof_json,l.profile_scope FROM logical_memberships m JOIN logical_trips l ON l.id=m.logical_ref WHERE m.trip_ref=?', row.id);
+  if (typeof n !== 'string' || typeof membership?.proof_json !== 'string' || typeof membership.profile_scope !== 'string'
+    || (JSON.parse(membership.proof_json) as Row).scope !== membership.profile_scope) return null;
+  const previous = get(db, 'SELECT t.* FROM logical_memberships m JOIN trips t ON t.id=m.trip_ref WHERE m.logical_ref=? AND m.trip_ref<? ORDER BY m.trip_ref DESC LIMIT 1',
+    membership.logical_ref, row.id);
+  if (!previous || previous.plugin_session_ref !== row.plugin_session_ref || previous.closed_by_session_ref !== row.plugin_session_ref || previous.outcome !== 'none'
+    || previous.close_reason !== 'discontinuity' || typeof previous.closed_by_event_seq !== 'string' || typeof previous.trip_uuid !== 'string') return null;
+  const next = BigInt(n).toString(), notes = db.prepare('SELECT kind,detail_json FROM completeness_intervals WHERE trip_ref=? ORDER BY id LIMIT 8').all(row.id) as Row[];
+  const details = notes.map(note => ({kind: note.kind, detail: typeof note.detail_json === 'string' ? JSON.parse(note.detail_json) as Row : {}}))
+    .filter(({detail}) => detail.source === 'checkpoint' && detail.nextEventSeq === next);
+  if (details.filter(({kind, detail}) => kind === 'not-connected' && detail.cause === 'late-attach').length !== 1
+    || details.filter(({kind, detail}) => kind === 'discontinuity' && detail.cause === 'discontinuity' && detail.decision === 'not-merged'
+      && detail.continuationOf === previous.trip_uuid).length !== 1) return null;
+  const pause = get(db, `SELECT event_seq,type FROM events WHERE plugin_session_id=? AND event_seq<? AND type IN ('simulation.started','simulation.paused')
+    ORDER BY event_seq DESC LIMIT 1`, row.plugin_session_ref, n);
+  if (pause?.type !== 'simulation.paused' || typeof pause.event_seq !== 'string') return null;
+  const p = pause.event_seq, between = BigInt(n) - BigInt(p) - 1n;
+  const window = db.prepare('SELECT type FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<? ORDER BY event_seq LIMIT 65').all(row.plugin_session_ref, p, n) as Row[];
+  if (between > 64n || BigInt(window.length) !== between || window.some(event => !ALLOWED_IN_PAUSE.has(String(event.type)))
+    || !(p < previous.closed_by_event_seq && previous.closed_by_event_seq < n)) return null;
+  if (get(db, 'SELECT id FROM event_gaps WHERE plugin_session_ref=? AND last_event_seq>=? AND first_event_seq<=? LIMIT 1', row.plugin_session_ref, p, n)) return null;
+  if (requireStarted && get(db, 'SELECT type FROM events WHERE plugin_session_id=? AND event_seq=?', row.plugin_session_ref, n)?.type !== 'simulation.started') return null;
+  return {continuationOf: previous.trip_uuid, nextEventSeq: next};
+}
 /** Inspect new interval rows of the selected members, with an explicit overflow veto. No member-history arrays. */
-export function advanceCoverage(db: Database.Database, id: unknown, _group: Row, row: Row, override?: LogicalCoverage): LogicalCoverage | undefined {
+export function advanceCoverage(db: Database.Database, id: unknown, group: Row, row: Row, override?: LogicalCoverage): LogicalCoverage | undefined {
   const prior = latestCoverage(db, id), coverage = override ? structuredClone(override) : prior.value;
   if (!coverage) return prior.present ? {...originalCoverage(db, row), start: 'unproven', losses: COVERAGE_LOSS.unknown} : undefined;
   const from = override && (!prior.value || prior.value.member !== override.member) ? 0n : prior.revision?.interval_through ?? 0n;
@@ -166,6 +203,8 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
       OR c.trip_ref IS NULL AND EXISTS(SELECT 1 FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE m.logical_ref=@logical AND t.plugin_session_ref=c.plugin_session_ref)))
     ORDER BY c.id LIMIT 129`).all({from,previous:prior.revision?.interval_through??0n,member:row.id,session:row.plugin_session_ref,logical:id}) as Row[];
   if (intervals.length > 128) coverage.losses |= COVERAGE_LOSS.unknown;
+  let reconnect: ReturnType<typeof pausedReconnect> | undefined;
+  const reconnected = () => reconnect === undefined ? reconnect = pausedReconnect(db, row, false) : reconnect;
   for (const interval of intervals) {
     const detail = interval.detail_json === null ? {} : JSON.parse(interval.detail_json as string) as Row;
     if(beforeJobWindow(db,id,row,interval))continue;
@@ -197,6 +236,12 @@ export function advanceCoverage(db: Database.Database, id: unknown, _group: Row,
     if (interval.kind === 'discontinuity' && detail.cause === 'opened-at-load' && coverage.phase === 'pending' && cleanLoadWindow(db,row,false)) continue;
     if (interval.kind === 'discontinuity' && detail.cause === 'restart' && coverage.phase === 'pending' && cleanLoadWindow(db, row, false)
       && typeof detail.continuationOf === 'string' && get(db, `SELECT t.id FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE t.trip_uuid=? AND m.logical_ref=? AND t.closed_by_session_ref=? AND t.close_reason='restart'`, detail.continuationOf, id, row.plugin_session_ref)) continue;
+    // Engine 1: the causes of a paused reconnect within the session wait for the junction, which decides the coverage.
+    if (group.accounting_engine === 1n && interval.trip_ref === row.id && coverage.member === String(row.id) && coverage.phase !== 'active' && detail.source === 'checkpoint'
+      && (interval.kind === 'not-connected' && detail.cause === 'late-attach' || interval.kind === 'discontinuity' && detail.cause === 'discontinuity' && detail.decision === 'not-merged')) {
+      const found = reconnected();
+      if (found && detail.nextEventSeq === found.nextEventSeq && (interval.kind === 'not-connected' || detail.continuationOf === found.continuationOf)) continue;
+    }
     if (interval.kind === 'discontinuity' && detail.annotation === true && (detail.label === 'crossing'
       || detail.cause === 'game-time-jump' && detail.label === 'possible-sleep' && detail.stationary === true)) continue;
     if (interval.kind === 'event-loss') coverage.losses |= COVERAGE_LOSS.event;
