@@ -209,6 +209,18 @@ describe('ET-112g history repair of the legacy incident', () => {
     expect(membership(copy, S)).toEqual({id: 3, logical_ref: 1, previous_logical_ref: 3, proof_json: null});
     await expectRepaired(copy);
   });
+  it('plans no join into a target whose fingerprint was written before ET-112i, and still recalculates it', async () => {
+    await legacy();
+    // The incident job's job-v1 fingerprint as schema-v9-representative.sql stores it, with its deadline.
+    const v1 = 'job-v1:["synthetic_incident_cargo","synthetic_berlin","synthetic_origin_company","synthetic_dresden","synthetic_destination_company",21000,'
+      + '"external_contracts","20895",{"raw":"10250","sdkType":"u64"}]';
+    const db = new Database(ws.database);
+    try { expect(db.prepare('UPDATE logical_trips SET fingerprint = ? WHERE id = 1').run(v1).changes).toBe(1); } finally { db.close(); }
+    const {plan} = await dryRun(ws.database, [S]);
+    expect(joins(plan)).toEqual([]);
+    expect(plan.listings).toEqual([{segmentTripUuid: S, targetTripUuid: null, state: 'not-eligible', reason: 'no-candidate'}]);
+    expect(recalculations(plan).map(action => action.logicalTripUuid)).toEqual([T]);
+  });
   it('is idempotent: a second dry run plans nothing and reports the segment joined, and the old plan applies as already-applied', async () => {
     await legacy();
     const {plan, out} = await dryRun(ws.database, [S]), copy = copyOf(ws.database, 'copy.sqlite');
