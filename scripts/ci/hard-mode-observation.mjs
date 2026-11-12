@@ -334,7 +334,7 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   await dashboard.getByTestId('journal-export-result').filter({hasText: 'Saved the trip as JSON'}).waitFor({state: 'visible', timeout: 10000});
   const exported = JSON.parse(await readFile(file, 'utf8'));
   const validate = await exportValidator(config); assert.deepEqual(validate(exported), []);
-  assert.equal(exported.formatVersion, 5); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, null);
+  assert.equal(exported.formatVersion, 6); assert.equal(exported.trip.is_hard_mode, true); assert.equal(exported.trip.hard_mode_details.manualDelivery, null);
   assert.deepEqual(exported.outcomeDetails.record.autoParkUsed, {available: true, value: true});
   // Receipt flags retain their semantic order [ratio, qualifying], independently of newest-first Journal rows.
   record.export = true; record.flags = [rows[1].isHardMode, rows[0].isHardMode]; healthy();

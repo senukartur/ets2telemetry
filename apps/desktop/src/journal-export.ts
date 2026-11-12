@@ -1,5 +1,5 @@
-import type {JournalRecordingSource} from '../../../packages/contracts/src/journal';
-// The trip export document: pure serialization of `ets2telemetry.trip-export` format version 5.
+import type {JournalQuantityProvenance, JournalRecordingSource} from '../../../packages/contracts/src/journal';
+// The trip export document: pure serialization of `ets2telemetry.trip-export` format version 6.
 // The writer (journal-export-writer.ts) reads the trip detail once, then its completeness intervals, timeline events and
 // samples page by page, and appends this module's text for each page, so the whole document is never held in memory.
 // Every row is copied field by field in a fixed key order; values keep the protocol v1 availability and money shapes and
@@ -42,11 +42,17 @@ export function withinTripExportBounds<S extends TripExportSection>(section: S, 
   return last !== null && BigInt((row as JournalInterval | JournalSample).id) <= BigInt(last);
 }
 
-/** The trip row without the list's job summary; the job section holds the full job values. */
+/** A quantity's provenance, copied field by field. */
+const provenance = <B extends string, Q extends string>(p: JournalQuantityProvenance<B, Q>): JournalQuantityProvenance<B, Q> => ({status: p.status, breaks: [...p.breaks], quality: [...p.quality]});
+/**
+ * The trip row without the list's job summary; the job section holds the full job values. The provenance of distance and
+ * fuel follows them (null for engine 0); the Journal's page-time membership hint is never written.
+ */
 function trip(t: JournalTripDetail['trip']): TripExportTrip {
   return {is_hard_mode: t.isHardMode, hard_mode_details: t.hardModeDetails, tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, gameMode: {mode: t.gameMode.mode, method: t.gameMode.method, confidence: t.gameMode.confidence},
     gameModeAmbiguous: t.gameModeAmbiguous, outcome: t.outcome, closeReason: t.closeReason, recordingCompleteness: t.recordingCompleteness,
     startedUtcMs: t.startedUtcMs, endedUtcMs: t.endedUtcMs, observedDistanceM: t.observedDistanceM, fuelUsedL: t.fuelUsedL,
+    accounting: t.accounting ? {engine: t.accounting.engine, distance: provenance(t.accounting.distance), fuel: provenance(t.accounting.fuel)} : null,
     openedBy: t.openedBy, openedEventSeq: t.openedEventSeq, outcomeEventSeq: t.outcomeEventSeq, closedBy: t.closedBy};
 }
 const interval = (i: JournalInterval): JournalInterval => ({...(i.pluginSessionId ? {pluginSessionId:i.pluginSessionId,rawTripUuid:i.rawTripUuid}:{}),id: i.id, kind: i.kind, annotation: i.annotation, cause: i.cause, startUtcMs: i.startUtcMs, endUtcMs: i.endUtcMs,

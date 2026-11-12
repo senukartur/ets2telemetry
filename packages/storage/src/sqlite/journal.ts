@@ -1,5 +1,6 @@
 import {snapshot, readSnapshotToken, snapshotToken, needsSnapshot, type LogicalSnapshot} from './logical-snapshot';
-import {ACCOUNTING_PATH, applyProgress, logicalEnabled, decodeRow} from './logical-trips';
+import {ACCOUNTING_PATH, applyProgress, decisionsEnabled, logicalEnabled, decodeRow} from './logical-trips';
+import {journalAccounting} from './quantities';
 // Journal reads (ET-016 PR-2, J5, J7): a newest-first page of trips, one trip's detail, its timeline and its
 // completeness intervals, read on the writer connection like every other read. Every page is bounded, filters run in
 // SQL before the limit, and each statement is a constant of JOURNAL_QUERIES, so tests prove its query plan with
@@ -133,10 +134,18 @@ export function jobValues(job: Row): JobConfiguration {
   return {...v, cargoMass: unit('cargoMass', 'kg'), cargoUnitMass: unit('cargoUnitMass', 'kg'), plannedDistance: unit('plannedDistance', 'm'),
     deliveryDeadline: unit('deliveryDeadline', 'min')} as unknown as JobConfiguration;
 }
-export function listItem(db: Database.Database, r: Row): JournalTripListItem {
+/**
+ * One list row. `progress` is the logical trip and the ledger head its values were read at, for the engine-1 provenance
+ * of distance and fuel (ET-112e); a legacy raw row has none. A closed self-root whose schema-9 decision is still pending
+ * is marked `membership: 'pending'` at this read; its logical id is its own raw trip id.
+ */
+export function listItem(db: Database.Database, r: Row, progress?: {logical: unknown; head: unknown}): JournalTripListItem {
   const job = get(db, JOURNAL_QUERIES.job, r.job_configuration_ref);
   if (!job) fail('DATABASE_CORRUPT');
   const values = jobValues(job);
+  const observedDistanceM = fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal), fuelUsedL = fromAvailability(r.fuel_used_l, r.fuel_used_l_state, toReal);
+  const accounting = progress && journalAccounting(db, progress.logical, progress.head, observedDistanceM.available, fuelUsedL.available);
+  const pending = decisionsEnabled(db) && get(db, `SELECT 1 AS pending FROM logical_membership_decisions WHERE trip_ref=? AND state='pending' AND raw_closed_event_seq IS NOT NULL`, r.id) !== undefined;
   return {
     isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
     tripUuid: String(r.trip_uuid), game: r.game as JournalTripListItem['game'],
@@ -144,8 +153,7 @@ export function listItem(db: Database.Database, r: Row): JournalTripListItem {
     gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, outcome: r.outcome as JournalTripListItem['outcome'],
     closeReason: r.close_reason as JournalTripListItem['closeReason'], recordingCompleteness: r.recording_completeness as JournalTripListItem['recordingCompleteness'],
     startedUtcMs: toSafeNumber(r.started_utc_ms, Number.MAX_SAFE_INTEGER, 0), endedUtcMs: r.ended_utc_ms === null ? null : toSafeNumber(r.ended_utc_ms, Number.MAX_SAFE_INTEGER, 0),
-    observedDistanceM: fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal),
-    fuelUsedL: fromAvailability(r.fuel_used_l, r.fuel_used_l_state, toReal),
+    observedDistanceM, fuelUsedL, ...(accounting ? {accounting} : {}), ...(pending ? {membership: 'pending' as const} : {}),
     job: {source: job.source as 'event' | 'checkpoint', sourceCity: values.sourceCity, sourceCompany: values.sourceCompany, destinationCity: values.destinationCity,
       destinationCompany: values.destinationCompany, cargo: values.cargo, market: values.market, isSpecialJob: values.isSpecialJob,
       plannedDistance: values.plannedDistance, expectedIncome: values.expectedIncome}
@@ -180,7 +188,7 @@ function tripPage(conn: StorageConnection, query: JournalTripsQuery): JournalTri
       AND r.logical_ref < ? AND r.member_through > 0
       AND ${LOGICAL_FILTERS} ORDER BY r.logical_ref DESC LIMIT ?`,
       watermark, before, ...FILTER_ARGS(q), JOURNAL_TRIP_PAGE);
-    return {database: database(db), trips: rows.map(r => listItem(db, applyProgress(db,decodeRow(r.row_json),r.progress_head))), nextCursor: rows.length === JOURNAL_TRIP_PAGE ? `l5:${dbUuid}:${String(watermark)}:${String(rows.at(-1)!.logical_ref)}:${filter}` : null,
+    return {database: database(db), trips: rows.map(r => listItem(db, applyProgress(db,decodeRow(r.row_json),r.progress_head), {logical: r.logical_ref, head: r.progress_head})), nextCursor: rows.length === JOURNAL_TRIP_PAGE ? `l5:${dbUuid}:${String(watermark)}:${String(rows.at(-1)!.logical_ref)}:${filter}` : null,
       ...(q.cursor === undefined ? {totals: totalsOf(get(db, JOURNAL_QUERIES.logicalTotals, watermark, ...FILTER_ARGS(q))!)} : {})};
   }
   const before = q.cursor === undefined ? MAX_ROW_ID : BigInt(q.cursor);
@@ -359,7 +367,7 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
   const qualifiedTrailers=snap && Number(get(db,`SELECT count(*) AS total FROM logical_snapshot_memberships WHERE logical_ref=? AND trip_ref<=? AND from_revision<? AND (through_revision IS NULL OR through_revision>=?)`,...trailerArgs.slice(0,4))!.total)>1;
   return {
     database: database(db),
-    trip: {...listItem(db, trip), pluginSessionId: String(session.plugin_session_uuid), openedBy: trip.opened_by as 'event' | 'checkpoint',
+    trip: {...listItem(db, trip, snap ? {logical: snap.logical, head: snap.head} : undefined), pluginSessionId: String(session.plugin_session_uuid), openedBy: trip.opened_by as 'event' | 'checkpoint',
       openedEventSeq: trip.opened_event_ref === null ? null : fromU64Key(event(trip.opened_event_ref).event_seq),
       outcomeEventSeq: outcome === null ? null : fromU64Key(outcome.event_seq), closedBy},
     job: {source: job.source as 'event' | 'checkpoint', eventSeq: job.source === 'event' ? fromU64Key(event(job.event_ref).event_seq) : null,

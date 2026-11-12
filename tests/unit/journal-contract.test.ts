@@ -286,3 +286,42 @@ it('REG-010/014 accepts exactly ordered bounded sync rows and rejects malformed 
   ]) expect(parseJournalReply(query, {ok: true, value: {...value, ...change}}), JSON.stringify(change)).toBeUndefined();
   expect(journalRequest('trips', [{owner}])).toBeUndefined(); expect(journalRequest('trips', [{}, owner])).toBeUndefined();
 });
+
+describe('ET-112e quantity provenance and the pending profile check on list rows and the detail (REG-010, REG-014)', () => {
+  // LIST_ITEM's distance is 0 m, a value, and its fuel used is unavailable; the closed variant has no outcome.
+  const CLOSED = {outcome: 'none', closeReason: 'restart', endedUtcMs: LIST_ITEM.startedUtcMs + 1000};
+  const ACCOUNTING = {engine: 1, distance: {status: 'partial', breaks: ['position-jump', 'recording-gap'], quality: ['bridged', 'restored']},
+    fuel: {status: 'unavailable', breaks: ['unsupported'], quality: ['refuel-excluded']}};
+  const replies = (item: Record<string, unknown>): [JournalQuery, unknown][] => [[TRIPS, {ok: true, value: {...TRIP_PAGE, trips: [{...LIST_ITEM, ...CLOSED, ...item}]}}],
+    [DETAIL_QUERY, {ok: true, value: {...DETAIL, trip: {...DETAIL.trip, ...CLOSED, ...item}}}]];
+  it.each<[string, Record<string, unknown>]>([
+    ['a partial distance and unavailable fuel with their reasons', {accounting: ACCOUNTING}],
+    ['complete distance and unavailable fuel without a reason', {accounting: {engine: 1, distance: {status: 'complete', breaks: [], quality: []}, fuel: {status: 'unavailable', breaks: [], quality: []}}}],
+    ['the pending profile check', {membership: 'pending'}],
+    ['both', {accounting: ACCOUNTING, membership: 'pending'}]
+  ])('forwards %s unchanged', (_name, item) => {
+    for (const [query, reply] of replies(item)) expect(parseJournalReply(query, reply), query.kind).toEqual(reply);
+  });
+  const distance = (status: string, breaks: string[], quality: string[] = []) => ({accounting: {...ACCOUNTING, distance: {status, breaks, quality}}});
+  it.each<[string, Record<string, unknown>]>([
+    ['an unknown accounting key', {accounting: {...ACCOUNTING, flags: 8}}],
+    ['an unknown provenance key', {accounting: {...ACCOUNTING, distance: {...ACCOUNTING.distance, flags: 8}}}],
+    ['an unknown break', distance('partial', ['teleport'])],
+    ['a fuel break for distance', distance('partial', ['recording-boundary'])],
+    ['a quality note as a break', distance('partial', ['bridged'])],
+    ['a duplicate break', distance('partial', ['reading-hole', 'reading-hole'])],
+    ['breaks out of order', distance('partial', ['reading-hole', 'truck-change'])],
+    ['quality out of order', distance('partial', ['reading-hole'], ['restored', 'bridged'])],
+    ['engine 0', {accounting: {...ACCOUNTING, engine: 0}}],
+    ['complete with a break', distance('complete', ['transfer'])],
+    ['partial without a break', distance('partial', [])],
+    ['unavailable for an available distance', distance('unavailable', ['unsupported'])],
+    ['complete for an unavailable fuel used', {accounting: {...ACCOUNTING, fuel: {status: 'complete', breaks: [], quality: []}}}],
+    ['a raw flag integer', {accounting: 8}],
+    ['a null accounting', {accounting: null}],
+    ['a decided membership', {membership: 'joined'}],
+    ['a null membership', {membership: null}]
+  ])('refuses %s', (_name, item) => {
+    for (const [query, reply] of replies(item)) expect(parseJournalReply(query, reply), query.kind).toBeUndefined();
+  });
+});

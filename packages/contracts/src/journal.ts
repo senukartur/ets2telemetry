@@ -74,6 +74,30 @@ export interface JournalJobSummary {
   /** Expected income of the job offer, never the revenue. */
   expectedIncome: Available<Money>;
 }
+/**
+ * How complete one engine-1 quantity is (docs/journal.md): `unavailable` exactly when its value is unavailable, otherwise
+ * `partial` exactly when it has a break, otherwise `complete`.
+ */
+export type JournalQuantityStatus = 'complete' | 'partial' | 'unavailable';
+/** Why distance is partial or unavailable, in the bit order of the engine-1 ledger. */
+export type JournalDistanceBreak = 'truck-change' | 'position-jump' | 'transfer' | 'reading-hole' | 'recording-gap' | 'unsupported';
+/** Why fuel used is partial or unavailable, in the bit order of the engine-1 ledger. */
+export type JournalFuelBreak = 'truck-change' | 'reading-hole' | 'transfer' | 'recording-boundary' | 'unsupported';
+export type JournalDistanceQuality = 'bridged' | 'restored';
+export type JournalFuelQuality = 'refuel-excluded';
+/** Each list holds known names once, in this order. */
+export const JOURNAL_DISTANCE_BREAKS: readonly JournalDistanceBreak[] = Object.freeze(['truck-change', 'position-jump', 'transfer', 'reading-hole', 'recording-gap', 'unsupported']);
+export const JOURNAL_FUEL_BREAKS: readonly JournalFuelBreak[] = Object.freeze(['truck-change', 'reading-hole', 'transfer', 'recording-boundary', 'unsupported']);
+export const JOURNAL_DISTANCE_QUALITY: readonly JournalDistanceQuality[] = Object.freeze(['bridged', 'restored']);
+export const JOURNAL_FUEL_QUALITY: readonly JournalFuelQuality[] = Object.freeze(['refuel-excluded']);
+/** One quantity's status, the breaks behind a partial or unavailable value, and quality notes that are not breaks. */
+export interface JournalQuantityProvenance<B extends string, Q extends string> {status: JournalQuantityStatus; breaks: B[]; quality: Q[]}
+/** The provenance of a trip's distance and fuel used, read from the engine-1 ledger head of the same snapshot. */
+export interface JournalAccounting {
+  engine: 1;
+  distance: JournalQuantityProvenance<JournalDistanceBreak, JournalDistanceQuality>;
+  fuel: JournalQuantityProvenance<JournalFuelBreak, JournalFuelQuality>;
+}
 /** One journal list row. Outcome and recording completeness are separate; neither is inferred from the other. */
 export interface JournalTripListItem {
   isHardMode: boolean; hardModeDetails: HardModeDetails | null;
@@ -85,6 +109,13 @@ export interface JournalTripListItem {
   observedDistanceM: Available<number>;
   /** Fuel used while recording, in litres (schema version 2, S-1). */
   fuelUsedL: Available<number>;
+  /** Absent for a trip of the legacy engine 0 and below schema version 10. */
+  accounting?: JournalAccounting;
+  /**
+   * `pending`: a closed recording whose profile check is still pending, so it can still join an earlier trip of the same
+   * job. Read when the page is read, like the sync badges; never exported.
+   */
+  membership?: 'pending';
   job: JournalJobSummary;
 }
 export interface JournalSyncRow {
@@ -300,7 +331,28 @@ function gameMode(value: unknown): void {
   oneOf(o.mode, ['single-player', 'truckersmp', 'haulmp', 'unknown', 'convoy']); oneOf(o.method, ['module-scan', 'process-scan', 'none']); oneOf(o.confidence, ['strong', 'weak', 'none']);
 }
 const LIST_KEYS = ['isHardMode', 'hardModeDetails', 'tripUuid', 'game', 'gameMode', 'gameModeAmbiguous', 'outcome', 'closeReason', 'recordingCompleteness', 'startedUtcMs', 'endedUtcMs', 'observedDistanceM', 'fuelUsedL', 'job'];
+/** The list row keys of `value`: the optional accounting and membership only when present. */
+const listKeys = (value: unknown) => [...LIST_KEYS, ...(['accounting', 'membership'] as const).filter(key => isRecord(value) && Object.hasOwn(value, key))];
 const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];
+/** Known names, each once and in the order of `names`. */
+function ordered(value: unknown, names: readonly string[]): void {
+  if (!Array.isArray(value)) bad();
+  let last = -1;
+  for (const item of value as unknown[]) { const index = names.indexOf(item as string); if (index <= last) bad(); last = index; }
+}
+/** A quantity's provenance; its status agrees with the value's availability and with its breaks. */
+function provenance(value: unknown, available: boolean, breaks: readonly string[], quality: readonly string[]): void {
+  const o = exact(value, ['status', 'breaks', 'quality']);
+  oneOf(o.status, ['complete', 'partial', 'unavailable']); ordered(o.breaks, breaks); ordered(o.quality, quality);
+  const count = (o.breaks as unknown[]).length;
+  if ((o.status === 'unavailable') === available || (o.status === 'complete' && count > 0) || (o.status === 'partial' && count === 0)) bad();
+}
+function accounting(value: unknown, distance: unknown, fuel: unknown): void {
+  const o = exact(value, ['engine', 'distance', 'fuel']);
+  if (o.engine !== 1) bad();
+  provenance(o.distance, isRecord(distance) && distance.available === true, JOURNAL_DISTANCE_BREAKS, JOURNAL_DISTANCE_QUALITY);
+  provenance(o.fuel, isRecord(fuel) && fuel.available === true, JOURNAL_FUEL_BREAKS, JOURNAL_FUEL_QUALITY);
+}
 function listItem(o: Record<string, unknown>): void {
   boolean(o.isHardMode); if (o.hardModeDetails !== null && !isHardModeDetails(o.hardModeDetails)) bad();
   // Qualified audits retain legacy true or the current null compatibility value.
@@ -314,6 +366,8 @@ function listItem(o: Record<string, unknown>): void {
   if ((o.outcome === 'open') !== (o.closeReason === null) || (o.outcome === 'open') !== (o.endedUtcMs === null)) bad();
   utcMs(o.startedUtcMs); nullable(o.endedUtcMs, utcMs);
   available(o.observedDistanceM, nonNegative); available(o.fuelUsedL, nonNegative);
+  if (Object.hasOwn(o, 'accounting')) accounting(o.accounting, o.observedDistanceM, o.fuelUsedL);
+  if (Object.hasOwn(o, 'membership') && o.membership !== 'pending') bad();
   const job = exact(o.job, ['source', 'sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo', 'market', 'isSpecialJob', 'plannedDistance', 'expectedIncome']);
   oneOf(job.source, ['event', 'checkpoint']);
   for (const key of ['sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo', 'market']) available(job[key], text);
@@ -393,7 +447,7 @@ function page(rows: unknown, limit: number, cursor: unknown, check: (value: unkn
 export function validateJournalTripPage(value: unknown): JournalTripPage {
   const o = exact(value, ['database', 'trips', 'nextCursor', ...(isRecord(value) && Object.hasOwn(value, 'sync') ? ['sync'] : []), ...(isRecord(value) && Object.hasOwn(value, 'totals') ? ['totals'] : [])]);
   database(o.database);
-  for (const trip of page(o.trips, JOURNAL_TRIP_PAGE, o.nextCursor, value => {if (!isJournalListCursor(value)) rowId(value);})) listItem(exact(trip, LIST_KEYS));
+  for (const trip of page(o.trips, JOURNAL_TRIP_PAGE, o.nextCursor, value => {if (!isJournalListCursor(value)) rowId(value);})) listItem(exact(trip, listKeys(trip)));
   if (Object.hasOwn(o, 'totals')) { const totals = exact(o.totals, ['trips', 'recordedSeconds']); count(totals.trips); count(totals.recordedSeconds); }
   if (Object.hasOwn(o, 'sync')) {
     const sync = exact(o.sync, ['owner', 'connectionVersion', 'rows']);
@@ -452,7 +506,7 @@ export function validateJournalIntervalPage(value: unknown, limit = Math.max(...
 export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   const o = exact(value, ['database', 'trip', 'job', 'truck', 'trailers', 'outcomeDetails', 'money', 'window', 'intervals', 'samples', 'exportBounds']);
   database(o.database);
-  const trip = exact(o.trip, [...LIST_KEYS, 'pluginSessionId', 'openedBy', 'openedEventSeq', 'outcomeEventSeq', 'closedBy']);
+  const trip = exact(o.trip, [...listKeys(o.trip), 'pluginSessionId', 'openedBy', 'openedEventSeq', 'outcomeEventSeq', 'closedBy']);
   listItem(trip); uuid(trip.pluginSessionId); oneOf(trip.openedBy, ['event', 'checkpoint']); nullable(trip.openedEventSeq, eventSeq); nullable(trip.outcomeEventSeq, eventSeq);
   if ((trip.openedBy === 'event') !== (trip.openedEventSeq !== null)) bad();
   if ((trip.outcomeEventSeq === null) !== (trip.outcome !== 'delivered' && trip.outcome !== 'cancelled')) bad();
