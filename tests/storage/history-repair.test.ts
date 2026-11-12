@@ -6,7 +6,7 @@
 import {spawn} from 'node:child_process';
 import {createHash, randomUUID} from 'node:crypto';
 import {once} from 'node:events';
-import {copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
+import {copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import type Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -17,7 +17,7 @@ import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import {tripUuidFor} from '../../packages/telemetry-core/src';
 import {INCIDENT_OTHER_JOB, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentTripUuid} from '../shared/trip-continuation-incident';
 import {r, Script} from '../shared/trip-messages';
-import {digestOf, ok, readOnly, sha256, uploadReceipt, uploadTestOwner, uploadTestWork, workspace} from './helpers';
+import {digestOf, ok, readOnly, sha256, uploadGame, uploadReceipt, uploadTestOwner, uploadTestWork, workspace} from './helpers';
 import {drive, EXTRA_SESSIONS, OTHER_SCOPE} from './incident-driver';
 
 const CHILD = path.resolve('tests/storage/fixtures/history-repair-child.cjs');
@@ -205,10 +205,28 @@ describe('ET-112g interrupted repair (REG-006)', () => {
     const copy = copyOf(ws.database, 'copy.sqlite');
     const interrupted = await apply(copy, out, plan.confirmation, {testHooks: {beforeCommit: index => { if (index === 1) throw new Error('injected'); }}});
     expect(interrupted.ok).toBe(false);
+    // The failure after the pre-repair backup names it, for the recovery guidance.
+    const backupFileName = interrupted.ok ? undefined : interrupted.error.backupFileName;
+    expect(backupFileName).toMatch(/^repair-[0-9a-f]{8}-v10-[0-9]{8}T[0-9]{9}Z\.sqlite$/);
+    expect(existsSync(path.join(backups(), backupFileName!))).toBe(true);
     expect(membership(copy, S)).toMatchObject({logical_ref: 1});
     expect(membership(copy, S2nd)).toMatchObject({id: 6, logical_ref: 6, previous_logical_ref: null});
     expect((await applied(copy, out, plan.confirmation)).actions.map(action => action.status)).toEqual(['already-applied', 'applied']);
     expect(membership(copy, S2nd)).toMatchObject({logical_ref: 4, previous_logical_ref: 6});
+  });
+  it('rolls back an action whose after-values differ from the plan and stops there', async () => {
+    await twoIncidents();
+    const {plan} = await dryRun(ws.database, [S, S2nd]);
+    // The plan's first after-value no longer matches what the join produces; the code is recomputed, as an edit would do.
+    const actions = [{...plan.actions[0], after: {...plan.actions[0].after, sources: 4}}, plan.actions[1]], edited = fresh('edited.json');
+    writeFileSync(edited, JSON.stringify({...plan, actions, confirmation: repairConfirmationCode(actions)}));
+    const memberCount = () => safe(ws.database, db => db.prepare('SELECT member_count FROM logical_trips WHERE id = 1').pluck().get());
+    const digest = digestOf(ws.database), count = memberCount();
+    expect((await applied(ws.database, edited, repairConfirmationCode(actions))).actions).toEqual([{segmentTripUuid: S, targetTripUuid: T, status: 'differs'}]);
+    expect(digestOf(ws.database)).toEqual(digest);
+    expect(memberCount()).toBe(count);
+    expect(membership(ws.database, S)).toMatchObject({logical_ref: 3});
+    expect(membership(ws.database, S2nd)).toMatchObject({logical_ref: 6});
   });
   it('recovers a child process terminated inside the second join and resumes', async () => {
     await twoIncidents();
@@ -333,6 +351,23 @@ describe('ET-112g publication', () => {
     expect(membership(ws.database, S)).toMatchObject({logical_ref: 3});
     expect(digestOf(ws.database)).toEqual(digest);
   });
+  it('lists a published schema-9 segment with a separate/published decision as reconciliation-required, attested or not', async () => {
+    const storage = await storageOf(ws.database, 'history');
+    drive(storage, S1, {game: true}); drive(storage, S2, {game: true}); drive(storage, UNPROVEN, {game: true});
+    ok(storage.upsertSession({message: uploadGame(new Script(EXTRA_SESSIONS[0]).welcome())}));
+    ok(storage.close());
+    await published(ws.database, S);
+    // The retroactive gate records separate/published for a root that was bound before its proof arrived, which only a binding
+    // from before schema 9 allows; live recording never binds a pending root, so the decision row is written here.
+    const conn = await openConnection(ws.options({path: ws.database, purpose: 'history'}));
+    expect(conn.writer().prepare("UPDATE logical_membership_decisions SET reason = 'published' WHERE trip_ref = 3 AND state = 'separate' AND reason = 'process-ended'").run().changes).toBe(1);
+    conn.close();
+    for (const attest of [[], [S]]) {
+      const {plan} = await dryRun(ws.database, attest);
+      expect(plan.actions).toEqual([]);
+      expect(plan.listings).toEqual([{segmentTripUuid: S, targetTripUuid: T, state: 'reconciliation-required', reason: null}]);
+    }
+  });
   it('publishes the join as the next revision of a bound target under its own binding and keeps its receipts', async () => {
     await legacy(ws.database, undefined, 'history');
     await published(ws.database, T);
@@ -403,6 +438,11 @@ describe('ET-112g backups and refusals', () => {
       .toMatchObject({ok: false, error: {code: 'REPAIR_REFUSED', reason: 'working-history-schema'}});
     expect(sha256(older)).toBe(olderSha);
     expect(existsSync(path.join(path.dirname(older), 'repair-backups'))).toBe(false);
+    // A directory junction (no administrator rights needed) reaches the same file under a name that is not a history path.
+    const alias = path.join(ws.directory, 'alias');
+    symlinkSync(path.dirname(history), alias, 'junction');
+    expect(await apply(path.join(alias, 'telemetry.sqlite'), out, plan.confirmation)).toMatchObject({ok: false, error: {code: 'REPAIR_REFUSED', reason: 'working-history-flag'}});
+    expect(sha256(history)).toBe(sha);
     expect((await applied(history, out, plan.confirmation, {workingHistory: true, backupsDirectory: undefined})).actions.map(action => action.status)).toEqual(['applied']);
     expect(readdirSync(path.join(path.dirname(history), 'repair-backups')).filter(name => name.endsWith('.sqlite'))).toHaveLength(1);
   });

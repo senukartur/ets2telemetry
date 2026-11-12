@@ -75,8 +75,9 @@ export function repairSummary(conn: StorageConnection, tripUuid: string): Repair
 const ROLLBACK = new Error('History repair action rolled back');
 /**
  * One join in one BEGIN IMMEDIATE transaction, which first starts the replay budget. In order: an existing membership of
- * the segment in the target is `already-applied`; a fingerprint other than the planned one is `stale`; the rules must
- * still decide this attested join (`refused` otherwise, including a bound segment, F-D7); the join; the after-summary on the
+ * the segment in the target is `already-applied`; a fingerprint other than the planned one is `stale`; the segment must
+ * still be a closed singleton and the rules must still decide this attested join (`refused` otherwise, including a
+ * published segment, F-D7); the join; the after-summary on the
  * same connection must equal the planned one (`differs`, rolled back). Without `planned` (the dry run) the current
  * fingerprint is used and the after-summary is recorded.
  */
@@ -93,7 +94,7 @@ function joinTransaction(conn: StorageConnection, segmentUuid: string, targetUui
       if (membership && membership.logical_ref === target.id && membership.previous_logical_ref === segment.id) { result = {status: 'already-applied', after: null}; return; }
       const fingerprint = repairFingerprint(db, segment.id as bigint, target.id as bigint);
       if (planned && fingerprint !== planned.fingerprint) return;
-      if (!closedSingleton(db, segment)) return;
+      if (!closedSingleton(db, segment)) { result = {status: 'refused', after: null}; return; }
       const decision = decide(db, segment, true);
       if (decision.state !== 'joined' || decision.target.id !== target.id) { result = {status: 'refused', after: null}; return; }
       const before = {segment: repairSummary(conn, segmentUuid), target: repairSummary(conn, targetUuid)};

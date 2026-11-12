@@ -135,12 +135,14 @@ export type RepairJoinDecision<T> =
  * with `separate/process-ended` is eligible; a pending S waits. The live rules decide with the recorded job as the current
  * reading and the attestation in place of the profile proof, over the live candidates of any profile scope. The one
  * compatible target must precede S (`latest(target) < segment`), have its latest member closed and have no other raw trip
- * of the game between its latest member and S. A bound S is reconciliation-required and never joined.
+ * of the game between its latest member and S. A published S (its root is bound, or its decision is `separate/published`)
+ * passes the decision veto so that such a join is listed: it is reconciliation-required, attested or not, and never joined.
  */
 export function decideRepairJoin<T>(facts: RepairJoinFacts, evidence: {recordedJob: JobConfiguration; consistent: boolean; candidates: readonly MembershipCandidate<T>[]},
   target: (target: T) => RepairTargetFacts, segment: bigint): RepairJoinDecision<T> {
   if (facts.decision?.state === 'pending') return {state: 'wait', reason: 'pending'};
-  if (facts.decision && !(facts.decision.state === 'separate' && facts.decision.reason === 'process-ended')) return {state: 'not-eligible', reason: 'decided'};
+  const published = facts.ownRootBound || (facts.decision?.state === 'separate' && facts.decision.reason === 'published');
+  if (facts.decision && !published && !(facts.decision.state === 'separate' && facts.decision.reason === 'process-ended')) return {state: 'not-eligible', reason: 'decided'};
   const decision = decideMembership({profileVerified: true, recordedJob: evidence.recordedJob, currentJob: evidence.recordedJob, consistent: evidence.consistent, candidates: evidence.candidates});
   if (decision.state !== 'joined') return {state: 'not-eligible', reason: decision.reason};
   const t = target(decision.target);
@@ -148,6 +150,6 @@ export function decideRepairJoin<T>(facts: RepairJoinFacts, evidence: {recordedJ
   if (t.latestOpen) return {state: 'not-eligible', reason: 'target-open'};
   if (t.intervening) return {state: 'not-eligible', reason: 'intervening-trip'};
   const join = {target: decision.target, fingerprint: decision.fingerprint};
-  if (facts.ownRootBound) return {state: 'reconciliation-required', ...join};
+  if (published) return {state: 'reconciliation-required', ...join};
   return facts.attested ? {state: 'joined', ...join} : {state: 'needs-attestation', ...join};
 }

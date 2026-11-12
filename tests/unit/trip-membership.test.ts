@@ -112,12 +112,19 @@ describe('REG-005/REG-008 owner-attested repair join of a closed proof-less segm
     expect(decide({ownRootBound: true})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
     expect(decide({ownRootBound: true, attested: false})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
   });
+  it('lists a separate/published segment and a bound segment with another decision as reconciliation-required, attested or not', () => {
+    for (const attested of [true, false]) {
+      expect(decide({attested, decision: {state: 'separate', reason: 'published'}})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
+      expect(decide({attested, ownRootBound: true, decision: {state: 'root', reason: 'no-candidate'}})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
+    }
+  });
   it('lets a pending segment wait before any candidate is read', () => {
     expect(decideRepairJoin({...attested, decision: {state: 'pending', reason: 'profile-unverified'}}, {recordedJob: INCIDENT_JOB, consistent: true, candidates: [match('A')]},
       () => { throw new Error('not read'); }, 7n)).toEqual({state: 'wait', reason: 'pending'});
   });
   it.each([
-    ['another separate reason', {decision: {state: 'separate', reason: 'published'}}, {}, {}, notEligible('decided')],
+    ['another separate reason', {decision: {state: 'separate', reason: 'profile-boundary'}}, {}, {}, notEligible('decided')],
+    ['a separate/published segment without a candidate', {decision: {state: 'separate', reason: 'published'}}, {candidates: []}, {}, notEligible('no-candidate')],
     ['a root decision', {decision: {state: 'root', reason: 'no-candidate'}}, {}, {}, notEligible('decided')],
     ['two candidates', {}, {candidates: [match('A'), match('B')]}, {}, notEligible('ambiguous-candidates')],
     ['no candidate', {}, {candidates: []}, {}, notEligible('no-candidate')],

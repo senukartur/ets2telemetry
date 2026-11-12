@@ -239,6 +239,8 @@ export interface RepairResult {
 export interface RepairRefusal {
   code: 'REPAIR_REFUSED';
   reason: 'plan-invalid' | 'confirmation-mismatch' | 'database-mismatch' | 'working-history-flag' | 'working-history-schema' | 'path-invalid' | 'target-exists';
+  /** Set when the refusal came after the pre-repair backup was taken. */
+  backupFileName?: string;
   message: string;
 }
 

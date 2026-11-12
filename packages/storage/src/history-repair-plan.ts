@@ -16,7 +16,10 @@ export function canonicalJson(value: unknown): string {
 export function repairConfirmationCode(actions: RepairPlan['actions']): string {
   return createHash('sha256').update(canonicalJson(actions)).digest('hex').slice(0, 8);
 }
-/** Parses a plan file strictly enough to apply it; undefined for anything else. The after-values are compared, not interpreted. */
+/**
+ * Parses a plan file strictly enough to apply it; undefined for anything else, including an action whose segment is not
+ * among the plan's attested trips. The after-values are compared, not interpreted.
+ */
 export function parseRepairPlan(text: string): RepairPlan | undefined {
   let plan: unknown;
   try { plan = JSON.parse(text); } catch { return undefined; }
@@ -25,5 +28,7 @@ export function parseRepairPlan(text: string): RepairPlan | undefined {
   const valid = plan.actions.every(action => object(action) && action.kind === 'join' && typeof action.segmentTripUuid === 'string' && UUID.test(action.segmentTripUuid)
     && typeof action.targetTripUuid === 'string' && UUID.test(action.targetTripUuid) && typeof action.fingerprint === 'string' && /^[0-9a-f]{64}$/.test(action.fingerprint)
     && object(action.after) && object(action.before));
-  return valid ? plan as unknown as RepairPlan : undefined;
+  const attested = plan.attested.every(uuid => typeof uuid === 'string' && UUID.test(uuid))
+    && plan.actions.every(action => (plan.attested as unknown[]).includes((action as {segmentTripUuid: unknown}).segmentTripUuid));
+  return valid && attested ? plan as unknown as RepairPlan : undefined;
 }

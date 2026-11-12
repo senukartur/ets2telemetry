@@ -1,21 +1,29 @@
 // History repair tool (ET-112g): `npm run history:repair -- <copy|dry-run|apply> ...` under the checkout's Electron in
 // Node mode. See docs/storage.md, "History repair". It never resolves a data folder: every path is an argument.
 import {readFileSync} from 'node:fs';
+import path from 'node:path';
 import {applyHistoryRepair, copyHistory, dryRunHistoryRepair, type RepairOutcome} from '../../../packages/storage/src/index';
 import {checkConfirmation, parseArguments, UsageError} from './arguments';
 import {planLines, resultLines} from './summary';
 
 const APP_VERSION = `history-repair ${process.env.npm_package_version ?? 'unknown'}`.slice(0, 64);
+/** The checkout root, from this script's location (tools/history-repair/dist/cli.cjs); no path argument may lie inside it. */
+const CHECKOUT = path.resolve(__dirname, '..', '..', '..');
+/** The one recovery guidance of an apply that did not finish; docs/storage.md, "History repair", says the same. */
+const unfinished = (backup: string) => `The repair did not finish; the actions before this point are committed, each on its own. Rerun the same apply to
+finish an interrupted run (applied actions report already-applied); if an action was stale, differs or refused, make a new
+dry run instead. To undo, exit the app and restore the backup ${backup} (docs/storage.md, "History repair").`;
 
-function failure(result: Extract<RepairOutcome<unknown>, {ok: false}>): never {
+function failure(result: Extract<RepairOutcome<unknown>, {ok: false}>, backups?: string): never {
   const error = result.error;
   if (error.code === 'DATABASE_LOCKED') throw new UsageError('The database is in use. Exit Yukon Union Telemetry first (tray icon, Exit), then retry.');
   const cause = 'cause' in error && error.cause ? ` (${error.cause})` : '';
-  throw new UsageError(error.code === 'REPAIR_REFUSED' ? error.message : `${error.code}${cause}: ${error.message}`);
+  const message = error.code === 'REPAIR_REFUSED' ? error.message : `${error.code}${cause}: ${error.message}`;
+  throw new UsageError(backups && error.backupFileName ? `${message}\n${unfinished(path.join(backups, error.backupFileName))}` : message);
 }
 
 async function main(): Promise<void> {
-  const args = parseArguments(process.argv.slice(2));
+  const args = parseArguments(process.argv.slice(2), CHECKOUT);
   if (args.command === 'copy') {
     const result = await copyHistory({from: args.from, to: args.to});
     if (!result.ok) failure(result);
@@ -34,10 +42,11 @@ async function main(): Promise<void> {
   checkConfirmation(planText, args.confirm);
   const result = await applyHistoryRepair({database: args.database, plan: args.plan, confirm: args.confirm, workingHistory: args.workingHistory,
     ...(args.backups ? {backupsDirectory: args.backups} : {}), appVersion: APP_VERSION});
-  if (!result.ok) failure(result);
+  const backups = args.backups ?? path.join(path.dirname(args.database), 'repair-backups');
+  if (!result.ok) failure(result, backups);
   for (const line of resultLines(result.value)) console.log(line);
   if (result.value.actions.some(action => action.status !== 'applied' && action.status !== 'already-applied')) {
-    console.error('Some actions were not applied. Stop, and redo the repair from a new copy and dry run.');
+    console.error(unfinished(path.join(backups, result.value.backupFileName)));
     process.exitCode = 1;
   }
 }

@@ -1,7 +1,7 @@
 // History repair orchestration (ET-112g, docs/storage.md "History repair"): `copy`, `dry-run` and `apply` of
 // tools/history-repair. Every database path is an explicit absolute argument; nothing here knows a default data folder.
 // It loads native better-sqlite3 through the storage core, so only the Electron-runtime tool and storage suite import it.
-import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {REPAIR_PLAN_FORMAT, type Purpose, type RepairOptions, type RepairPlan, type RepairRefusal, type RepairResult, type StorageError} from './api';
@@ -25,9 +25,13 @@ const REFUSALS: Readonly<Record<RepairRefusal['reason'], string>> = {
 };
 class Refused extends Error { constructor(readonly reason: RepairRefusal['reason']) { super(REFUSALS[reason]); } }
 function refuse(reason: RepairRefusal['reason']): never { throw new Refused(reason); }
+/** A failure after the pre-repair backup was taken: its result carries the backup's file name. */
+class AfterBackup extends Error { constructor(readonly backupFileName: string, readonly failure: unknown) { super('History repair failed after its pre-repair backup'); } }
 async function outcome<T>(body: () => Promise<T>): Promise<RepairOutcome<T>> {
-  try { return {ok: true, value: await body()}; } catch (error) {
-    return {ok: false, error: error instanceof Refused ? {code: 'REPAIR_REFUSED', reason: error.reason, message: error.message} : classifyError(error)};
+  try { return {ok: true, value: await body()}; } catch (thrown) {
+    const after = thrown instanceof AfterBackup ? thrown : undefined, error = after ? after.failure : thrown;
+    const mapped = error instanceof Refused ? {code: 'REPAIR_REFUSED' as const, reason: error.reason, message: error.message} : classifyError(error);
+    return {ok: false, error: after ? {...mapped, backupFileName: after.backupFileName} : mapped};
   }
 }
 const absolute = (...files: string[]) => { if (files.some(file => typeof file !== 'string' || !path.isAbsolute(file) || file.includes('\0'))) refuse('path-invalid'); };
@@ -87,10 +91,11 @@ export interface ApplyOptions {
   testHooks?: {beforeCommit?: (index: number) => void};
 }
 /**
- * `apply`: checks the plan, the confirmation code and the database UUID; a working history file needs `workingHistory`
- * and the tool's own schema version, checked read-only before any writer opens, and is never migrated. The writer then
- * holds the exclusive lock, takes a verified pre-repair backup, applies each action in its own transaction and writes
- * `<backup>.result.json` beside the backup.
+ * `apply`: checks the plan, the confirmation code and the database UUID; a working history file (by the given path or
+ * the path it resolves to) needs `workingHistory` and the tool's own schema version, checked read-only before any writer
+ * opens, and is never migrated. The writer then holds the exclusive lock, takes a verified pre-repair backup, applies the
+ * actions in order, each in its own transaction, stops after the first one that is neither `applied` nor
+ * `already-applied`, and writes `<backup>.result.json` beside the backup. Any failure after the backup reports its name.
  */
 export function applyHistoryRepair(options: ApplyOptions): Promise<RepairOutcome<RepairResult>> {
   return outcome(async () => {
@@ -101,9 +106,10 @@ export function applyHistoryRepair(options: ApplyOptions): Promise<RepairOutcome
     const plan = parseRepairPlan(text);
     if (!plan) refuse('plan-invalid');
     if (options.confirm !== plan.confirmation || plan.confirmation !== repairConfirmationCode(plan.actions)) refuse('confirmation-mismatch');
-    const history = isHistoryFile(database);
-    if (history && options.workingHistory !== true) refuse('working-history-flag');
     if (!existsSync(database)) fail('DATA_PATH_INVALID');
+    // A junction, symbolic link, 8.3 name or substituted drive can reach a history file under another name.
+    const history = isHistoryFile(database) || isHistoryFile(realpathSync.native(database));
+    if (history && options.workingHistory !== true) refuse('working-history-flag');
     const peek = openReadOnly(database);
     let purpose: Purpose;
     try {
@@ -122,12 +128,19 @@ export function applyHistoryRepair(options: ApplyOptions): Promise<RepairOutcome
       if (history && conn.summary.migratedFrom !== undefined) refuse('working-history-schema');
       const backup = await verifiedBackup(conn.writer(), {file: database, backupsDirectory, databaseUuid: conn.summary.databaseUuid, fromVersion: conn.summary.schemaVersion, now,
         appVersion: options.appVersion}, 'pre-repair');
-      const actions = plan.actions.map((action, index) => ({segmentTripUuid: action.segmentTripUuid, targetTripUuid: action.targetTripUuid,
-        status: applyRepairAction(conn, action, {testHooks: {beforeCommit: () => options.testHooks?.beforeCommit?.(index)}}).status}));
-      const result: RepairResult = {format: 'ets2telemetry-history-repair-result-1', databaseUuid: conn.summary.databaseUuid, backupFileName: backup.fileName,
-        confirmation: plan.confirmation, completedUtcMs: now(), actions};
-      writeFileSync(path.join(backupsDirectory, backup.fileName.replace(/\.sqlite$/, '.result.json')), JSON.stringify(result, null, 2) + '\n', {flag: 'wx'});
-      return result;
+      try {
+        const actions: RepairResult['actions'] = [];
+        for (const [index, action] of plan.actions.entries()) {
+          const {status} = applyRepairAction(conn, action, {testHooks: {beforeCommit: () => options.testHooks?.beforeCommit?.(index)}});
+          actions.push({segmentTripUuid: action.segmentTripUuid, targetTripUuid: action.targetTripUuid, status});
+          // The later actions were planned on top of this one.
+          if (status !== 'applied' && status !== 'already-applied') break;
+        }
+        const result: RepairResult = {format: 'ets2telemetry-history-repair-result-1', databaseUuid: conn.summary.databaseUuid, backupFileName: backup.fileName,
+          confirmation: plan.confirmation, completedUtcMs: now(), actions};
+        writeFileSync(path.join(backupsDirectory, backup.fileName.replace(/\.sqlite$/, '.result.json')), JSON.stringify(result, null, 2) + '\n', {flag: 'wx'});
+        return result;
+      } catch (error) { throw new AfterBackup(backup.fileName, error); }
     } finally { conn.close(); }
   });
 }
