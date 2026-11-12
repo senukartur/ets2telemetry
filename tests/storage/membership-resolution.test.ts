@@ -136,6 +136,77 @@ describe('REG-005/008/012 upload identity of a closed pending segment', () => {
   });
 });
 
+// ET-112f: a segment whose profile proof follows its delivery joins the published root retroactively. The root publishes its
+// next revision under its original source key; the segment never gets a source key of its own.
+describe('REG-004/005/008/012 publication of a segment joined after its delivery', () => {
+  const status = (storage: Storage, registrationId: string) => ok(storage.getUploadStoreStatus({registrationId}));
+  const revenue = {available: true, value: {raw: '15000', sdkType: 's64'}};
+  it('F1 publishes the root once more under its original key and replays nothing', async () => {
+    const {storage, db, registrationId} = await history(), a = new Script(ETS2_A), b = new Script(ETS2_B), root = restarted(storage, a);
+    expect(root).toBe(tripUuidFor(ETS2_A, '1'));
+    const first = await publish(storage, root, registrationId, '1', 1000);
+    expect(wire(db, first)).toMatchObject({revision: 1, type: 'trip.started', source: {tripId: root, pluginSessionId: ETS2_A}, snapshot: {outcome: 'open'}});
+    expect(syncRows(storage)).toEqual([{tripUuid: root, state: 'sent', reason: null}]);
+    const {uuid: segment, delivery} = pendingSegment(storage, b);
+    expect(segment).toBe(tripUuidFor(ETS2_B, '1'));
+    // Before the proof: the delivered segment is its own identity-pending row, with no source key.
+    const before = syncRows(storage);
+    expect(before).toHaveLength(2);
+    expect(before).toEqual(expect.arrayContaining([{tripUuid: root, state: 'sent', reason: null}, {tripUuid: segment, state: 'identity-pending', reason: null}]));
+    expect(bindings(db)).toMatchObject([{root_ref: 1n}]);
+    expect(status(storage, registrationId).identityPendingSources).toBe(1);
+    expect(begin(storage, segment, registrationId)).toMatchObject({status: 'held', reason: 'identity-pending'});
+    const bytes = payload(db, first), receipt = receipts(db);
+    expect(receipt).toHaveLength(1);
+    expect(ok(storage.resolvePendingMemberships(resolveInput(b)))).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    expect(db.prepare('SELECT state FROM logical_membership_decisions WHERE trip_ref = 2').pluck().get()).toBe('joined');
+    expect(syncRows(storage)).toEqual([{tripUuid: root, state: 'pending', reason: null}]);
+    expect(status(storage, registrationId)).toMatchObject({identityPendingSources: 0, pendingSources: 1});
+    const second = await publish(storage, root, registrationId, '1', 3000);
+    expect(wire(db, second)).toMatchObject({revision: 2, type: 'trip.completed', source: {tripId: root, pluginSessionId: ETS2_A},
+      snapshot: {outcome: 'delivered', outcomeEventSeq: '2', revenue}});
+    expect(payload(db, first)).toEqual(bytes);
+    expect(receipts(db).find(row => (row as {event_ref: string}).event_ref === first)).toEqual(receipt[0]);
+    expect(bindings(db)).toMatchObject([{root_ref: 1n, trip_uuid: root, plugin_session_uuid: ETS2_A, http_revision: 2n, terminal: 1n}]);
+    const sent = envelopes(db);
+    expect(sent).toHaveLength(2);
+    expect(sent.filter(envelope => envelope.type === 'trip.completed' && envelope.snapshot.revenue.available)).toHaveLength(1);
+    expect(syncRows(storage)).toEqual([{tripUuid: root, state: 'sent', reason: null}]);
+    // A replayed resolve and a duplicate delivery add no material, revision or event.
+    const head = db.prepare('SELECT material_version FROM upload_change_heads WHERE root_ref = 1').pluck().get(), bound = bindings(db);
+    expect(ok(storage.resolvePendingMemberships(resolveInput(b)))).toEqual({status: 'none', resolved: 0, remaining: 0});
+    expect(ok(storage.commitEvent(delivery))).toMatchObject({status: 'duplicate'});
+    expect(db.prepare('SELECT material_version FROM upload_change_heads WHERE root_ref = 1').pluck().get()).toBe(head);
+    expect(bindings(db)).toEqual(bound);
+    expect(envelopes(db)).toHaveLength(2);
+    expect(status(storage, registrationId)).toMatchObject({identityPendingSources: 0, pendingSources: 0, heldSources: 0});
+    expect(syncRows(storage)).toEqual([{tripUuid: root, state: 'sent', reason: null}]);
+  });
+  it('F2 keeps the root owner when the joined segment was recorded under another owner', async () => {
+    const {storage, db, registrationId: ownerA} = await history(), a = new Script(ETS2_A), b = new Script(ETS2_B), root = restarted(storage, a);
+    await publish(storage, root, ownerA, '1', 1000);
+    const installation = ok(storage.ensureUploadInstallation()), ownerB = randomUUID();
+    ok(storage.recordUploadRegistration({registrationId: ownerB, clientInstallationId: installation.clientInstallationId!, origin: 'https://dashboard.example', accountId: 'B',
+      companyId: 'company', identityEpoch: 'epoch', installationId: randomUUID(), bindingId: randomUUID()}));
+    ok(storage.confirmUploadOwner({confirmationId: randomUUID(), registrationId: ownerB, credentialGeneration: 'generation-b', expectedVersion: '1'}));
+    deliveredPending(storage, b);
+    expect(status(storage, ownerB).identityPendingSources).toBe(1);
+    expect(ok(storage.resolvePendingMemberships(resolveInput(b)))).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    expect(db.prepare('SELECT registration_ref, identity_state FROM upload_reservations WHERE candidate_ref = 2').get()).toEqual({registration_ref: ownerB, identity_state: 'redirected'});
+    expect(db.prepare('SELECT registration_ref FROM upload_source_bindings WHERE root_ref = 1').pluck().get()).toBe(ownerA);
+    expect(begin(storage, root, ownerB)).toMatchObject({status: 'held', reason: 'reconciliation-required'});
+    expect(status(storage, ownerB)).toMatchObject({identityPendingSources: 0, pendingSources: 0, heldSources: 0});
+    expect(status(storage, ownerA).pendingSources).toBe(1);
+    expect(syncRows(storage)).toEqual([{tripUuid: root, state: 'unavailable', reason: null}]);
+    ok(storage.confirmUploadOwner({confirmationId: randomUUID(), registrationId: ownerA, credentialGeneration: 'generation', expectedVersion: '2'}));
+    const registration = db.prepare('SELECT installation_id, binding_id FROM upload_registrations WHERE registration_id = ?').get(ownerA) as {installation_id: string; binding_id: string};
+    const frozen = await freeze(storage, root, ownerA, 3000);
+    expect(frozen.status).toBe('frozen');
+    expect(wire(db, frozen.eventId!)).toMatchObject({revision: 2, type: 'trip.completed', installationId: registration.installation_id, bindingId: registration.binding_id,
+      source: {tripId: root, pluginSessionId: ETS2_A}, snapshot: {outcome: 'delivered', revenue}});
+  });
+});
+
 // ET-112f F3, test-only state: live recording never joins a segment that already has its own source binding (separate/published,
 // M17 above), so the SQL below writes the membership statements of a retroactive join; a history repair could leave this state.
 describe('REG-005/008/010/012 a root whose group holds a separately published member', () => {
