@@ -4,12 +4,12 @@ import {isUploadSummary,isUploadUuid,type UploadSummary} from './upload-projecti
 import {one,record,safe,shape,text} from './upload-sync';
 
 export interface UploadEnvelope extends UploadSummary {
-  contract:{major:1;minor:0};producer:{application:'ets2telemetry';version:string};eventId:string;revision:number;
+  contract:{major:1;minor:0|1};producer:{application:'ets2telemetry';version:string};eventId:string;revision:number;
   installationId:string;bindingId:string;delivery:{mode:'live'|'backfill';syncRunId:string};
   type:'trip.started'|'trip.completed'|'trip.cancelled'|'trip.closed'|'trip.corrected';createdUtcMs:number;
 }
-export interface UploadReceipt {contract:{major:1;minor:0};eventId:string;receiptId:string;status:'stored'|'duplicate';firstReceivedAtUtcMs:number}
-const contract=shape({major:one(1),minor:one(0)});
+export interface UploadReceipt {contract:{major:1;minor:0|1};eventId:string;receiptId:string;status:'stored'|'duplicate';firstReceivedAtUtcMs:number}
+const contract=shape({major:one(1),minor:one(0,1)});
 export function canonicalUpload(value:unknown):string {
   if(Array.isArray(value))return `[${value.map(canonicalUpload).join(',')}]`;
   if(record(value))return `{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonicalUpload(value[key])}`).join(',')}}`;
@@ -31,7 +31,7 @@ export function validateUploadEnvelope(value:unknown):value is UploadEnvelope {
     source:()=>true,snapshot:()=>true,delivery:shape({mode:one('live','backfill'),syncRunId:isUploadUuid}),
     type:one('trip.started','trip.completed','trip.cancelled','trip.closed','trip.corrected'),createdUtcMs:safe})(value))return false;
   const envelope=value as UploadEnvelope;
-  if(!isUploadSummary({source:envelope.source,snapshot:envelope.snapshot}))return false;
+  if(!isUploadSummary({source:envelope.source,snapshot:envelope.snapshot}, envelope.contract.minor))return false;
   const outcome=envelope.snapshot.outcome;
   if(envelope.type==='trip.started'?outcome!=='open':envelope.type==='trip.corrected'?outcome==='open':outcome!==({'trip.completed':'delivered','trip.cancelled':'cancelled','trip.closed':'none'} as const)[envelope.type])return false;
   try{strictJson(canonicalUpload(envelope));return Buffer.byteLength(canonicalUpload(envelope))<=65_536;}catch{return false;}

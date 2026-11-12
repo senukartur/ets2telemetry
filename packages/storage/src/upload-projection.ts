@@ -23,6 +23,7 @@ export interface UploadFacts {
   /** Aggregate accounting uncertainty does not invalidate native terminal money. */
   moneyIncomplete: boolean;
   clockAnomaly: boolean;
+  hardModeResult: 'qualified' | 'not-qualified';
 }
 export interface UploadProjection {
   requestedTripUuid: string; rootTripUuid: string; readiness: UploadReadiness | 'redirected'; rootReadiness: UploadReadiness;
@@ -81,7 +82,7 @@ const facts = shape({game: one('ets2','ats'), pluginSessionId: isUploadUuid, out
   closeReason: nullable(one('outcome','configuration-cleared','different-job','restart','discontinuity','gap')), recordingCompleteness: one('complete','partial','unknown'),
   openedBy: one('event','checkpoint'), checkpointNextEventSeq: nullable(sequence), checkpointUtcMs: nullable(count), opening: nullable(occurrence), outcomeOccurrence: nullable(occurrence), close: nullable(occurrence),
   gameMode: mode, job: jobCheck, observedDistance: available(real,'m'), fuelUsed: available(real,'L'), deliveredDistance: available(real,'m'), cargoDamage: available(real,'fraction'),
-  revenue: moneyOf('s64'), penalty: moneyOf('s64'), moneyIncomplete: bool, clockAnomaly: bool});
+  revenue: moneyOf('s64'), penalty: moneyOf('s64'), moneyIncomplete: bool, clockAnomaly: bool, hardModeResult: one('qualified', 'not-qualified')});
 const totals = shape({members: count, configurations: count, intervals: count});
 const readiness = one('ready','identity-pending');
 export const uploadSnapshotParts = (v: unknown): string[] | undefined => {
@@ -142,6 +143,7 @@ export interface UploadSummary {
     plannedDistance: Measure<'m'>; observedDistance: Measure<'m'>; deliveredDistance: Measure<'m'>; fuelUsed: Measure<'L'>; cargoDamage: Measure<'fraction'>;
     expectedIncome: Available<Money>; revenue: Available<Money>; penalty: Available<Money>;
     evidence: {startObserved: boolean; endObserved: boolean; ruleContextComplete: boolean; clockAnomaly: boolean; reasons: string[]};
+    hardModeResult?: 'qualified' | 'not-qualified';
   };
 }
 interface UploadPlace {cityId: Available<string>; cityName: Available<string>; companyId: Available<string>; companyName: Available<string>}
@@ -223,7 +225,8 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
     trailers: {complete: proof?.status==='proven', items}, plannedDistance: j.plannedDistance, observedDistance: f.observedDistance, deliveredDistance: f.deliveredDistance,
     fuelUsed: f.fuelUsed, cargoDamage: f.cargoDamage, expectedIncome: j.expectedIncome, revenue: f.revenue, penalty: f.penalty,
     evidence: {startObserved: start.basis === 'event' && !clockAnomaly, endObserved: !!f.outcomeOccurrence && end?.basis === 'event' && !clockAnomaly,
-      ruleContextComplete: reasons.size===0, clockAnomaly, reasons: [...reasons].sort()}
+      ruleContextComplete: reasons.size===0, clockAnomaly, reasons: [...reasons].sort()},
+    hardModeResult: f.hardModeResult
   }};
   // Validate the exact allowlisted wire subset, including Dashboard's UTF-8, numeric and money limits.
   if (!wireValuesFit(summary)) return hold('unrepresentable');
@@ -299,18 +302,22 @@ export function finishUploadFold(pin:UploadProjection,fold:UploadFold):UploadMap
 }
 
 /** Exact closed source/snapshot shape shared with the frozen-envelope boundary. */
-export function isUploadSummary(value:unknown):value is UploadSummary {
+export function isUploadSummary(value:unknown, minor = 0):value is UploadSummary {
   const time=shape({utcMs:nullable(count),basis:one('event','checkpoint','last-known','receipt','unknown'),eventSeq:nullable(sequence)});
   const place=shape({cityId:available(text),cityName:available(text),companyId:available(text),companyName:available(text)});
   const metric=(unit:string)=>available(real,unit);
+  const snapshotFields: Record<string, Check> = {
+    outcome:one('open','none','delivered','cancelled'),closeReason:nullable(one('outcome','configuration-cleared','different-job','restart','discontinuity','gap')),recordingCompleteness:one('complete','partial','unknown'),
+    start:time,end:nullable(time),openedBy:one('event','checkpoint'),openedEventSeq:nullable(sequence),checkpointNextEventSeq:nullable(sequence),outcomeEventSeq:nullable(sequence),
+    context:shape({gameBuild:available(text),sourceLocale:available(text),mapId:available(text),dlcIds:available(v=>Array.isArray(v)&&v.length<=256&&v.every(text)&&new Set(v).size===v.length),versions}),gameMode:mode,
+    job:shape({origin:place,destination:place,cargoId:available(text),cargoName:available(text),cargoMass:metric('kg'),cargoUnitMass:metric('kg'),cargoUnitCount:available(v=>count(v)&&(v as number)<=4_294_967_295),market:available(text),isSpecialJob:available(bool),cargoLoaded:available(bool)}),
+    trailers:shape({complete:bool,items:v=>Array.isArray(v)&&v.length<=10&&v.every(shape({index:v=>count(v)&&(v as number)<=9,id:available(text),bodyType:available(text),chainType:available(text)}))}),
+    plannedDistance:metric('m'),observedDistance:metric('m'),deliveredDistance:metric('m'),fuelUsed:metric('L'),cargoDamage:metric('fraction'),expectedIncome:moneyOf('u64'),revenue:moneyOf('s64'),penalty:moneyOf('s64'),
+    evidence:shape({startObserved:bool,endObserved:bool,ruleContextComplete:bool,clockAnomaly:bool,reasons:v=>Array.isArray(v)&&v.length<=32&&new Set(v).size===v.length&&v.every(x=>typeof x==='string'&&/^[a-z][a-z0-9-]{0,63}$/.test(x))})
+  };
+  if(minor === 1) snapshotFields.hardModeResult = one('qualified', 'not-qualified');
   const check=shape({source:shape({provider:one('ets2telemetry'),game:one('ets2','ats'),tripId:isUploadUuid,pluginSessionId:isUploadUuid,databaseUuid:isUploadUuid,origin:one('game')}),
-    snapshot:shape({outcome:one('open','none','delivered','cancelled'),closeReason:nullable(one('outcome','configuration-cleared','different-job','restart','discontinuity','gap')),recordingCompleteness:one('complete','partial','unknown'),
-      start:time,end:nullable(time),openedBy:one('event','checkpoint'),openedEventSeq:nullable(sequence),checkpointNextEventSeq:nullable(sequence),outcomeEventSeq:nullable(sequence),
-      context:shape({gameBuild:available(text),sourceLocale:available(text),mapId:available(text),dlcIds:available(v=>Array.isArray(v)&&v.length<=256&&v.every(text)&&new Set(v).size===v.length),versions}),gameMode:mode,
-      job:shape({origin:place,destination:place,cargoId:available(text),cargoName:available(text),cargoMass:metric('kg'),cargoUnitMass:metric('kg'),cargoUnitCount:available(v=>count(v)&&(v as number)<=4_294_967_295),market:available(text),isSpecialJob:available(bool),cargoLoaded:available(bool)}),
-      trailers:shape({complete:bool,items:v=>Array.isArray(v)&&v.length<=10&&v.every(shape({index:v=>count(v)&&(v as number)<=9,id:available(text),bodyType:available(text),chainType:available(text)}))}),
-      plannedDistance:metric('m'),observedDistance:metric('m'),deliveredDistance:metric('m'),fuelUsed:metric('L'),cargoDamage:metric('fraction'),expectedIncome:moneyOf('u64'),revenue:moneyOf('s64'),penalty:moneyOf('s64'),
-      evidence:shape({startObserved:bool,endObserved:bool,ruleContextComplete:bool,clockAnomaly:bool,reasons:v=>Array.isArray(v)&&v.length<=32&&new Set(v).size===v.length&&v.every(x=>typeof x==='string'&&/^[a-z][a-z0-9-]{0,63}$/.test(x))})})});
+    snapshot:shape(snapshotFields)});
   if(!check(value))return false;
   const summary=value as UploadSummary,s=summary.snapshot;
   const validTime=(t:UploadTime)=>t.basis==='unknown'?t.utcMs===null&&t.eventSeq===null:t.utcMs!==null&&(t.basis==='event'?t.eventSeq!==null:t.eventSeq===null);

@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
-import {beginUploadFold,advanceUploadFold,finishUploadFold,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, mapUploadProjection,
+import {beginUploadFold,advanceUploadFold,finishUploadFold,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadSummary, mapUploadProjection,
   type UploadMember, type UploadProjection, type UploadProjectionPage, type UploadSummary} from '../../packages/storage/src/upload-projection';
 import {ETS2_A, ETS2_B, job} from '../shared/trip-messages';
 
@@ -15,7 +15,7 @@ function fixture() {
       opening:occurrence,outcomeOccurrence:{pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'3',type:'job.delivered',utcMs:2000},close:null,
       gameMode:{mode:'unknown',method:'none',confidence:'none',ambiguous:false},job:job({expectedIncome:{available:true,value:{raw:'18446744073709551615',sdkType:'u64',currency:{status:'unknown'}}}}),
       observedDistance:{available:true,value:0,unit:'m'},fuelUsed:{...absent,unit:'L'},deliveredDistance:{available:true,value:151250.5,unit:'m'},cargoDamage:{available:true,value:0.0125,unit:'fraction'},
-      revenue:{available:true,value:{raw:'-9223372036854775808',sdkType:'s64',currency:{status:'unknown'}}},penalty:absent,moneyIncomplete:false,clockAnomaly:false}};
+      revenue:{available:true,value:{raw:'-9223372036854775808',sdkType:'s64',currency:{status:'unknown'}}},penalty:absent,moneyIncomplete:false,clockAnomaly:false,hardModeResult:'not-qualified'}};
   const members: UploadMember[] = [root,child].map((rawTripUuid,index) => ({id:String(index+1),rawTripUuid,pluginSessionId:index?ETS2_B:ETS2_A,game:'ets2',origin:'game',versions:golden.expected.snapshot.context.versions}));
   const pages: UploadProjectionPage[] = [
     {snapshot:pin.snapshot,kind:'members',cursor:null,nextCursor:null,total:2,rows:members},
@@ -28,7 +28,8 @@ function mapped(f = fixture()) {const result = mapUploadProjection(f.pin,f.pages
 
 describe('private Dashboard summary projection', () => {
   it('matches independently authored v1.0 source/snapshot, preserves exact SDK money and selected availability', () => {
-    const f=fixture();expect(isUploadProjection(f.pin)).toBe(true);expect(mapped(f).summary).toEqual(golden.expected);
+    const f=fixture();expect(isUploadProjection(f.pin)).toBe(true);
+    expect(mapped(f).summary).toEqual({...golden.expected, snapshot: {...golden.expected.snapshot, hardModeResult: 'not-qualified'}});
     expect(mapped(f).provenance.outcome).toMatchObject({pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'3'});
   });
   it.each(['3','1200'])('keeps native final sequence %s in its own session without cross-session ordering', seq => {
@@ -115,7 +116,7 @@ it('REG-004/009 folds independently expected pages with constant state and refus
   expect(finishUploadFold(f.pin,fold)).toEqual({status:'hold',reason:'evidence-incomplete'});
   expect(advanceUploadFold(f.pin,fold,f.pages[1],()=>true).invalid).toBe('evidence-incomplete');
   for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,(trip,session)=>trip===root&&session===ETS2_A);
-  expect(finishUploadFold(f.pin,fold)).toMatchObject({status:'projected',summary:golden.expected});
+  expect(finishUploadFold(f.pin,fold)).toMatchObject({status:'projected',summary:{...golden.expected,snapshot:{...golden.expected.snapshot,hardModeResult:'not-qualified'}}});
   const many=fixture();many.pin.totals.members=10_001;many.pages[0].total=10_001;fold=beginUploadFold(many.pin);
   for(let offset=0;offset<10_001;offset+=100){const rows=Array.from({length:Math.min(100,10_001-offset)},(_,i)=>({...many.pages[0].rows[0],id:String(offset+i+1)}));const end=offset+rows.length;
     fold=advanceUploadFold(many.pin,fold,{...many.pages[0],cursor:offset?`${many.pin.snapshot}:members:${offset}`:null,nextCursor:end<10_001?`${many.pin.snapshot}:members:${end}`:null,rows},()=>true);
@@ -183,5 +184,29 @@ describe('TEL-034 stored whole-trip rule context',()=>{
       ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.recordingLoss=true;}]){
       const f=complete();change(f);expect(isUploadProjection(f.pin)).toBe(false);
     }
+  });
+
+  it('validates hardModeResult in summary snapshot according to minor contract version', () => {
+    const f = fixture();
+    const result = mapped(f);
+    expect(result.summary.snapshot.hardModeResult).toBe('not-qualified');
+    // Minor 1 accepts hardModeResult
+    expect(isUploadSummary(result.summary, 1)).toBe(true);
+    // Minor 0 rejects summary with hardModeResult
+    expect(isUploadSummary(result.summary, 0)).toBe(false);
+
+    // Minor 0 accepts summary when hardModeResult is stripped
+    const minor0Summary = structuredClone(result.summary);
+    delete minor0Summary.snapshot.hardModeResult;
+    expect(isUploadSummary(minor0Summary, 0)).toBe(true);
+    // Minor 1 rejects summary when hardModeResult is missing
+    expect(isUploadSummary(minor0Summary, 1)).toBe(false);
+  });
+
+  it('projects qualified hard mode result when trip qualifies', () => {
+    const f = fixture();
+    f.pin.facts.hardModeResult = 'qualified';
+    const result = mapped(f);
+    expect(result.summary.snapshot.hardModeResult).toBe('qualified');
   });
 });

@@ -483,3 +483,44 @@ it.each([[1,false],[1,true],[2,false],[2,true]] as const)('TEL-034 re-evaluates 
   expect(attempt.status).toBe('claimed');const snapshot=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
   expect(snapshot.trailers.complete).toBe(frozen);expect(snapshot.evidence).toMatchObject({ruleContextComplete:frozen,reasons:frozen?[]:['trailer-context-unproven']});
 });
+
+it('preserves minor 0 payloads and emits minor 1 envelopes with hardModeResult when negotiated',async()=>{
+  const conn1=await openConnection(ws.options({purpose:'history'})),storage1=new Storage(conn1);opened.push(storage1);
+  const source1=await setup(storage1);const db1=conn1.writer();
+  ok(storage1.commitEvent({message:game(source1.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source1.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
+  
+  // 1. Freeze with contractMinor 1 (negotiated)
+  const workId1=await complete(storage1,source1);
+  expect(ok(storage1.freezeUploadMaterialization({workId:workId1,producerVersion:'test',createdUtcMs:1000,contractMinor:1})).status).toBe('frozen');
+  const payload1=db1.prepare('SELECT payload FROM upload_envelopes WHERE work_ref=?').pluck().get(workId1) as Buffer;
+  const envelope1=JSON.parse(payload1.toString()) as UploadEnvelope;
+  expect(envelope1.contract).toEqual({major:1,minor:1});
+  expect(envelope1.snapshot.hardModeResult).toBe('not-qualified');
+  ok(storage1.releaseUploadMaterialization({workId:workId1}));
+
+  // 2. Separate trip in new database workspace to test minor 0 (older dashboard negotiation)
+  const ws0=await workspace();
+  const conn0=await openConnection(ws0.options({purpose:'history'})),storage0=new Storage(conn0);
+  try {
+    const source0=await setup(storage0);const db0=conn0.writer();
+    ok(storage0.commitEvent({message:game(source0.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source0.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
+    const workId0=await complete(storage0,source0);
+    expect(ok(storage0.freezeUploadMaterialization({workId:workId0,producerVersion:'test',createdUtcMs:1001,contractMinor:0})).status).toBe('frozen');
+    const payload0=db0.prepare('SELECT payload FROM upload_envelopes WHERE work_ref=?').pluck().get(workId0) as Buffer;
+    const envelope0=JSON.parse(payload0.toString()) as UploadEnvelope;
+    expect(envelope0.contract).toEqual({major:1,minor:0});
+    expect(envelope0.snapshot).not.toHaveProperty('hardModeResult');
+    
+    // 3. Queued minor 0 envelope is claimed and retryable without payload mutation
+    const attempt=ok(storage0.claimUploadAttempt({attemptId:randomUUID(),registrationId:source0.registrationId,expectedVersion:'1',mode:'any',nowMs:1002}));
+    expect(attempt.status).toBe('claimed');
+    expect(attempt.payload).toEqual(new Uint8Array(payload0));
+    const claimedEnvelope=JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope;
+    expect(claimedEnvelope.contract).toEqual({major:1,minor:0});
+    expect(claimedEnvelope.snapshot).not.toHaveProperty('hardModeResult');
+  } finally {
+    storage0.close();
+    await ws0.dispose();
+  }
+});
+

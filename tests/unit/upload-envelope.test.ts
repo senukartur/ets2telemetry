@@ -46,9 +46,32 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
   it('accepts only a complete status-matched immutable receipt identity',()=>{
     const receipt={contract:{major:1,minor:0},eventId:id,receiptId:id,status:'stored',firstReceivedAtUtcMs:0};
     expect(decodeUploadReceipt(bytes(receipt),202,id)).toEqual(receipt);expect(decodeUploadReceipt(bytes({...receipt,status:'duplicate'}),200,id)?.receiptId).toBe(id);
-    for(const body of [{...receipt,status:'duplicate'},{...receipt,extra:1},{...receipt,eventId:'80000000-0000-4000-8000-000000000002'},{...receipt,firstReceivedAtUtcMs:-1},{...receipt,firstReceivedAtUtcMs:Number.MAX_SAFE_INTEGER+1},{...receipt,contract:{major:1,minor:1}},{...receipt,receiptId:'no'}])expect(decodeUploadReceipt(bytes(body),202,id)).toBeUndefined();
+    const receiptMinor1={contract:{major:1,minor:1},eventId:id,receiptId:id,status:'stored',firstReceivedAtUtcMs:0};
+    expect(decodeUploadReceipt(bytes(receiptMinor1),202,id)).toEqual(receiptMinor1);
+    for(const body of [{...receipt,status:'duplicate'},{...receipt,extra:1},{...receipt,eventId:'80000000-0000-4000-8000-000000000002'},{...receipt,firstReceivedAtUtcMs:-1},{...receipt,firstReceivedAtUtcMs:Number.MAX_SAFE_INTEGER+1},{...receipt,contract:{major:2,minor:0}},{...receipt,receiptId:'no'}])expect(decodeUploadReceipt(bytes(body),202,id)).toBeUndefined();
     expect(decodeUploadReceipt(bytes(JSON.stringify(receipt).replace('"status":"stored"','"status":"stored","status":"stored"')),202,id)).toBeUndefined();
     expect(decodeUploadReceipt(new Uint8Array([0xc3,0x28]),202,id)).toBeUndefined();expect(decodeUploadReceipt(bytes(' '.repeat(4097)),202,id)).toBeUndefined();expect(decodeUploadReceipt(bytes(receipt),201,id)).toBeUndefined();
+  });
+  it('freezes contract minor 1 with hardModeResult and rejects minor 0 with hardModeResult',()=>{
+    const e1=envelope();
+    e1.contract.minor=1;
+    e1.snapshot.hardModeResult='qualified';
+    expect(validateUploadEnvelope(e1)).toBe(true);
+    const encoded1=encodeUploadEnvelope(e1);
+    expect(encoded1).toBeDefined();
+    const frozen1=JSON.parse(new TextDecoder().decode(encoded1)) as UploadEnvelope;
+    expect(frozen1.contract.minor).toBe(1);
+    expect(frozen1.snapshot.hardModeResult).toBe('qualified');
+
+    // minor 1 missing hardModeResult is invalid
+    const e1Missing={...structuredClone(e1)};
+    delete e1Missing.snapshot.hardModeResult;
+    expect(validateUploadEnvelope(e1Missing)).toBe(false);
+
+    // minor 0 having hardModeResult is invalid
+    const e0WithHardMode=envelope();
+    e0WithHardMode.snapshot.hardModeResult='not-qualified';
+    expect(validateUploadEnvelope(e0WithHardMode)).toBe(false);
   });
 });
 
