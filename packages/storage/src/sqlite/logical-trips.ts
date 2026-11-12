@@ -163,17 +163,7 @@ export function resolveClosed(db: Database.Database, tripRef: bigint, proof: Pro
   const sessionScopeConflict = get(db, `SELECT 1 FROM logical_membership_decisions d JOIN logical_memberships m ON m.trip_ref = d.trip_ref
     WHERE d.plugin_session_ref = ? AND d.state IN ('joined','root') AND (d.raw_closed_event_seq IS NULL OR d.raw_closed_event_seq > ?)
       AND json_extract(m.proof_json, '$.scope') <> ? LIMIT 1`, row.plugin_session_ref, boundary ?? '', proof.scope) !== undefined;
-  const recordedJob = job(db, row), known = JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
-  const recorded = learnContinuationConstraints(known, recordedJob), learned = recorded === null ? null : learnContinuationConstraints(recorded, recordedJob);
-  const fingerprint = continuationIdentityFingerprint(recordedJob);
-  const rows = fingerprint === null ? [] : db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
-    .all(row.game, proof.scope, fingerprint, id) as LogicalRow[];
-  const combinedFor = (candidate: LogicalRow) => {
-    const candidateRecorded = learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints, recordedJob);
-    return candidateRecorded === null ? null : learnContinuationConstraints(candidateRecorded, recordedJob);
-  };
-  const candidates: MembershipCandidate<LogicalRow>[] = rows.map(candidate => ({ref: candidate,
-    compatible: rows.length === 1 && combinedFor(candidate) !== null && compatibleContinuation(job(db, raw(db, candidate.id)), recordedJob)}));
+  const {recordedJob, known, recorded, learned, candidates, combinedFor} = closedCandidates(db, row, group, proof.scope);
   const decision = decideRetroactive({closedByOwnSession: row.closed_by_session_ref === row.plugin_session_ref, rawClosedEventSeq: (pending.raw_closed_event_seq ?? null) as string | null,
     boundaryThroughEventSeq: boundary, sessionScopeConflict, ownRootBound: rootBound(db, id)}, {recordedJob, consistent: learned !== null, candidates},
   target => target.latest_trip_ref as bigint, id);
@@ -192,7 +182,40 @@ export function resolveClosed(db: Database.Database, tripRef: bigint, proof: Pro
     revise(db, id);
     return 'root';
   }
-  const target = decision.target, targetId = target.id as bigint, combined = combinedFor(target);
+  joinClosedMember(db, row, decision.target, {proof, combined: combinedFor(decision.target), fingerprint: decision.fingerprint});
+  return 'joined';
+}
+/**
+ * The bounded candidate lookup of the closed self-root segment `row` of group `group`, with the recorded job as the current
+ * reading: unretired groups of the same game and job fingerprint other than the segment's own, at most two, of profile
+ * scope `scope` or, when `scope` is null (the history repair), of any known scope. Only a single candidate can be
+ * compatible, as in the live lookup.
+ */
+export function closedCandidates(db: Database.Database, row: LogicalRow, group: LogicalRow, scope: string | null) {
+  const id = row.id as bigint;
+  const recordedJob = job(db, row), known = JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
+  const recorded = learnContinuationConstraints(known, recordedJob), learned = recorded === null ? null : learnContinuationConstraints(recorded, recordedJob);
+  const fingerprint = continuationIdentityFingerprint(recordedJob);
+  const rows = fingerprint === null ? [] : (scope === null
+    ? db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope IS NOT NULL AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`).all(row.game, fingerprint, id)
+    : db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`).all(row.game, scope, fingerprint, id)) as LogicalRow[];
+  const combinedFor = (candidate: LogicalRow) => {
+    const candidateRecorded = learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints, recordedJob);
+    return candidateRecorded === null ? null : learnContinuationConstraints(candidateRecorded, recordedJob);
+  };
+  const candidates: MembershipCandidate<LogicalRow>[] = rows.map(candidate => ({ref: candidate,
+    compatible: rows.length === 1 && combinedFor(candidate) !== null && compatibleContinuation(job(db, raw(db, candidate.id)), recordedJob)}));
+  return {recordedJob, known, recorded, learned, fingerprint, candidates, combinedFor};
+}
+/**
+ * Joins the closed self-root segment `row` into `target` inside the caller's transaction: the join tail of resolveClosed,
+ * shared with the owner-attested history repair (ET-112g). A `proof` is stored on the member and sets the target's scope;
+ * without one (the repair) nothing is stored and the target keeps its scope. The target's member_count rises in the same
+ * transaction, the member is spliced retroactively, the member's terminal ends the target, the member and then the target
+ * are revised with partial coverage, and the member's decision row changes only while it is pending.
+ */
+export function joinClosedMember(db: Database.Database, row: LogicalRow, target: LogicalRow, options: {proof: ProfileObservation | null; combined: ContinuationConstraints | null; fingerprint: string}): void {
+  const id = row.id as bigint, targetId = target.id as bigint, {proof, combined} = options;
   redirectReservation(db, id, targetId);
   db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(targetId, id, id);
   db.prepare('UPDATE logical_trips SET retired = 1 WHERE id = ?').run(id);
@@ -203,8 +226,8 @@ export function resolveClosed(db: Database.Database, tripRef: bigint, proof: Pro
     db.prepare('UPDATE trips SET hard_mode_details=?, is_hard_mode=0 WHERE id=?').run(JSON.stringify(legacy), id);
   }
   db.prepare(`UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased = 1, canonical_constraints = ?, profile_scope = ?, fingerprint = ?
-    WHERE id = ?`).run(id, JSON.stringify(combined), proof.scope, decision.fingerprint, targetId);
-  db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), id);
+    WHERE id = ?`).run(id, JSON.stringify(combined), proof?.scope ?? target.profile_scope, options.fingerprint, targetId);
+  if (proof) db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), id);
   // The terminal of S ends the continued trip as it would have live; another close leaves the target unresolved.
   if (row.outcome === 'delivered' || row.outcome === 'cancelled') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 0 WHERE id = ?').run(targetId);
   else if (row.close_reason === 'different-job') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 1 WHERE id = ?').run(targetId);
@@ -213,8 +236,7 @@ export function resolveClosed(db: Database.Database, tripRef: bigint, proof: Pro
   revise(db, id);
   // S's quantities were recorded outside the target's accounting chain: the target stays partial with no endpoint.
   revise(db, targetId, {version: 1, start: prior?.start ?? 'unproven', losses: (prior?.losses ?? 0) | COVERAGE_LOSS.unknown, member: String(id), phase: 'active', endpoint: null, window: null});
-  recordDecision(db, id, 'joined', decision.reason, targetId);
-  return 'joined';
+  recordDecision(db, id, 'joined', 'matched', targetId);
 }
 /**
  * I4 and resolvePendingMemberships: resolves, oldest first, at most `limit` closed pending segments of one plugin session
