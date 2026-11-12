@@ -52,6 +52,10 @@ export function copyHistory(options: {from: string; to: string}): Promise<Repair
 
 export interface DryRunOptions {
   database: string; out: string; attest: readonly string[]; appVersion: string; now?: () => number;
+  /** The legacy roots, by trip UUID, whose distance and fuel are not recalculated (`--exclude`). */
+  exclude?: readonly string[];
+  /** In-process tests only: the upgrade's sample bound instead of UPGRADE_SAMPLE_LIMIT. */
+  quantitySampleLimit?: number;
   /** In-process tests only: the parent of the scratch directory instead of the system temporary directory. */
   scratchParent?: string;
   testHooks?: RepairOptions['testHooks'] & {afterScratchOpen?: (scratchDirectory: string) => void};
@@ -71,9 +75,10 @@ export function dryRunHistoryRepair(options: DryRunOptions): Promise<RepairOutco
       const file = path.join(scratch, 'scratch.sqlite'), copy = await copyFile(path.normalize(options.database), file);
       conn = await openConnection({path: file, purpose: copy.purpose, backupsDirectory: path.join(scratch, 'backups'), appVersion: options.appVersion, now});
       options.testHooks?.afterScratchOpen?.(scratch);
-      const scan = planRepair(conn, options.attest, options);
+      const exclude = options.exclude ?? [], scan = planRepair(conn, options.attest, {...options, exclude});
       const plan: RepairPlan = {format: REPAIR_PLAN_FORMAT, databaseUuid: copy.databaseUuid, schemaVersion: conn.summary.schemaVersion, createdUtcMs: now(), appVersion: options.appVersion,
-        attested: [...options.attest], actions: scan.actions, listings: scan.listings, confirmation: repairConfirmationCode(scan.actions)};
+        attested: [...options.attest], excluded: [...exclude], actions: scan.actions, listings: scan.listings, quantityListings: scan.quantityListings,
+        confirmation: repairConfirmationCode(scan.actions)};
       writeFileSync(options.out, JSON.stringify(plan, null, 2) + '\n', {flag: 'wx'});
       return plan;
     } finally {
@@ -87,7 +92,7 @@ export interface ApplyOptions {
   database: string; plan: string; confirm: string; workingHistory?: boolean;
   /** The directory of the pre-repair backup and the result file; default `repair-backups` beside the database. */
   backupsDirectory?: string; appVersion: string; now?: () => number;
-  /** In-process tests only: `beforeCommit` runs inside action `index`'s transaction after its join. */
+  /** In-process tests only: `beforeCommit` runs inside action `index`'s transaction after its change. */
   testHooks?: {beforeCommit?: (index: number) => void};
 }
 /**
@@ -132,7 +137,8 @@ export function applyHistoryRepair(options: ApplyOptions): Promise<RepairOutcome
         const actions: RepairResult['actions'] = [];
         for (const [index, action] of plan.actions.entries()) {
           const {status} = applyRepairAction(conn, action, {testHooks: {beforeCommit: () => options.testHooks?.beforeCommit?.(index)}});
-          actions.push({segmentTripUuid: action.segmentTripUuid, targetTripUuid: action.targetTripUuid, status});
+          actions.push(action.kind === 'quantities' ? {logicalTripUuid: action.logicalTripUuid, status}
+            : {segmentTripUuid: action.segmentTripUuid, targetTripUuid: action.targetTripUuid, status});
           // The later actions were planned on top of this one.
           if (status !== 'applied' && status !== 'already-applied') break;
         }

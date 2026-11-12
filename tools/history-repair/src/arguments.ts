@@ -4,21 +4,21 @@ import {parseRepairPlan, repairConfirmationCode} from '../../../packages/storage
 
 export const USAGE = `Usage:
   npm run history:repair -- copy --from <database> --to <new file>
-  npm run history:repair -- dry-run --database <database> --out <new plan.json> [--attest <trip uuid>]...
+  npm run history:repair -- dry-run --database <database> --out <new plan.json> [--attest <trip uuid>]... [--exclude <trip uuid>]...
   npm run history:repair -- apply --database <database> --plan <plan.json> --confirm <code> [--working-history] [--backups <directory>]
 Exit Yukon Union Telemetry first. Every path is explicit and absolute, outside this checkout; there is no default
 database. The confirmation code checks that apply runs the plan you reviewed; it is not authentication.`;
 
 export type RepairCommand =
   | {command: 'copy'; from: string; to: string}
-  | {command: 'dry-run'; database: string; out: string; attest: string[]}
+  | {command: 'dry-run'; database: string; out: string; attest: string[]; exclude: string[]}
   | {command: 'apply'; database: string; plan: string; confirm: string; workingHistory: boolean; backups?: string};
 export class UsageError extends Error {}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const OPTIONS: Readonly<Record<RepairCommand['command'], {required: string[]; optional: string[]}>> = {
   copy: {required: ['--from', '--to'], optional: []},
-  'dry-run': {required: ['--database', '--out'], optional: ['--attest']},
+  'dry-run': {required: ['--database', '--out'], optional: ['--attest', '--exclude']},
   apply: {required: ['--database', '--plan', '--confirm'], optional: ['--backups']}
 };
 
@@ -37,7 +37,7 @@ function inside(file: string, directory: string): boolean {
 export function parseArguments(argv: readonly string[], checkout: string): RepairCommand {
   const command = argv[0] as RepairCommand['command'];
   if (!Object.hasOwn(OPTIONS, command)) throw new UsageError(USAGE);
-  const {required, optional} = OPTIONS[command], values: Record<string, string> = {}, attest: string[] = [];
+  const {required, optional} = OPTIONS[command], values: Record<string, string> = {}, lists: Record<string, string[]> = {'--attest': [], '--exclude': []};
   let workingHistory = false;
   for (let i = 1; i < argv.length; i++) {
     const key = argv[i];
@@ -49,9 +49,9 @@ export function parseArguments(argv: readonly string[], checkout: string): Repai
     }
     const value = argv[++i];
     if (![...required, ...optional].includes(key) || value === undefined || value.startsWith('--')) throw new UsageError(USAGE);
-    if (key === '--attest') {
-      if (!UUID.test(value)) throw new UsageError(`--attest needs a full lowercase trip UUID, as the dry run lists it; got "${value}".`);
-      if (!attest.includes(value)) attest.push(value);
+    if (Object.hasOwn(lists, key)) {
+      if (!UUID.test(value)) throw new UsageError(`${key} needs a full lowercase trip UUID, as the dry run lists it; got "${value}".`);
+      if (!lists[key].includes(value)) lists[key].push(value);
       continue;
     }
     if (Object.hasOwn(values, key)) throw new UsageError(USAGE);
@@ -66,7 +66,7 @@ export function parseArguments(argv: readonly string[], checkout: string): Repai
     return path.normalize(value);
   };
   if (command === 'copy') return {command, from: file('--from'), to: file('--to')};
-  if (command === 'dry-run') return {command, database: file('--database'), out: file('--out'), attest};
+  if (command === 'dry-run') return {command, database: file('--database'), out: file('--out'), attest: lists['--attest'], exclude: lists['--exclude']};
   if (!/^[0-9a-f]{8}$/.test(values['--confirm'])) throw new UsageError('--confirm needs the 8-digit code the dry run printed.');
   return {command, database: file('--database'), plan: file('--plan'), confirm: values['--confirm'], workingHistory, ...(values['--backups'] ? {backups: file('--backups')} : {})};
 }
