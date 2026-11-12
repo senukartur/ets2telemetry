@@ -3,7 +3,10 @@ import type {RepairListing, RepairPlan, RepairQuantitiesAction, RepairQuantityLi
 
 const value = (reading: {available: true; value: unknown} | {available: false; reason: string}, unit = '') =>
   reading.available ? `${String(reading.value)}${unit}` : reading.reason;
-/** One root's values on one line: outcome, recording, sources, quantities (with their engine-1 status), delivery, Hard Mode and upload state. */
+/**
+ * One root's values on one line: outcome, recording, sources, quantities (with their engine-1 status), delivery, money
+ * totals when incomplete, Hard Mode and upload state.
+ */
 export function summaryText(s: RepairSummary): string {
   const status = (quantity: 'distance' | 'fuel') => s.accounting ? ` (${s.accounting[quantity]})` : '';
   const hardMode = s.hardMode ? `${s.hardMode.passingChecks}/${s.hardMode.failingChecks}/${s.hardMode.unknownChecks} ${s.hardMode.qualified ? 'qualified' : 'not qualified'}` : 'none';
@@ -12,7 +15,8 @@ export function summaryText(s: RepairSummary): string {
   const upload = `${s.upload.bound ? 'bound' : 'unbound'}${hold}${s.upload.identity ? `, identity ${s.upload.identity}` : ''}`;
   return `${s.outcome}, recording ${s.recordingCompleteness}, ${s.sources} ${s.sources === 1 ? 'recording' : 'recordings'}, distance ${value(s.distanceM, ' m')}${status('distance')}, `
     + `fuel ${value(s.fuelUsedL, ' L')}${status('fuel')}, `
-    + `game distance ${s.deliveredDistanceM === null ? 'none' : value(s.deliveredDistanceM, ' m')}, revenue ${revenue}, Hard Mode ${hardMode}, upload ${upload}`;
+    + `game distance ${s.deliveredDistanceM === null ? 'none' : value(s.deliveredDistanceM, ' m')}, revenue ${revenue}${s.moneyIncomplete ? ', money totals incomplete' : ''}, `
+    + `Hard Mode ${hardMode}, upload ${upload}`;
 }
 const SECTIONS: readonly [RepairListing['state'], string][] = [
   ['needs-attestation', 'Join candidates that need your evidence (rerun the dry run with --attest <segment uuid>)'],
@@ -24,7 +28,7 @@ const SECTIONS: readonly [RepairListing['state'], string][] = [
 ];
 const QUANTITY_REASONS: readonly [RepairQuantityListing['reason'], string][] = [
   ['excluded', 'excluded'], ['open-member', 'a recording is still open'], ['too-large', 'too many samples'], ['no-truck-evidence', 'no complete reading'],
-  ['unchanged', 'unchanged'], ['not-engine-0', 'engine-1 rows already present']
+  ['unchanged', 'unchanged'], ['not-engine-0', 'engine-1 rows already present'], ['unknown-exclude', '--exclude names no legacy trip']
 ];
 /** A recalculation that turns an available quantity partial or unavailable: worth a look, and `--exclude` keeps the old value. */
 function downgrades(action: RepairQuantitiesAction): string[] {

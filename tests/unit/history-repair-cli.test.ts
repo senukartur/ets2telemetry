@@ -86,7 +86,7 @@ describe('REG-014 history repair arguments', () => {
 
 const summary = (overrides: Partial<RepairSummary> = {}): RepairSummary => ({outcome: 'delivered', recordingCompleteness: 'partial', sources: 3,
   distanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}, deliveredDistanceM: {available: true, value: 187342.01049804688},
-  revenue: {available: true, value: {raw: '9978', sdkType: 's64'}}, hardMode: {passingChecks: 178, failingChecks: 0, unknownChecks: 74, qualified: true},
+  revenue: {available: true, value: {raw: '9978', sdkType: 's64'}}, moneyIncomplete: false, hardMode: {passingChecks: 178, failingChecks: 0, unknownChecks: 74, qualified: true},
   upload: {bound: false, held: false, holdReason: null, identity: 'resolved'}, ...overrides});
 
 describe('REG-014 history repair plan', () => {
@@ -144,15 +144,17 @@ describe('REG-014 history repair plan', () => {
       `  ${S} -> ${T}: already-applied`
     ]);
   });
-  // ET-112g2: the recalculations, the roots left on engine 0 and a flagged downgrade.
+  // ET-112g2: the recalculations, the roots left on engine 0, a flagged downgrade, a cleared money latch and an unknown --exclude.
   const Q = '10000000-0000-4000-8000-000000000008', E = '10000000-0000-4000-8000-000000000009', O = '10000000-0000-4000-8000-00000000000a';
+  const X = '10000000-0000-4000-8000-0000000000ee';
   const recalculated = (): RepairPlan => {
     const actions: RepairPlan['actions'] = [
       {kind: 'quantities', logicalTripUuid: T, fingerprint: F, before: summary(), after: summary({distanceM: {available: true, value: 180}, fuelUsedL: {available: true, value: 0.09},
         accounting: {distance: 'complete', fuel: 'complete'}})},
-      {kind: 'quantities', logicalTripUuid: Q, fingerprint: F, before: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.03}}),
+      {kind: 'quantities', logicalTripUuid: Q, fingerprint: F, before: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.03}, moneyIncomplete: true}),
         after: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.02}, accounting: {distance: 'complete', fuel: 'partial'}})}];
-    return {...plan(), attested: [], excluded: [E], actions, listings: [], quantityListings: [{logicalTripUuid: E, reason: 'excluded'}, {logicalTripUuid: O, reason: 'open-member'}],
+    return {...plan(), attested: [], excluded: [E], actions, listings: [], quantityListings: [{logicalTripUuid: E, reason: 'excluded'}, {logicalTripUuid: O, reason: 'open-member'},
+      {logicalTripUuid: X, reason: 'unknown-exclude'}],
       confirmation: repairConfirmationCode(actions)};
   };
   it('accepts a plan with recalculations and refuses one without its quantity listings or with a recalculation that names no trip', () => {
@@ -163,7 +165,7 @@ describe('REG-014 history repair plan', () => {
     expect(parseRepairPlan(JSON.stringify({...p, actions: [{...p.actions[0], logicalTripUuid: 'a9946860'}]}))).toBeUndefined();
   });
   it('reports each recalculation with its before and after values, flags a downgrade and lists the roots left on engine 0', () => {
-    const p = recalculated(), rest = 'game distance 187342.01049804688 m, revenue 9978 (s64), Hard Mode 178/0/74 qualified, upload unbound, identity resolved';
+    const p = recalculated(), delivery = 'game distance 187342.01049804688 m, revenue 9978 (s64)', rest = `${delivery}, Hard Mode 178/0/74 qualified, upload unbound, identity resolved`;
     expect(planLines(p)).toEqual([
       'Database f0000000-0000-4000-8000-000000000009, schema 10',
       'Joins to apply: 0',
@@ -172,12 +174,13 @@ describe('REG-014 history repair plan', () => {
       `    before: delivered, recording partial, 3 recordings, distance not-observed, fuel not-observed, ${rest}`,
       `    after:  delivered, recording partial, 3 recordings, distance 180 m (complete), fuel 0.09 L (complete), ${rest}`,
       `  ${Q}`,
-      `    before: delivered, recording partial, 3 recordings, distance 60 m, fuel 0.03 L, ${rest}`,
+      `    before: delivered, recording partial, 3 recordings, distance 60 m, fuel 0.03 L, ${delivery}, money totals incomplete, Hard Mode 178/0/74 qualified, upload unbound, identity resolved`,
       `    after:  delivered, recording partial, 3 recordings, distance 60 m (complete), fuel 0.02 L (partial), ${rest}`,
       '    DOWNGRADE: fuel becomes partial',
-      'Legacy trips whose distance and fuel stay as recorded: 2',
+      'Legacy trips whose distance and fuel stay as recorded: 3',
       `  ${E} (excluded)`,
       `  ${O} (a recording is still open)`,
+      `  ${X} (--exclude names no legacy trip)`,
       `Confirmation code: ${p.confirmation}`
     ]);
     expect(resultLines({format: 'ets2telemetry-history-repair-result-1', databaseUuid: p.databaseUuid, backupFileName: 'repair-f0000000-v10-20261112T120000000Z.sqlite', confirmation: p.confirmation,

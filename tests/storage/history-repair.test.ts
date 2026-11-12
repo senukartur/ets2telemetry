@@ -35,14 +35,18 @@ const UNPROVEN = {...S3, profileFromMs: 99_999};
 const T = incidentTripUuid(0), S = incidentTripUuid(2), APP = '0.1.0-test';
 const notObserved = {available: false, reason: 'not-observed'} as const;
 const near = (value: number) => ({available: true, value: expect.closeTo(value, 9)});
-/** The incident root after the attested join: an engine-0 target keeps distance and fuel not observed until its recalculation. */
+/**
+ * The incident root after the attested join: an engine-0 target keeps distance and fuel not observed until its
+ * recalculation, and its money totals incomplete: engine 0 latched them when the second recording's load at the same save
+ * point could not be retained (an unresolved rollback).
+ */
 const AFTER: RepairSummary = {outcome: 'delivered', recordingCompleteness: 'partial', sources: 3, distanceM: notObserved, fuelUsedL: notObserved,
-  deliveredDistanceM: {available: true, value: 187342.01049804688}, revenue: {available: true, value: {raw: '9978', sdkType: 's64'}},
+  deliveredDistanceM: {available: true, value: 187342.01049804688}, revenue: {available: true, value: {raw: '9978', sdkType: 's64'}}, moneyIncomplete: true,
   hardMode: {passingChecks: 178, failingChecks: 0, unknownChecks: 74, qualified: true}, upload: {bound: false, held: false, holdReason: null, identity: null}};
 /** ET-112g2: the Journal provenance of an engine-1 root without break or quality bits. */
 const COMPLETE_ACCOUNTING = {engine: 1, distance: {status: 'complete', breaks: [], quality: []}, fuel: {status: 'complete', breaks: [], quality: []}};
-/** The joined incident root after its recalculation: 180 m and 0.09 L, complete. */
-const RECALCULATED = {...AFTER, distanceM: near(180), fuelUsedL: near(0.09), accounting: {distance: 'complete', fuel: 'complete'}};
+/** The joined incident root after its recalculation: 180 m and 0.09 L, complete; engine 1 supports both junctions, so the money latch clears. */
+const RECALCULATED = {...AFTER, distanceM: near(180), fuelUsedL: near(0.09), accounting: {distance: 'complete', fuel: 'complete'}, moneyIncomplete: false};
 
 /** Records the incident (or `build`) at schema 8 in `file`, then reopens it once at the current schema. */
 async function legacy(file = ws.database, build?: (storage: Storage) => void, purpose: Purpose = 'synthetic'): Promise<void> {
@@ -156,14 +160,17 @@ describe('ET-112g history repair of the legacy incident', () => {
     expect(joins(plan)).toEqual([]);
     expect(plan.listings).toEqual([{segmentTripUuid: S, targetTripUuid: T, state: 'needs-attestation', reason: null}]);
     // ET-112g2: engine 0 already shows the target's live join, 40 + 40 = 80 m on 0.02 + 0.02 = 0.04 L across the same save
-    // point, and the segment's singleton its own 100 m and 0.05 L; engine 1 gives the same, so neither is recalculated.
+    // point, and the segment's singleton its own 100 m and 0.05 L; engine 1 gives the same. Engine 0 latched the target's
+    // money totals incomplete at that save point, which engine 1 supports, so the target is recalculated for the money
+    // completeness alone, shown before and after; the segment is unchanged.
     const storage = await storageOf(ws.database);
-    expect(ok(storage.journalTrip(T)).trip).toMatchObject({observedDistanceM: near(80), fuelUsedL: near(0.04)});
-    expect(ok(storage.journalTrip(S)).trip).toMatchObject({observedDistanceM: near(100), fuelUsedL: near(0.05)});
+    expect(ok(storage.journalTrip(T))).toMatchObject({trip: {observedDistanceM: near(80), fuelUsedL: near(0.04)}, money: {incomplete: true}});
+    expect(ok(storage.journalTrip(S))).toMatchObject({trip: {observedDistanceM: near(100), fuelUsedL: near(0.05)}, money: {incomplete: false}});
     ok(storage.close());
-    expect(recalculations(plan)).toEqual([]);
-    expect(plan.quantityListings).toEqual([{logicalTripUuid: T, reason: 'unchanged'}, {logicalTripUuid: S, reason: 'unchanged'}]);
-    expect(plan.confirmation).toBe(repairConfirmationCode([]));
+    expect(recalculations(plan)).toMatchObject([{logicalTripUuid: T, before: {distanceM: near(80), fuelUsedL: near(0.04), moneyIncomplete: true},
+      after: {distanceM: near(80), fuelUsedL: near(0.04), accounting: {distance: 'complete', fuel: 'complete'}, moneyIncomplete: false}}]);
+    expect(plan.quantityListings).toEqual([{logicalTripUuid: S, reason: 'unchanged'}]);
+    expect(plan.confirmation).toBe(repairConfirmationCode(plan.actions));
   });
   it('never changes the input, its sidecars or the scratch directory, also after an injected failure', async () => {
     await legacy();
@@ -612,5 +619,53 @@ describe('ET-112g2 engine-1 recalculation of legacy distance and fuel (REG-008, 
     writeFileSync(forged, JSON.stringify({...plan, actions, confirmation: code}));
     expect((await applied(ws.database, forged, code)).actions).toEqual([{logicalTripUuid: T, status: 'already-applied'}]);
     expect(digestOf(ws.database)).toEqual(digest);
+  });
+  const engineOf = (file: string) => readOnly(file, db => db.prepare(`SELECT l.accounting_engine, count(p.id) AS flagged FROM logical_trips l
+    LEFT JOIN logical_progress p ON p.logical_ref = l.id AND p.quantity_flags IS NOT NULL WHERE l.id = 1`).get());
+  // Without --attest the target alone is recalculated, for its money completeness (see the first incident test).
+  it('finds the target recalculation stale after a live join into the target since the dry run', async () => {
+    await legacy();
+    const {plan, out} = await dryRun(ws.database);
+    expect(plan.actions.map(action => action.kind)).toEqual(['quantities']);
+    const storage = await storageOf(ws.database);
+    drive(storage, {...S2, session: EXTRA_SESSIONS[0]});
+    ok(storage.close());
+    expect(membership(ws.database, tripUuidFor(EXTRA_SESSIONS[0], '1'))).toMatchObject({logical_ref: 1});
+    const digest = digestOf(ws.database);
+    expect((await applied(ws.database, out, plan.confirmation)).actions).toEqual([{logicalTripUuid: T, status: 'stale'}]);
+    expect(digestOf(ws.database)).toEqual(digest);
+    expect(engineOf(ws.database)).toEqual({accounting_engine: 0, flagged: 0});
+  });
+  it('rolls back a recalculation whose planned money completeness was edited', async () => {
+    await legacy();
+    const {plan} = await dryRun(ws.database), [action] = recalculations(plan);
+    expect([action.before.moneyIncomplete, action.after.moneyIncomplete]).toEqual([true, false]);
+    const actions = [{...action, after: {...action.after, moneyIncomplete: true}}], edited = fresh('edited.json');
+    writeFileSync(edited, JSON.stringify({...plan, actions, confirmation: repairConfirmationCode(actions)}));
+    const digest = digestOf(ws.database);
+    expect((await applied(ws.database, edited, repairConfirmationCode(actions))).actions).toEqual([{logicalTripUuid: T, status: 'differs'}]);
+    expect(digestOf(ws.database)).toEqual(digest);
+    expect(engineOf(ws.database)).toEqual({accounting_engine: 0, flagged: 0});
+  });
+  it('refuses a forged recalculation with the current fingerprint of a root without truck evidence and writes nothing', async () => {
+    await legacy();
+    const db = new Database(ws.database);
+    try { db.prepare('UPDATE logical_progress SET truck_ref = NULL WHERE logical_ref = 1').run(); } finally { db.close(); }
+    const {plan} = await dryRun(ws.database);
+    expect(plan.quantityListings).toContainEqual({logicalTripUuid: T, reason: 'no-truck-evidence'});
+    const fingerprint = safe(ws.database, db => repairFingerprint(db, 1n, 1n));
+    const actions: RepairPlan['actions'] = [{kind: 'quantities', logicalTripUuid: T, fingerprint, before: AFTER, after: AFTER}];
+    const forged = fresh('forged.json'), code = repairConfirmationCode(actions), digest = digestOf(ws.database);
+    writeFileSync(forged, JSON.stringify({...plan, actions, confirmation: code}));
+    expect((await applied(ws.database, forged, code)).actions).toEqual([{logicalTripUuid: T, status: 'refused'}]);
+    expect(digestOf(ws.database)).toEqual(digest);
+    expect(engineOf(ws.database)).toEqual({accounting_engine: 0, flagged: 0});
+  });
+  it('lists an --exclude UUID that names no legacy root', async () => {
+    await legacy();
+    const unknown = '10000000-0000-4000-8000-0000000000ee';
+    const {plan} = await dryRun(ws.database, [], undefined, [unknown]);
+    expect(recalculations(plan).map(action => action.logicalTripUuid)).toEqual([T]);
+    expect(plan.quantityListings).toEqual([{logicalTripUuid: S, reason: 'unchanged'}, {logicalTripUuid: unknown, reason: 'unknown-exclude'}]);
   });
 });

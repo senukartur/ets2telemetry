@@ -68,6 +68,7 @@ export function repairSummary(conn: StorageConnection, tripUuid: string): Repair
     distanceM: available(detail.trip.observedDistanceM), fuelUsedL: available(detail.trip.fuelUsedL),
     // Absent rather than undefined for an engine-0 root, so the plan file's JSON compares equal after a round trip.
     ...(accounting ? {accounting: {distance: accounting.distance.status, fuel: accounting.fuel.status}} : {}),
+    moneyIncomplete: detail.money.incomplete,
     deliveredDistanceM: delivered ? available(delivered.distance) : null,
     revenue: delivered ? (delivered.revenue.available ? {available: true, value: {raw: delivered.revenue.value.raw, sdkType: delivered.revenue.value.sdkType}} : {available: false, reason: delivered.revenue.reason}) : null,
     hardMode: audit?.version === 2 ? {passingChecks: audit.passingChecks, failingChecks: audit.failingChecks, unknownChecks: audit.unknownChecks, qualified: detail.trip.isHardMode} : null,
@@ -113,8 +114,11 @@ function joinTransaction(conn: StorageConnection, segmentUuid: string, targetUui
   return result;
 }
 
-/** The same shown distance and fuel: the same state and reason, and values within a micrometre or a microlitre. */
-const sameQuantities = (a: RepairSummary, b: RepairSummary) => [[a.distanceM, b.distanceM], [a.fuelUsedL, b.fuelUsedL]].every(([x, y]) =>
+/**
+ * The same shown distance and fuel (the same state and reason, and values within a micrometre or a microlitre) and the
+ * same money completeness, which the recalculation's cleared latch can change.
+ */
+const sameQuantities = (a: RepairSummary, b: RepairSummary) => a.moneyIncomplete === b.moneyIncomplete && [[a.distanceM, b.distanceM], [a.fuelUsedL, b.fuelUsedL]].every(([x, y]) =>
   x.available ? y.available && Math.abs(x.value - y.value) <= 1e-6 : !y.available && x.reason === y.reason);
 type QuantitiesResult = RepairActionResult & {fingerprint?: string; before?: RepairSummary; reason?: Extract<QuantityUpgrade, {status: 'not-eligible'}>['reason'] | 'unchanged'};
 /**
@@ -123,7 +127,7 @@ type QuantitiesResult = RepairActionResult & {fingerprint?: string; before?: Rep
  * never written; a fingerprint other than the planned one is `stale`; upgradeQuantities must still allow it (`refused`
  * otherwise, such as a root that gained an open member); the replay and the root's revision; the after-summary must
  * equal the planned one (`differs`, rolled back). Without `planned` (the dry run) a recalculation that leaves the shown
- * distance and fuel unchanged is rolled back as `unchanged`, so it publishes no needless correction.
+ * distance, fuel and money completeness unchanged is rolled back as `unchanged`, so it publishes no needless correction.
  */
 function quantitiesTransaction(conn: StorageConnection, logicalUuid: string, planned: {fingerprint: string; after: RepairSummary} | undefined, options?: RepairOptions): QuantitiesResult {
   const db = conn.writer();
@@ -167,7 +171,8 @@ export function applyRepairAction(conn: StorageConnection, action: RepairAction,
  * every attested join the rules allow at once, each in its own transaction, so a later segment sees the earlier joins.
  * Unattested candidates, published segments, pending segments and attested segments that cannot join are listed. Then
  * (g2) every legacy engine-0 root is recalculated in id order, 100 per page, each in its own transaction, except the
- * roots `exclude` names by their trip UUID; the roots left on engine 0 are listed with their reason. Never call it on a
+ * roots `exclude` names by their trip UUID; the roots left on engine 0 are listed with their reason, and so is an
+ * `exclude` UUID that names no such root (`unknown-exclude`). Never call it on a
  * database that is not a disposable copy.
  */
 export function planRepair(conn: StorageConnection, attest: readonly string[], options?: RepairOptions & {exclude?: readonly string[]}): RepairScan {
@@ -209,14 +214,15 @@ export function planRepair(conn: StorageConnection, attest: readonly string[], o
 
 /** The g2 part of planRepair, after the joins: recalculates each legacy root and returns the roots it leaves on engine 0. */
 function planQuantities(conn: StorageConnection, excluded: ReadonlySet<string>, actions: RepairAction[], options?: RepairOptions): RepairQuantityListing[] {
-  const db = conn.writer(), listings: RepairQuantityListing[] = [];
-  if (!quantitiesEnabled(db)) return listings;
+  const db = conn.writer(), listings: RepairQuantityListing[] = [], matched = new Set<string>();
+  const unknown = () => [...excluded].filter(uuid => !matched.has(uuid)).map((uuid): RepairQuantityListing => ({logicalTripUuid: uuid, reason: 'unknown-exclude'}));
+  if (!quantitiesEnabled(db)) return unknown();
   for (let after = 0n; ;) {
     const page = db.prepare(`SELECT l.id, l.trip_uuid FROM logical_trips l JOIN logical_memberships m ON m.trip_ref = l.id
       WHERE l.id > ? AND m.logical_ref = l.id AND l.accounting_engine = 0 ORDER BY l.id LIMIT ?`).all(after, SCAN_PAGE) as LogicalRow[];
     for (const row of page) {
       const uuid = String(row.trip_uuid);
-      if (excluded.has(uuid)) { listings.push({logicalTripUuid: uuid, reason: 'excluded'}); continue; }
+      if (excluded.has(uuid)) { matched.add(uuid); listings.push({logicalTripUuid: uuid, reason: 'excluded'}); continue; }
       const upgraded = quantitiesTransaction(conn, uuid, undefined, options);
       if (upgraded.status === 'applied') {
         const action: RepairQuantitiesAction = {kind: 'quantities', logicalTripUuid: uuid, fingerprint: upgraded.fingerprint!, before: upgraded.before!, after: upgraded.after!};
@@ -226,5 +232,5 @@ function planQuantities(conn: StorageConnection, excluded: ReadonlySet<string>, 
     if (page.length < SCAN_PAGE) break;
     after = page.at(-1)!.id as bigint;
   }
-  return listings;
+  return [...listings, ...unknown()];
 }

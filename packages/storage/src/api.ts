@@ -194,6 +194,8 @@ export interface RepairSummary {
   outcome: TripOutcome; recordingCompleteness: RecordingCompleteness; sources: number;
   distanceM: Available<number>; fuelUsedL: Available<number>;
   accounting?: {distance: JournalQuantityStatus; fuel: JournalQuantityStatus};
+  /** The Journal's money totals are marked incomplete (an unresolved rollback, or a cut on the engine-1 path). */
+  moneyIncomplete: boolean;
   deliveredDistanceM: Available<number> | null; revenue: Available<{raw: string; sdkType: string}> | null;
   hardMode: {passingChecks: number; failingChecks: number; unknownChecks: number; qualified: boolean} | null;
   upload: {bound: boolean; held: boolean; holdReason: string | null; identity: string | null};
@@ -218,9 +220,12 @@ export type RepairAction = RepairJoinAction | RepairQuantitiesAction;
 /**
  * A legacy engine-0 root the dry run does not recalculate: `excluded` by `--exclude`, an `open-member`, more recorded
  * samples than one upgrade replays (`too-large`), no complete reading (`no-truck-evidence`), a recalculation that
- * would leave the shown distance and fuel `unchanged`, or engine-1 rows already in the group (`not-engine-0`).
+ * would leave the shown distance, fuel and money completeness `unchanged`, or engine-1 rows already in the group
+ * (`not-engine-0`). An `--exclude` UUID that names no legacy engine-0 root is listed as `unknown-exclude`.
  */
-export interface RepairQuantityListing {logicalTripUuid: string; reason: 'excluded' | 'open-member' | 'too-large' | 'no-truck-evidence' | 'unchanged' | 'not-engine-0'}
+export interface RepairQuantityListing {
+  logicalTripUuid: string; reason: 'excluded' | 'open-member' | 'too-large' | 'no-truck-evidence' | 'unchanged' | 'not-engine-0' | 'unknown-exclude';
+}
 /**
  * A segment the dry run reports without an action: `needs-attestation` (a candidate that needs the owner's evidence),
  * `reconciliation-required` (the segment was published separately and is never joined), `wait` (its decision is still
