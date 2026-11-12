@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {compatibleContinuation, continuationFingerprint, continuationIdentityFingerprint} from '../../packages/telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationFingerprint} from '../../packages/telemetry-core/src/trips/continuation';
 import {decideMembership, decideRepairJoin, decideRetroactive, retroactiveGate, type MembershipCandidate, type MembershipDecision, type MembershipEvidence, type RepairJoinDecision,
   type RepairJoinFacts, type RepairTargetFacts, type RetroactiveDecision, type RetroactiveFacts, type RetroactiveSeparate} from '../../packages/telemetry-core/src/trips/membership';
 import {INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB} from '../shared/trip-continuation-incident';
@@ -13,30 +13,25 @@ const missingCargo = {...INCIDENT_JOB, cargoId: {available: false, reason: 'not-
 
 describe('REG-003/REG-008 continuation membership decisions', () => {
   it('builds the incident job fingerprint from exact canonical fields only', () => {
-    expect(F).toMatch(/^job-v1:/);
+    expect(F).toMatch(/^job-v2:/);
     expect(continuationFingerprint({...INCIDENT_JOB, cargo: {available: true, value: 'Localized cargo'}, cargoLoaded: {available: true, value: false}})).toBe(F);
     expect(continuationFingerprint(INCIDENT_OTHER_JOB)).not.toBe(F);
   });
-  it('treats a missing deadline and the u32 maximum deadline as unavailable identity evidence', () => {
-    expect(continuationIdentityFingerprint(INCIDENT_JOB_WITHOUT_DEADLINE)).toBeNull();
-    expect(continuationIdentityFingerprint(INCIDENT_JOB_U32_MAX_DEADLINE)).toBeNull();
-    expect(continuationIdentityFingerprint(INCIDENT_JOB)).toBe(F);
-    expect(continuationIdentityFingerprint({...INCIDENT_JOB, deliveryDeadline: {available: true, value: '4294967294', unit: 'min'}})).not.toBeNull();
-  });
-  it('keeps the u32 maximum deadline a same-job value outside continuation identity', () => {
-    expect(continuationFingerprint(INCIDENT_JOB_U32_MAX_DEADLINE)).not.toBeNull();
-    expect(compatibleContinuation(INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_U32_MAX_DEADLINE)).toBe(true);
-    expect(compatibleContinuation(INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB)).toBe(false);
+  it('leaves the delivery deadline out of continuation identity, whatever its value or availability', () => {
+    expect(continuationFingerprint(INCIDENT_JOB_WITHOUT_DEADLINE)).toBe(F);
+    expect(continuationFingerprint(INCIDENT_JOB_U32_MAX_DEADLINE)).toBe(F);
+    expect(continuationFingerprint({...INCIDENT_JOB, deliveryDeadline: {available: true, value: '4294967294', unit: 'min'}})).toBe(F);
+    expect(compatibleContinuation(INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB)).toBe(true);
+    expect(compatibleContinuation(INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_JOB_U32_MAX_DEADLINE)).toBe(true);
   });
   const table: [string, Partial<MembershipEvidence<string>>, MembershipDecision<string>][] = [
     ['unverified profile', {profileVerified: false, candidates: [match('A')]}, {state: 'pending', reason: 'profile-unverified'}],
-    ['current reading without a deadline', {currentJob: INCIDENT_JOB_WITHOUT_DEADLINE}, {state: 'pending', reason: 'job-evidence-incomplete'}],
-    ['current reading with the u32 maximum deadline', {currentJob: INCIDENT_JOB_U32_MAX_DEADLINE}, {state: 'pending', reason: 'job-evidence-incomplete'}],
+    ['current reading without a deadline', {currentJob: INCIDENT_JOB_WITHOUT_DEADLINE, candidates: [match('A')]}, {state: 'joined', reason: 'matched', target: 'A', fingerprint: F}],
+    ['current reading with the u32 maximum deadline', {currentJob: INCIDENT_JOB_U32_MAX_DEADLINE, candidates: [match('A')]}, {state: 'joined', reason: 'matched', target: 'A', fingerprint: F}],
     ['current reading without cargo', {currentJob: missingCargo}, {state: 'pending', reason: 'job-evidence-incomplete'}],
-    ['recorded job without a deadline', {recordedJob: INCIDENT_JOB_WITHOUT_DEADLINE, candidates: [match('A')]},
-      {state: 'root', reason: 'deadline-unavailable', fingerprint: null, interrupt: false}],
-    ['recorded job with the u32 maximum deadline', {recordedJob: INCIDENT_JOB_U32_MAX_DEADLINE, currentJob: INCIDENT_JOB_U32_MAX_DEADLINE},
-      {state: 'root', reason: 'deadline-unavailable', fingerprint: null, interrupt: false}],
+    ['recorded job without a deadline', {recordedJob: INCIDENT_JOB_WITHOUT_DEADLINE, candidates: [match('A')]}, {state: 'joined', reason: 'matched', target: 'A', fingerprint: F}],
+    ['recorded job with the u32 maximum deadline', {recordedJob: INCIDENT_JOB_U32_MAX_DEADLINE, currentJob: INCIDENT_JOB_U32_MAX_DEADLINE, candidates: [match('A')]},
+      {state: 'joined', reason: 'matched', target: 'A', fingerprint: F}],
     ['recorded job without cargo', {recordedJob: missingCargo}, {state: 'root', reason: 'recorded-job-incomplete', fingerprint: null, interrupt: false}],
     ['current reading of another complete job', {currentJob: INCIDENT_OTHER_JOB}, {state: 'root', reason: 'job-evidence-conflict', fingerprint: null, interrupt: true}],
     ['conflicting learned offer fields', {consistent: false, candidates: [match('A')]}, {state: 'root', reason: 'job-evidence-conflict', fingerprint: null, interrupt: true}],
@@ -118,6 +113,11 @@ describe('REG-005/REG-008 owner-attested repair join of a closed proof-less segm
       expect(decide({attested, ownRootBound: true, decision: {state: 'root', reason: 'no-candidate'}})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
     }
   });
+  it.each([['without a deadline', INCIDENT_JOB_WITHOUT_DEADLINE], ['with the u32 maximum deadline', INCIDENT_JOB_U32_MAX_DEADLINE]] as const)(
+    'joins or lists an undecided segment whose recorded job is %s', (_name, recordedJob) => {
+      expect(decide({}, {recordedJob})).toEqual({state: 'joined', target: 'A', fingerprint: F});
+      expect(decide({attested: false}, {recordedJob})).toEqual({state: 'needs-attestation', target: 'A', fingerprint: F});
+    });
   it('lets a pending segment wait before any candidate is read', () => {
     expect(decideRepairJoin({...attested, decision: {state: 'pending', reason: 'profile-unverified'}}, {recordedJob: INCIDENT_JOB, consistent: true, candidates: [match('A')]},
       () => { throw new Error('not read'); }, 7n)).toEqual({state: 'wait', reason: 'pending'});
@@ -130,8 +130,6 @@ describe('REG-005/REG-008 owner-attested repair join of a closed proof-less segm
     ['no candidate', {}, {candidates: []}, {}, notEligible('no-candidate')],
     ['an incompatible candidate', {}, {candidates: [match('A', false)]}, {}, notEligible('no-candidate')],
     ['inconsistent learned offer fields', {}, {consistent: false}, {}, notEligible('job-evidence-conflict')],
-    ['a recorded job without a deadline', {}, {recordedJob: INCIDENT_JOB_WITHOUT_DEADLINE}, {}, notEligible('deadline-unavailable')],
-    ['a recorded job with the u32 maximum deadline', {}, {recordedJob: INCIDENT_JOB_U32_MAX_DEADLINE}, {}, notEligible('deadline-unavailable')],
     ['a recorded job without cargo', {}, {recordedJob: missingCargo}, {}, notEligible('recorded-job-incomplete')],
     ['a target that continued at the segment', {}, {}, {A: {latest: 7n}}, notEligible('out-of-order')],
     ['a target that continued after the segment', {}, {}, {A: {latest: 9n}}, notEligible('out-of-order')],

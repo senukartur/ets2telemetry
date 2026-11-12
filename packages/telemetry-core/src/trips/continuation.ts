@@ -6,8 +6,9 @@ export interface ProfileObservation {
   version: 1; scope: string; binding: string; game: 'ets2' | 'ats'; pluginSessionId: string;
   processInstanceId: string; sourceClockId: string; afterMonotonicNs: string; loadGeneration: number;
 }
+/** The delivery deadline is deliberately excluded: generated, convoy and external jobs carry arbitrary deadlines. */
 export const CONTINUATION_FIELDS = ['cargoId', 'sourceCityId', 'sourceCompanyId', 'destinationCityId', 'destinationCompanyId',
-  'cargoMass', 'market', 'deliveryDeadline', 'expectedIncome'] as const;
+  'cargoMass', 'market', 'expectedIncome'] as const;
 const EXTRA_FIELDS = ['cargoUnitMass', 'cargoUnitCount', 'isSpecialJob', 'plannedDistance'] as const;
 export type ContinuationConstraints = Partial<Record<typeof EXTRA_FIELDS[number], unknown>>;
 /** Learned canonical values survive later unavailable observations; at most four optional offer fields are retained. */
@@ -31,16 +32,7 @@ export function continuationFingerprint(job: JobConfiguration): string | null {
     if (typeof value === 'string' && !value.length || typeof value === 'number' && (!Number.isFinite(value) || value < 0)) return null;
     values.push(field === 'expectedIncome' ? {raw: job.expectedIncome.available ? job.expectedIncome.value.raw : '', sdkType: job.expectedIncome.available ? job.expectedIncome.value.sdkType : ''} : value);
   }
-  return `job-v1:${canonicalJson(values)}`;
-}
-/** The SDK defines no deadline sentinel; the u32 maximum cannot distinguish one job from another. */
-export const U32_DEADLINE_SENTINEL = '4294967295';
-/**
- * The fingerprint of automatic continuation identity: continuationFingerprint, but null when the deadline is the u32
- * maximum. Same-job checks within one recording keep using continuationFingerprint and compatibleContinuation.
- */
-export function continuationIdentityFingerprint(job: JobConfiguration): string | null {
-  return job.deliveryDeadline?.available && job.deliveryDeadline.value === U32_DEADLINE_SENTINEL ? null : continuationFingerprint(job);
+  return `job-v2:${canonicalJson(values)}`;
 }
 export function compatibleContinuation(a: JobConfiguration, b: JobConfiguration): boolean {
   const key = continuationFingerprint(a);

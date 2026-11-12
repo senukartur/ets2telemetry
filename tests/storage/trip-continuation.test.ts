@@ -21,8 +21,8 @@ import type {SampleInput, Storage} from '../../packages/storage/src';
 import {attachTripUuidFor,tripUuidFor, type EventMessage, type ProfileObservation} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail, validateJournalEventPage,validateJournalIntervalPage,type JournalTripDetail,type JournalTripPage} from '../../packages/contracts/src/journal';
 import {ETS2_A, ETS2_B, GAME_CLOCK_1, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
-import {FINAL_PROCESS_PROFILE_DELAY_MS, INCIDENT_EXPECTED, INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB,
-  INCIDENT_OTHER_JOB_WITHOUT_DEADLINE, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentDelivered, incidentTripUuid, type IncidentSegment} from '../shared/trip-continuation-incident';
+import {FINAL_PROCESS_PROFILE_DELAY_MS, INCIDENT_EXPECTED, INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_CARGO_ID, INCIDENT_JOB_WITHOUT_DEADLINE,
+  INCIDENT_OTHER_JOB, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentDelivered, incidentTripUuid, type IncidentSegment} from '../shared/trip-continuation-incident';
 import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
 import {MIGRATIONS,openStorage} from '../../packages/storage/src';
 import {ok,failed,digestOf,readOnly,STORAGE_FIXTURES,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
@@ -1828,6 +1828,15 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expectIncidentHardMode(storage);
     expect([0,1,2].map(index=>ok(storage.getTrip(incidentTripUuid(index)))?.isHardMode)).toEqual([false,false,false]);
   });
+  // ET-112i: the staging World of Trucks contract carried the u32 maximum deadline in every recording. The deadline takes no
+  // part in continuation identity, so the same three recordings join; game mode takes no part either, so the corpus mode suffices.
+  it.each([['the u32 maximum deadline',INCIDENT_JOB_U32_MAX_DEADLINE],['an unavailable deadline',INCIDENT_JOB_WITHOUT_DEADLINE]] as const)(
+    'M1 joins the three incident segments of a job with %s into one delivered trip',async(_name,values)=>{
+      const {storage}=await incident(await ws.open(),0,undefined,()=>({job:values}));
+      expectIncident(storage);expectIncidentQuantities(storage);expectIncidentHardMode(storage);
+      expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
+      expect(ok(storage.listTrips()).trips).toHaveLength(INCIDENT_EXPECTED.rawTrips);
+    });
   it.each([
     // 171 x 100 = 17,100 >= 180 x 95 = 17,100: the inclusive threshold qualifies.
     {failing:9,qualified:true},
@@ -1841,8 +1850,8 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
   });
   it.each(['recorded-incomplete','left-unresolved'] as const)('M2 continues among matching candidates while another job of the profile is unresolved: %s',async variant=>{
     let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);
-    // A recorded job without deadline evidence never retires; the second variant isolates the candidate lookup itself.
-    const other=drive(storage,{...INCIDENT_SEGMENTS[0],session:extra[0]},{job:variant==='recorded-incomplete'?INCIDENT_OTHER_JOB_WITHOUT_DEADLINE:INCIDENT_OTHER_JOB,
+    // A recorded job without complete identity evidence never retires; the second variant isolates the candidate lookup itself.
+    const other=drive(storage,{...INCIDENT_SEGMENTS[0],session:extra[0]},{job:variant==='recorded-incomplete'?{...INCIDENT_OTHER_JOB,cargoId:absent}:INCIDENT_OTHER_JOB,
       scope:variant==='left-unresolved'?otherScope:scope}).uuid;
     if(variant==='left-unresolved')storage=await reopen(storage,db=>db.prepare('UPDATE logical_trips SET profile_scope=? WHERE trip_uuid=?').run(scope,other));
     expect(trip(storage,other)).toMatchObject({outcome:'open'});
@@ -1851,9 +1860,9 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,other].sort());
     expect(trip(storage,other)).toMatchObject({outcome:'open'});
   });
-  it.each(['missing-cargo','u32-max'] as const)('M2 makes an incomplete recorded job of the profile its own root without retiring the candidate: %s',async variant=>{
+  it('M2 makes an incomplete recorded job of the profile its own root without retiring the candidate',async()=>{
     let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);
-    const incomplete=variant==='u32-max'?INCIDENT_JOB_U32_MAX_DEADLINE:{...INCIDENT_JOB,cargoId:{available:false as const,reason:'not-observed' as const}};
+    const incomplete=INCIDENT_JOB_WITHOUT_CARGO_ID;
     // The same verified profile records J without complete identity evidence; it can neither join nor replace A.
     const own=tripUuidFor(extra[0],'1'),last=INCIDENT_SEGMENTS[0].readings.length-1;
     drive(storage,{...INCIDENT_SEGMENTS[0],session:extra[0]},{job:incomplete,afterReading:reading=>{if(reading!==last)return;
@@ -1867,8 +1876,8 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(trip(storage,own)).toMatchObject({outcome:'open',closeReason:null});
     expect(ok(storage.journalTrips()).trips).toHaveLength(2);
   });
-  it.each(['missing','u32-max'] as const)('M3 keeps the candidate when a proof-bearing reading has no current deadline: %s',async variant=>{
-    const incomplete=variant==='missing'?INCIDENT_JOB_WITHOUT_DEADLINE:INCIDENT_JOB_U32_MAX_DEADLINE;
+  it('M3 keeps the candidate when a proof-bearing reading has no current cargo ID',async()=>{
+    const incomplete=INCIDENT_JOB_WITHOUT_CARGO_ID;
     let checked=false;const {storage}=await incident(await ws.open(),0,undefined,(index,current)=>index<2?{}:{
       // Reading 2 is the first one after the delayed proof; reading 3 carries the complete job again.
       readingJob:reading=>reading===2?incomplete:INCIDENT_JOB,
@@ -2026,9 +2035,9 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect((await reads.detail(root)).trip).not.toHaveProperty('membership');
   });
   it('ET-112e shows no pending profile check for a closed segment that is pending only for incomplete job evidence',async()=>{
-    // As M3, but every reading after the delayed proof lacks the deadline: the verified profile leaves segment C pending with
+    // As M3, but every reading after the delayed proof lacks the cargo ID: the verified profile leaves segment C pending with
     // reason job-evidence-incomplete through its delivery, so it stays its own root and carries no pending profile check.
-    const {storage}=await incident(await ws.open(),0,undefined,index=>index<2?{}:{readingJob:reading=>reading>=2?INCIDENT_JOB_WITHOUT_DEADLINE:INCIDENT_JOB});
+    const {storage}=await incident(await ws.open(),0,undefined,index=>index<2?{}:{readingJob:reading=>reading>=2?INCIDENT_JOB_WITHOUT_CARGO_ID:INCIDENT_JOB});
     const root=INCIDENT_EXPECTED.rootTripUuid,lastUuid=incidentTripUuid(2),reads=journalReads(storage);
     const rows=await reads.list();
     expect(rows.map(row=>row.tripUuid).sort()).toEqual([root,lastUuid].sort());

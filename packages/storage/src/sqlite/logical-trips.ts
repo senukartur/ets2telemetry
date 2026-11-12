@@ -4,7 +4,7 @@ import {gameDistanceStep} from '../../../telemetry-core/src/trips/game-distance'
 import {matchesSavedEndpoint, savedEndpointLimits} from '../../../telemetry-core/src/trips/saved-endpoint';
 import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
-import {compatibleContinuation, continuationIdentityFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
+import {compatibleContinuation, continuationFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {decideMembership, decideRetroactive, type MembershipCandidate} from '../../../telemetry-core/src/trips/membership';
 import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
 import type {CapturedEndpoint, CapturedRunning, SampleInput, TripEffect} from '../api';
@@ -91,7 +91,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
     else db.prepare('UPDATE logical_trips SET retired=1 WHERE id=?').run(id);
     return id;
   }
-  const fingerprint = continuationIdentityFingerprint(currentJob);
+  const fingerprint = continuationFingerprint(currentJob);
   // The logical_candidates index bounds the lookup; two matching rows already make the segment ambiguous.
   const rows = fingerprint === null ? [] : db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
     .all(row.game, proof.scope, fingerprint, id) as LogicalRow[];
@@ -195,7 +195,7 @@ export function closedCandidates(db: Database.Database, row: LogicalRow, group: 
   const id = row.id as bigint;
   const recordedJob = job(db, row), known = JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
   const recorded = learnContinuationConstraints(known, recordedJob), learned = recorded === null ? null : learnContinuationConstraints(recorded, recordedJob);
-  const fingerprint = continuationIdentityFingerprint(recordedJob);
+  const fingerprint = continuationFingerprint(recordedJob);
   const rows = fingerprint === null ? [] : (scope === null
     ? db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope IS NOT NULL AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`).all(row.game, fingerprint, id)
     : db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`).all(row.game, scope, fingerprint, id)) as LogicalRow[];

@@ -483,8 +483,8 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,false,true]);
   });
 
-  // ET-112b1: the u32-maximum deadline is unavailable only for automatic continuation identity; the recorder's same-job
-  // check on its trusted predecessor must still treat the job as unchanged (REG-008).
+  // ET-112b1: any deadline, the u32 maximum included, is an ordinary job value; the recorder's same-job check on its
+  // trusted predecessor must treat the job as unchanged (REG-008).
   it.each(['13000','4294967295'])('keeps admitted predecessor links for a job with deadline %s',async deadline=>{
     const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},token={};
     const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};

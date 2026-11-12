@@ -9,8 +9,8 @@ import {Storage, type SampleInput, type TripEffect} from '../../packages/storage
 import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import {contentDigest} from '../../packages/storage/src/sqlite/digest';
 import {attachTripUuidFor, tripUuidFor, type ProfileObservation} from '../../packages/telemetry-core/src';
-import {INCIDENT_JOB, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB, INCIDENT_OTHER_JOB_WITHOUT_DEADLINE, INCIDENT_SEGMENTS, incidentDelivered,
-  type IncidentSegment} from '../shared/trip-continuation-incident';
+import {INCIDENT_JOB, INCIDENT_JOB_WITHOUT_CARGO_ID, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB, INCIDENT_OTHER_JOB_WITHOUT_DEADLINE, INCIDENT_SEGMENTS,
+  incidentDelivered, type IncidentSegment} from '../shared/trip-continuation-incident';
 import {ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, r, Script} from '../shared/trip-messages';
 import {failed, ok, workspace} from './helpers';
 
@@ -85,19 +85,33 @@ describe('ET-112b2a membership decision rows for the b1 decisions', () => {
     expect(decisions(db)).toEqual([row(1, 1, 'root', 'no-candidate', 2), row(2, 2, 'joined', 'matched', 2, 1), row(3, 3, 'joined', 'matched', 2, 1)]);
     expect(boundaries(db)).toEqual([{plugin_session_ref: 1, through_event_seq: key(2)}, {plugin_session_ref: 2, through_event_seq: key(2)}]);
   });
-  it.each([['deadline-unavailable', INCIDENT_OTHER_JOB_WITHOUT_DEADLINE], ['recorded-job-incomplete', {...INCIDENT_JOB, cargoId: absent}]] as const)(
-    'M2 records an incomplete recorded job of the profile as its own root (%s) while the incident joins its candidate', async (reason, recorded) => {
-      const {storage, db} = await openDirect();
-      drive(storage, S1); drive(storage, {...S1, session: extra[0]}, {job: recorded}); drive(storage, S2); drive(storage, S3);
-      expect(decisions(db)).toEqual([row(1, 1, 'root', 'no-candidate', 2), row(2, 2, 'root', reason, 2), row(3, 3, 'joined', 'matched', 2, 1), row(4, 4, 'joined', 'matched', 2, 1)]);
-    });
-  it('M3 keeps the row pending with job-evidence-incomplete for a proof-bearing reading without a current deadline, then joins', async () => {
+  it('M2 records an incomplete recorded job of the profile as its own root (recorded-job-incomplete) while the incident joins its candidate', async () => {
+    const {storage, db} = await openDirect();
+    drive(storage, S1); drive(storage, {...S1, session: extra[0]}, {job: INCIDENT_JOB_WITHOUT_CARGO_ID}); drive(storage, S2); drive(storage, S3);
+    expect(decisions(db)).toEqual([row(1, 1, 'root', 'no-candidate', 2), row(2, 2, 'root', 'recorded-job-incomplete', 2), row(3, 3, 'joined', 'matched', 2, 1),
+      row(4, 4, 'joined', 'matched', 2, 1)]);
+  });
+  it('M2 records a different job without a deadline as a complete root that replaces the unresolved incident group', async () => {
+    const {storage, db} = await openDirect();
+    drive(storage, S1); drive(storage, {...S1, session: extra[0]}, {job: INCIDENT_OTHER_JOB_WITHOUT_DEADLINE}); drive(storage, S2); drive(storage, S3);
+    // Group 1 is retired by the other job, so S2 finds no candidate and replaces that job in turn; S3 joins S2.
+    expect(decisions(db)).toEqual([row(1, 1, 'root', 'no-candidate', 2), row(2, 2, 'root', 'no-candidate', 2), row(3, 3, 'root', 'no-candidate', 2),
+      row(4, 4, 'joined', 'matched', 2, 3)]);
+  });
+  it('M3 keeps the row pending with job-evidence-incomplete for a proof-bearing reading without a current cargo ID, then joins', async () => {
     const {storage, db} = await openDirect();
     drive(storage, S1); drive(storage, S2);
     let pending: unknown[] = [];
-    drive(storage, S3, {readingJob: reading => reading === 2 ? INCIDENT_JOB_WITHOUT_DEADLINE : INCIDENT_JOB, afterReading: reading => { if (reading === 2) pending = decisions(db).slice(2); }});
+    drive(storage, S3, {readingJob: reading => reading === 2 ? INCIDENT_JOB_WITHOUT_CARGO_ID : INCIDENT_JOB, afterReading: reading => { if (reading === 2) pending = decisions(db).slice(2); }});
     expect(pending).toEqual([row(3, 3, 'pending', 'job-evidence-incomplete', null)]);
     expect(decisions(db).at(-1)).toEqual(row(3, 3, 'joined', 'matched', 2, 1));
+  });
+  it('M3 joins at the first proof-bearing reading when it carries no deadline', async () => {
+    const {storage, db} = await openDirect();
+    drive(storage, S1); drive(storage, S2);
+    let joined: unknown[] = [];
+    drive(storage, S3, {readingJob: reading => reading === 2 ? INCIDENT_JOB_WITHOUT_DEADLINE : INCIDENT_JOB, afterReading: reading => { if (reading === 2) joined = decisions(db).slice(2); }});
+    expect(joined).toEqual([row(3, 3, 'joined', 'matched', null, 1)]);
   });
   it('M9 records an identical new job after the delivery as a root without a candidate', async () => {
     const {storage, db} = await openDirect();

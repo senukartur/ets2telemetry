@@ -16,8 +16,11 @@ describe('REG-003/004/008 continuation evidence', () => {
     expect(compatibleContinuation(a, b)).toBe(true);
     expect(continuationFingerprint(a)).toBe(continuationFingerprint(b));
   });
-  it('requires every mandatory canonical signal, including exact money and deadline', () => {
+  it('requires every mandatory canonical signal, including exact money, but not the delivery deadline', () => {
     expect(continuationFingerprint(job({cargoId: {available: false, reason: 'not-observed'}}))).toBeNull();
+    const deadline = job({deliveryDeadline: {available: true, value: '4294967295', unit: 'min'}});
+    expect(compatibleContinuation(job(), deadline)).toBe(true);
+    expect(continuationFingerprint(deadline)).toBe(continuationFingerprint(job()));
     expect(compatibleContinuation(job(), otherJob())).toBe(false);
     expect(compatibleContinuation(job(), job({plannedDistance: {available: true, value: 123, unit: 'm'}}))).toBe(false);
   });
