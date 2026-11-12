@@ -238,7 +238,7 @@ export interface RepairResult {
 /** A history repair refusal that is not a storage failure; `message` is fixed text. */
 export interface RepairRefusal {
   code: 'REPAIR_REFUSED';
-  reason: 'plan-invalid' | 'confirmation-mismatch' | 'database-mismatch' | 'working-history-flag' | 'working-history-schema' | 'path-invalid';
+  reason: 'plan-invalid' | 'confirmation-mismatch' | 'database-mismatch' | 'working-history-flag' | 'working-history-schema' | 'path-invalid' | 'target-exists';
   message: string;
 }
 

@@ -8,25 +8,43 @@ import {canonicalJson, parseRepairPlan, repairConfirmationCode} from '../../pack
 import {checkConfirmation, parseArguments, UsageError} from '../../tools/history-repair/src/arguments';
 import {planLines, resultLines} from '../../tools/history-repair/src/summary';
 
-const CWD = path.resolve('/repair-work');
+const WORK = path.resolve('/repair-work'), at = (name: string) => path.join(WORK, name);
 const S = '10000000-0000-4000-8000-000000000003', T = '10000000-0000-4000-8000-000000000001', F = 'a'.repeat(64);
 const refused = (argv: string[], message: RegExp) => {
-  expect(() => parseArguments(argv, CWD)).toThrow(UsageError);
-  expect(() => parseArguments(argv, CWD)).toThrow(message);
+  expect(() => parseArguments(argv)).toThrow(UsageError);
+  expect(() => parseArguments(argv)).toThrow(message);
 };
 
 describe('REG-014 history repair arguments', () => {
-  it('parses each command with explicit paths resolved against the working directory', () => {
-    expect(parseArguments(['copy', '--from', 'a.sqlite', '--to', 'b.sqlite'], CWD)).toEqual({command: 'copy', from: path.join(CWD, 'a.sqlite'), to: path.join(CWD, 'b.sqlite')});
-    expect(parseArguments(['dry-run', '--database', 'a.sqlite', '--attest', S, '--out', 'plan.json', '--attest', S, '--attest', T], CWD))
-      .toEqual({command: 'dry-run', database: path.join(CWD, 'a.sqlite'), out: path.join(CWD, 'plan.json'), attest: [S, T]});
-    expect(parseArguments(['apply', '--database', 'a.sqlite', '--plan', 'plan.json', '--confirm', '0123abcd', '--working-history', '--backups', 'kept'], CWD))
-      .toEqual({command: 'apply', database: path.join(CWD, 'a.sqlite'), plan: path.join(CWD, 'plan.json'), confirm: '0123abcd', workingHistory: true, backups: path.join(CWD, 'kept')});
-    expect(parseArguments(['apply', '--database', 'a.sqlite', '--plan', 'plan.json', '--confirm', '0123abcd'], CWD)).toMatchObject({workingHistory: false});
+  it('parses each command with explicit absolute paths', () => {
+    expect(parseArguments(['copy', '--from', at('a.sqlite'), '--to', at('b.sqlite')])).toEqual({command: 'copy', from: at('a.sqlite'), to: at('b.sqlite')});
+    expect(parseArguments(['dry-run', '--database', at('a.sqlite'), '--attest', S, '--out', at('plan.json'), '--attest', S, '--attest', T]))
+      .toEqual({command: 'dry-run', database: at('a.sqlite'), out: at('plan.json'), attest: [S, T]});
+    expect(parseArguments(['apply', '--database', at('a.sqlite'), '--plan', at('plan.json'), '--confirm', '0123abcd', '--working-history', '--backups', at('kept')]))
+      .toEqual({command: 'apply', database: at('a.sqlite'), plan: at('plan.json'), confirm: '0123abcd', workingHistory: true, backups: at('kept')});
+    expect(parseArguments(['apply', '--database', at('a.sqlite'), '--plan', at('plan.json'), '--confirm', '0123abcd'])).toMatchObject({workingHistory: false});
+  });
+  // npm runs the tool from the checkout root, so a relative path would put a copy or a plan with trip data in the repository.
+  it.each([
+    ['copy --from', ['copy', '--from', 'a.sqlite', '--to', at('b.sqlite')], '--from', 'a.sqlite'],
+    ['copy --to', ['copy', '--from', at('a.sqlite'), '--to', 'b.sqlite'], '--to', 'b.sqlite'],
+    ['dry-run --database', ['dry-run', '--database', path.join('data', 'a.sqlite'), '--out', at('plan.json')], '--database', path.join('data', 'a.sqlite')],
+    ['dry-run --out', ['dry-run', '--database', at('a.sqlite'), '--out', 'plan.json'], '--out', 'plan.json'],
+    ['dry-run --out, dot-relative', ['dry-run', '--database', at('a.sqlite'), '--out', './plan.json'], '--out', './plan.json'],
+    ['apply --database', ['apply', '--database', 'a.sqlite', '--plan', at('plan.json'), '--confirm', '0123abcd'], '--database', 'a.sqlite'],
+    ['apply --plan', ['apply', '--database', at('a.sqlite'), '--plan', 'plan.json', '--confirm', '0123abcd'], '--plan', 'plan.json'],
+    ['apply --backups', ['apply', '--database', at('a.sqlite'), '--plan', at('plan.json'), '--confirm', '0123abcd', '--backups', 'kept'], '--backups', 'kept']
+  ])('refuses a relative path for %s', (_name, argv, key, value) => {
+    expect(() => parseArguments(argv)).toThrow(UsageError);
+    expect(() => parseArguments(argv)).toThrow(`${key} needs an absolute path outside this checkout; got "${value}".`);
+  });
+  it.runIf(process.platform === 'win32')('refuses drive-relative and root-relative Windows paths', () => {
+    refused(['copy', '--from', 'C:a.sqlite', '--to', at('b.sqlite')], /--from needs an absolute path outside this checkout; got "C:a.sqlite"/);
+    refused(['copy', '--from', at('a.sqlite'), '--to', String.raw`\work\b.sqlite`], /--to needs an absolute path outside this checkout/);
   });
   it('refuses apply without --confirm and a confirmation that is not an 8-digit code', () => {
-    refused(['apply', '--database', 'a.sqlite', '--plan', 'plan.json'], /--confirm is required/);
-    refused(['apply', '--database', 'a.sqlite', '--plan', 'plan.json', '--confirm', '0123ABCD'], /8-digit code/);
+    refused(['apply', '--database', at('a.sqlite'), '--plan', at('plan.json')], /--confirm is required/);
+    refused(['apply', '--database', at('a.sqlite'), '--plan', at('plan.json'), '--confirm', '0123ABCD'], /8-digit code/);
   });
   it('refuses --working-history outside apply', () => {
     refused(['dry-run', '--database', 'a.sqlite', '--out', 'plan.json', '--working-history'], /only valid with apply/);

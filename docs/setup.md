@@ -317,7 +317,7 @@ It runs `tests/measurement/storage-size.measure.ts` under the same Electron runt
 
 Since ET-013 PR-2 the telemetry service opens `%LOCALAPPDATA%\ETS2Telemetry\data\telemetry.sqlite` at every start, so an installed copy creates or opens it under your real profile; since ET-055 PR-4 `npm run dev` is a staging build and opens `%LOCALAPPDATA%\ETS2TelemetryStaging\data\telemetry.sqlite` instead. Give a development launch an isolated `LOCALAPPDATA` (as the runtime smokes and Playwright tests do) to keep it away from your history. Synthetic and replay databases belong in `%LOCALAPPDATA%\ETS2Telemetry\synthetic\`. The database is held with an exclusive lock while the application runs; read it with external SQLite tools only while the application is closed.
 
-`npm run history:repair -- <copy|dry-run|apply> ...` makes a verified copy of a history file and joins trips split before ET-112 by owner attestation, with a dry run on a scratch copy first; close the application first and see [History repair](storage.md#history-repair-et-112g).
+`npm run history:repair -- <copy|dry-run|apply> ...` makes a verified copy of a history file and joins trips split before ET-112 by owner attestation, with a dry run on a scratch copy first; every path must be absolute and outside the checkout. Close the application first and see [History repair](storage.md#history-repair-et-112g).
 
 ## Node test scheduling (ET-026)
 

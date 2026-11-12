@@ -20,7 +20,8 @@ const REFUSALS: Readonly<Record<RepairRefusal['reason'], string>> = {
   'database-mismatch': 'The plan was made for another database.',
   'working-history-flag': 'This is a working history file; pass --working-history to repair it.',
   'working-history-schema': 'The working history has another schema version than this tool; start the matching app version once, exit it, and retry.',
-  'path-invalid': 'Every path must be absolute, and an output file must not exist yet.'
+  'path-invalid': 'Every path must be absolute.',
+  'target-exists': 'The output file, or a -wal, -shm, -journal or .partial file beside it, already exists; choose a new file name.'
 };
 class Refused extends Error { constructor(readonly reason: RepairRefusal['reason']) { super(REFUSALS[reason]); } }
 function refuse(reason: RepairRefusal['reason']): never { throw new Refused(reason); }
@@ -30,6 +31,8 @@ async function outcome<T>(body: () => Promise<T>): Promise<RepairOutcome<T>> {
   }
 }
 const absolute = (...files: string[]) => { if (files.some(file => typeof file !== 'string' || !path.isAbsolute(file) || file.includes('\0'))) refuse('path-invalid'); };
+/** Refuses an output file that exists, or whose sidecar or partial file does, before anything is opened. */
+const unused = (file: string) => { if (['', '-wal', '-shm', '-journal', '.partial'].some(suffix => existsSync(`${file}${suffix}`))) refuse('target-exists'); };
 
 /** Copies `source` read-only into the new file `target` (copyVerified); the source is never written. */
 async function copyFile(source: string, target: string): Promise<VerifiedCopy> {
@@ -40,7 +43,7 @@ async function copyFile(source: string, target: string): Promise<VerifiedCopy> {
 
 /** `copy --from <file> --to <new file>`: a verified copy that includes committed WAL content. */
 export function copyHistory(options: {from: string; to: string}): Promise<RepairOutcome<VerifiedCopy>> {
-  return outcome(async () => { absolute(options.from, options.to); return copyFile(path.normalize(options.from), path.normalize(options.to)); });
+  return outcome(async () => { absolute(options.from, options.to); unused(path.normalize(options.to)); return copyFile(path.normalize(options.from), path.normalize(options.to)); });
 }
 
 export interface DryRunOptions {
@@ -57,7 +60,7 @@ export interface DryRunOptions {
 export function dryRunHistoryRepair(options: DryRunOptions): Promise<RepairOutcome<RepairPlan>> {
   return outcome(async () => {
     absolute(options.database, options.out);
-    if (existsSync(options.out)) refuse('path-invalid');
+    unused(options.out);
     const now = options.now ?? Date.now, scratch = mkdtempSync(path.join(options.scratchParent ?? tmpdir(), 'ets2telemetry-history-repair-'));
     let conn: StorageConnection | undefined;
     try {

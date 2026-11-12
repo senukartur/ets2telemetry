@@ -6,7 +6,8 @@ export const USAGE = `Usage:
   npm run history:repair -- copy --from <database> --to <new file>
   npm run history:repair -- dry-run --database <database> --out <new plan.json> [--attest <trip uuid>]...
   npm run history:repair -- apply --database <database> --plan <plan.json> --confirm <code> [--working-history] [--backups <directory>]
-Exit Yukon Union Telemetry first. Every path is explicit; there is no default database.`;
+Exit Yukon Union Telemetry first. Every path is explicit and absolute, outside this checkout (npm runs the tool from the
+checkout root); there is no default database.`;
 
 export type RepairCommand =
   | {command: 'copy'; from: string; to: string}
@@ -21,8 +22,12 @@ const OPTIONS: Readonly<Record<RepairCommand['command'], {required: string[]; op
   apply: {required: ['--database', '--plan', '--confirm'], optional: ['--backups']}
 };
 
-/** Parses `argv` (without the node and script paths); relative paths are resolved against `cwd`. */
-export function parseArguments(argv: readonly string[], cwd = process.cwd()): RepairCommand {
+/**
+ * Parses `argv` (without the node and script paths). A path that is not fully qualified (relative, drive-relative or
+ * root-relative) is refused rather than resolved: `npm run` starts the tool in the checkout root, where a plan or copy
+ * would put trip data into the repository.
+ */
+export function parseArguments(argv: readonly string[]): RepairCommand {
   const command = argv[0] as RepairCommand['command'];
   if (!Object.hasOwn(OPTIONS, command)) throw new UsageError(USAGE);
   const {required, optional} = OPTIONS[command], values: Record<string, string> = {}, attest: string[] = [];
@@ -47,7 +52,11 @@ export function parseArguments(argv: readonly string[], cwd = process.cwd()): Re
   }
   const missing = required.filter(key => values[key] === undefined);
   if (missing.length) throw new UsageError(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required.\n${USAGE}`);
-  const file = (key: string) => path.resolve(cwd, values[key]);
+  const file = (key: string) => {
+    const value = values[key];
+    if (!path.isAbsolute(value) || path.resolve(value) !== path.normalize(value)) throw new UsageError(`${key} needs an absolute path outside this checkout; got "${value}".`);
+    return path.normalize(value);
+  };
   if (command === 'copy') return {command, from: file('--from'), to: file('--to')};
   if (command === 'dry-run') return {command, database: file('--database'), out: file('--out'), attest};
   if (!/^[0-9a-f]{8}$/.test(values['--confirm'])) throw new UsageError('--confirm needs the 8-digit code the dry run printed.');

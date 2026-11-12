@@ -4,7 +4,7 @@
 // (tests/shared/trip-continuation-incident.ts) recorded at schema 8, its last segment never proven, then reopened at the
 // current schema. Expected values are written by hand from docs/storage.md ("History repair") and the corpus.
 import {spawn} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {once} from 'node:events';
 import {copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -17,7 +17,7 @@ import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import {tripUuidFor} from '../../packages/telemetry-core/src';
 import {INCIDENT_OTHER_JOB, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentTripUuid} from '../shared/trip-continuation-incident';
 import {r, Script} from '../shared/trip-messages';
-import {digestOf, ok, readOnly, sha256, uploadTestOwner, workspace} from './helpers';
+import {digestOf, ok, readOnly, sha256, uploadReceipt, uploadTestOwner, uploadTestWork, workspace} from './helpers';
 import {drive, EXTRA_SESSIONS, OTHER_SCOPE} from './incident-driver';
 
 const CHILD = path.resolve('tests/storage/fixtures/history-repair-child.cjs');
@@ -300,6 +300,24 @@ describe('ET-112g publication', () => {
       .run(root, owner.registrationId, run, session, uuid);
     ok(storage.close());
   }
+  /**
+   * A Dashboard owner and the earlier publication of the root `tripUuid` of a history file, as membership-resolution.test.ts
+   * publishes: its revision is frozen, claimed and answered 202, so the file holds a real binding, envelope and receipt.
+   */
+  async function published(file: string, tripUuid: string) {
+    const conn = await openConnection(ws.options({path: file, purpose: 'history'})), storage = new Storage(conn);
+    opened.push(storage);
+    const owner = await uploadTestOwner(storage), registrationId = owner.registrationId;
+    ok(storage.confirmUploadOwner({confirmationId: owner.runId, registrationId, credentialGeneration: 'generation', expectedVersion: '0'}));
+    const workId = await uploadTestWork(storage, {tripUuid, registrationId});
+    const frozen = ok(storage.freezeUploadMaterialization({workId, producerVersion: 'test', createdUtcMs: 1000, contractMinor: 1}));
+    ok(storage.releaseUploadMaterialization({workId}));
+    expect(frozen.status).toBe('frozen');
+    const attempt = ok(storage.claimUploadAttempt({attemptId: randomUUID(), registrationId, expectedVersion: '1', mode: 'any', nowMs: 1000}));
+    expect(attempt.eventId).toBe(frozen.eventId);
+    expect(ok(storage.commitUploadReceipt({attemptId: attempt.attemptId!, statusCode: 202, body: uploadReceipt(frozen.eventId!)})).status).toBe('delivered');
+    ok(storage.close());
+  }
   it('lists a separately published segment as reconciliation-required and refuses a forged action for it (F-D7)', async () => {
     await legacy();
     await bind(ws.database, 'synthetic', 3, S, INCIDENT_SESSIONS[2]);
@@ -317,7 +335,7 @@ describe('ET-112g publication', () => {
   });
   it('publishes the join as the next revision of a bound target under its own binding and keeps its receipts', async () => {
     await legacy(ws.database, undefined, 'history');
-    await bind(ws.database, 'history', 1, T, INCIDENT_SESSIONS[0]);
+    await published(ws.database, T);
     const {plan, out} = await dryRun(ws.database, [S]);
     expect(plan.actions[0]?.after.upload).toEqual({bound: true, held: false, holdReason: null, identity: 'resolved'});
     const upload = () => safe(ws.database, db => ({
@@ -326,6 +344,7 @@ describe('ET-112g publication', () => {
       last: db.prepare('SELECT max(position) FROM upload_source_transitions').pluck().get() as bigint
     }));
     const before = upload();
+    expect(before.receipts).toHaveLength(1);
     expect((await applied(ws.database, out, plan.confirmation)).actions.map(action => action.status)).toEqual(['applied']);
     const after = safe(ws.database, db => ({
       bindings: db.prepare('SELECT root_ref, trip_uuid, held FROM upload_source_bindings ORDER BY root_ref').all(),
@@ -357,7 +376,14 @@ describe('ET-112g backups and refusals', () => {
     expect(copy).toMatchObject({ok: true, value: {databaseUuid: result.databaseUuid, logicalDigest: before.logicalDigest}});
     expect(digestOf(restored)).toEqual(before);
     // An existing target is never overwritten.
-    expect(await copyHistory({from: backup, to: restored})).toMatchObject({ok: false, error: {code: 'DATA_PATH_INVALID'}});
+    expect(await copyHistory({from: backup, to: restored})).toMatchObject({ok: false, error: {code: 'REPAIR_REFUSED', reason: 'target-exists',
+      message: 'The output file, or a -wal, -shm, -journal or .partial file beside it, already exists; choose a new file name.'}});
+    const leftover = fresh('leftover.sqlite');
+    writeFileSync(`${leftover}-wal`, '');
+    expect(await copyHistory({from: backup, to: leftover})).toMatchObject({ok: false, error: {code: 'REPAIR_REFUSED', reason: 'target-exists'}});
+    expect(existsSync(leftover)).toBe(false);
+    expect(await dryRunHistoryRepair({database: backup, out: restored, attest: [], appVersion: APP, scratchParent: scratchParent()}))
+      .toMatchObject({ok: false, error: {code: 'REPAIR_REFUSED', reason: 'target-exists'}});
   });
   it('refuses a working history file without --working-history and at another schema, and repairs it with the flag', async () => {
     await legacy(ws.database, undefined, 'history');
