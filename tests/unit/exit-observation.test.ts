@@ -1,4 +1,5 @@
 import {EventEmitter} from 'node:events';
+import {existsSync} from 'node:fs';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
 import {pathToFileURL} from 'node:url';
@@ -176,6 +177,15 @@ it('opens the exact main identity before waiting, and retires only its own hidde
     env: expect.objectContaining({ETS2TELEMETRY_OBSERVED_PID: '100', ETS2TELEMETRY_OBSERVED_CREATED: '123456', ETS2TELEMETRY_OBSERVED_EXE: 'C:\\fixture\\staging.exe'})}));
   f.stdout.emit('data', Buffer.from('{"event":"terminated","code":0}\n')); expect(f.events.at(-1)).toEqual({state: 'terminated', code: 0});
   await f.observation.dispose(); expect(f.child.kill).toHaveBeenCalledTimes(1); f.cleaned();
+});
+it('starts the observer from its script file, never from an encoded command line', async () => {
+  // Behavior-based antivirus blocks a hidden PowerShell child that carries its script as -EncodedCommand.
+  const f = observerChild(), [file, args] = f.spawnProcess.mock.calls[0] as unknown as [string, string[]];
+  expect(path.win32.basename(file).toLowerCase()).toBe('powershell.exe');
+  expect(args.map(arg => arg.toLowerCase())).not.toContain('-encodedcommand');
+  expect(args.slice(0, -1)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File']);
+  expect(args.at(-1)).toBe(path.resolve('scripts/ci/exit-process-observer.ps1')); expect(existsSync(args.at(-1)!)).toBe(true);
+  f.child.emit('close'); await f.observation.dispose(); f.cleaned();
 });
 it.each(['mismatch', 'error', 'closed', 'timeout', 'oversized'] as const)('keeps native observer %s unknown and cleans up its resources', async boundary => {
   const f = observerChild();
