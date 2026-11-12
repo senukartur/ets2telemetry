@@ -400,8 +400,8 @@ it('invokes the diagnostics export on its fixed channel without any argument', a
 
 // ET-026: no caller-supplied path or evaluator value crosses the new read-only boundary.
 it('validates Hard Mode replies and rejects every supplied argument before IPC', async () => {
-  const {unknownHardMode} = await import('../../packages/telemetry-core/src/hard-mode');
-  const status = {assessment: unknownHardMode(Date.now()), trip: null}; ipc.invoke.mockResolvedValue(status);
+  const {unknownHardMode, waitingHardModeVerification} = await import('../../packages/telemetry-core/src/hard-mode');
+  const status = {assessment: unknownHardMode(Date.now()), trip: null, verification: waitingHardModeVerification()}; ipc.invoke.mockResolvedValue(status);
   await expect(bridge.getHardModeStatus()).resolves.toEqual(status); await expect(bridge.refreshHardMode()).resolves.toEqual(status);
   expect(ipc.invoke.mock.calls).toEqual([['hard-mode:status'], ['hard-mode:refresh']]);
   for (const method of [bridge.getHardModeStatus, bridge.refreshHardMode]) for (const argument of ['C:/private/config.cfg', {state: 'pass'}, undefined])

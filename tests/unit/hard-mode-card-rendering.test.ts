@@ -3,14 +3,17 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it} from 'vitest';
 import {HardModeCard} from '../../apps/desktop/src/hard-mode/card';
 import type {HardModeController} from '../../apps/desktop/src/hard-mode/use-status';
-import type {HardModeDetailsV1} from '../../packages/contracts/src/hard-mode';
-import {evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import type {HardModeDetailsV1, HardModeVerification} from '../../packages/contracts/src/hard-mode';
+import {evaluateHardMode, newHardModeDetails, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 
+/** The profile was verified; an unknown rule then means missing settings, not an unverified profile. */
+const VERIFIED: HardModeVerification = {state: 'verified', reason: null, checking: false, lastCheck: null};
 const makeController = (overrides?: Partial<HardModeController>): HardModeController => ({
   status: {
     assessment: evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), 1000, 'fixture'),
     trip: null,
+    verification: VERIFIED,
   },
   now: 1000,
   busy: false,
@@ -51,7 +54,7 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
       const html = renderToStaticMarkup(
         React.createElement(HardModeCard, {
           language,
-          controller: makeController({status: {assessment, trip: null}}),
+          controller: makeController({status: {assessment, trip: null, verification: VERIFIED}}),
         })
       );
       expect(html).toContain('badge-warn');
@@ -81,7 +84,7 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
       const html = renderToStaticMarkup(
         React.createElement(HardModeCard, {
           language,
-          controller: makeController({status: {assessment, trip: lossTrip}}),
+          controller: makeController({status: {assessment, trip: lossTrip, verification: VERIFIED}}),
         })
       );
       expect(html).toContain('badge-error');
@@ -109,7 +112,7 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
     const html = renderToStaticMarkup(
       React.createElement(HardModeCard, {
         language: 'en',
-        controller: makeController({status: {assessment, trip: lossTrip}}),
+        controller: makeController({status: {assessment, trip: lossTrip, verification: VERIFIED}}),
       })
     );
     expect(html).toContain('data-testid="hard-mode-loss"');
@@ -122,7 +125,7 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
       const html = renderToStaticMarkup(
         React.createElement(HardModeCard, {
           language,
-          controller: makeController({status: {assessment, trip: null}}),
+          controller: makeController({status: {assessment, trip: null, verification: VERIFIED}}),
         })
       );
       expect(html).toContain('data-state="unknown"');
@@ -219,5 +222,52 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
       );
       expect(html).not.toMatch(/will count as Hard Mode|будет засчитан как Hard Mode/i);
     }
+  });
+});
+
+describe('ET-112d profile verification on the Hard Mode page (REG-009, REG-010)', () => {
+  const unknown = unknownHardMode(1000, 'source-unproven');
+  const lastCheck = {atUtcMs: 7000, state: 'unverified', reason: 'game-log'} as const;
+  const unverified: HardModeVerification = {state: 'unverified', reason: 'game-log', checking: false, lastCheck: null};
+  const render = (language: 'en' | 'ru', status: HardModeController['status'], overrides: Partial<HardModeController> = {}) =>
+    renderToStaticMarkup(React.createElement(HardModeCard, {language, controller: makeController({status, now: 10_000, ...overrides})}));
+  const TEXT = {
+    en: {unable: 'Unable to verify profile', log: 'the game log does not belong to this game session', waiting: 'Waiting for game telemetry', unknown: 'Hard Mode unknown',
+      checking: 'Checking…', result: 'Last check 3 s ago: Unable to verify profile — the game log does not belong to this game session',
+      ratio: 'Trip checks: 178/178 passing (100%). Required: ≥95%. Unknown: 74 (excluded).'},
+    ru: {unable: 'Не удалось проверить профиль', log: 'журнал игры не относится к этому игровому сеансу', waiting: 'Ожидание телеметрии игры', unknown: 'Hard Mode не определён',
+      checking: 'Проверка…', result: 'Последняя проверка 3 с назад: Не удалось проверить профиль — журнал игры не относится к этому игровому сеансу',
+      ratio: 'Проверки рейса: 178/178 успешных (100%). Порог: ≥95%. Неизвестно: 74 (вне расчёта).'}
+  } as const;
+  it.each(['en', 'ru'] as const)('says the profile cannot be verified, with its reason, apart from a failing rule (%s)', language => {
+    const html = render(language, {assessment: unknown, trip: null, verification: unverified}), text = TEXT[language];
+    expect(html).toMatch(new RegExp(`<span>${text.unable}</span>`));
+    expect(html).toContain(`data-testid="hard-mode-verification" data-state="unverified" data-reason="game-log"`);
+    expect(html).toMatch(new RegExp(`data-testid="hard-mode-verification"[^>]*>${text.unable}: ${text.log}</p>`));
+    expect(html).not.toContain('data-testid="hard-mode-fix"'); expect(html).not.toContain(text.unknown);
+  });
+  it.each(['en', 'ru'] as const)('waits for game telemetry without claiming an unverified profile (%s)', language => {
+    const html = render(language, {assessment: unknown, trip: null, verification: {state: 'waiting', reason: 'no-game', checking: false, lastCheck: null}});
+    expect(html).toContain(`<span>${TEXT[language].waiting}</span>`);
+    expect(html).not.toContain('data-testid="hard-mode-verification"'); expect(html).not.toContain(TEXT[language].unable);
+  });
+  it.each(['en', 'ru'] as const)('keeps the fix banner for a failing rule of a verified profile, without a verification line (%s)', language => {
+    const assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), 1000, 'fixture');
+    const html = render(language, {assessment, trip: null, verification: VERIFIED});
+    expect(html).toContain('data-testid="hard-mode-fix"'); expect(html).not.toContain('data-testid="hard-mode-verification"');
+  });
+  it.each(['en', 'ru'] as const)('shows a running check on the button and the last result once it ends (%s)', language => {
+    const text = TEXT[language];
+    const running = render(language, {assessment: unknown, trip: null, verification: {...unverified, checking: true, lastCheck}});
+    expect(running).toMatch(new RegExp(`data-testid="hard-mode-refresh"[^>]*>${text.checking}</button>`));
+    expect(running).not.toContain('data-testid="hard-mode-check-result"');
+    const done = render(language, {assessment: unknown, trip: null, verification: {...unverified, lastCheck}});
+    expect(done).not.toMatch(new RegExp(`data-testid="hard-mode-refresh"[^>]*>${text.checking}</button>`));
+    expect(done).toMatch(new RegExp(`data-testid="hard-mode-check-result"[^>]*>${text.result}</p>`));
+  });
+  it.each(['en', 'ru'] as const)('shows the joined trip ratio separately from an unverified current profile (%s)', language => {
+    const trip = {...newHardModeDetails(unknown, null), passingChecks: 178, failingChecks: 0, unknownChecks: 74};
+    const html = render(language, {assessment: unknown, trip, verification: unverified});
+    expect(html).toContain(TEXT[language].ratio); expect(html).toContain('data-testid="hard-mode-verification"');
   });
 });

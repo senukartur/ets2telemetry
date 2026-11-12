@@ -63,7 +63,7 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
     : error
       ? t('hm.unavailable', undefined, language)
       : isUnknown
-        ? view.headline
+        ? view.verification.headline ?? view.headline
         : `${view.headline} · ${t('hm.configuredCount', {n: view.passed}, language)}`;
 
   return (
@@ -102,9 +102,14 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
               onClick={check}
               data-testid="hard-mode-refresh"
             >
-              {t(busy ? 'hm.checking' : 'hm.recheck', undefined, language)}
+              {t(busy || status.verification.checking ? 'hm.checking' : 'hm.recheck', undefined, language)}
             </Button>
           </div>
+          {view.verification.checkResult ? (
+            <p data-testid="hard-mode-check-result" className="text-xs text-[var(--yu-text-muted)]">
+              {view.verification.checkResult}
+            </p>
+          ) : null}
 
           <div className="yu-hard-mode-progress">
             <progress
@@ -117,6 +122,12 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
               {!loaded ? t('hm.reading', undefined, language) : t('hm.configuredCount', {n: view.passed}, language)}
             </p>
           </div>
+
+          {loaded && !error && view.verification.line ? (
+            <p role="status" data-testid="hard-mode-verification" data-state={status.verification.state} data-reason={status.verification.reason ?? undefined} className="text-sm text-[var(--yu-text-secondary)]">
+              {view.verification.line}
+            </p>
+          ) : null}
 
           {error ? <p role="status" className="text-sm text-[var(--yu-err-fg)]">{t('hm.unavailable', undefined, language)}</p> : null}
         </CardContent>

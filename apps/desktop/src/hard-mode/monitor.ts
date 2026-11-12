@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
-import {ProfileVerificationError, ProfileSettingsUnavailableError, UnchangedVerificationError, type TimedHardModeObservation} from './reader';
-import type {HardModeDiagnosticCode, HardModeObservation, HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
+import {ProfileVerificationError, ProfileSettingsUnavailableError, UnchangedVerificationError, type ProfileDiagnosticCode, type TimedHardModeObservation} from './reader';
+import type {HardModeDiagnosticCode, HardModeObservation, HardModeStatus, HardModeVerification, HardModeVerificationReason, HardModeVerificationResult} from '../../../../packages/contracts/src/hard-mode';
 import {HARD_MODE_COVERAGE_NS, type HardModeServiceMessage} from './service-status';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
 import {unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
@@ -10,6 +10,27 @@ export interface MonitorSource {source: SourceIdentity; monotonicNs: string; clo
 export function profileSourceKey(value: MonitorSource): string {
   const s = value.source;
   return JSON.stringify([s.game, s.origin, s.processId, s.windowsSessionId, s.processInstanceId, s.pluginSessionId, value.clockId, value.gameClockId]);
+}
+/** The reader's failure codes as the fixed reasons the page may show; the codes themselves stay in the service. */
+const FAILURE_REASONS: Partial<Record<ProfileDiagnosticCode, HardModeVerificationReason>> = {
+  PROFILE_SOURCE_UNPROVEN: 'game-process', PROFILE_PROCESS_QUERY_FAILED: 'game-process', PROFILE_PROCESS_QUERY_DEADLINE: 'game-process', PROFILE_PROCESS_QUERY_INVALID: 'game-process',
+  PROFILE_PROCESS_UNPROVEN: 'game-process', PROFILE_PROCESS_CHANGED: 'game-process', PROFILE_LOG_GENERATION: 'game-log', PROFILE_LOG_CHANGED: 'game-log',
+  PROFILE_SELECTION_UNPROVEN: 'profile-selection', PROFILE_LOCATION_UNPROVEN: 'profile-files', PROFILE_SETTINGS_UNAVAILABLE: 'settings-read',
+  PROFILE_DEADLINE: 'timeout', PROFILE_CANCELLED: 'timeout', PROFILE_EPOCH_RETIRED: 'timeout', PROFILE_PROBE_PENDING: 'timeout', PROFILE_PROBE_EXPIRED: 'timeout', PROFILE_PROOF_EXPIRED: 'timeout'
+};
+/**
+ * ET-112d: whether the current observation comes from a verified profile. No game is waiting, never unverified; a bound
+ * observation is verified whatever its rules say; a source or settings transition is still checking; otherwise the
+ * profile could not be verified, for the reason of the last failed read.
+ */
+export function hardModeVerificationResult(hasSource: boolean, observation: HardModeObservation, failure?: ProfileDiagnosticCode): HardModeVerificationResult {
+  if (!hasSource) return {state: 'waiting', reason: 'no-game'};
+  if (observation.binding !== null || observation.assessment.state !== 'unknown') return {state: 'verified', reason: null};
+  const diagnostic = observation.diagnostic;
+  if (diagnostic === 'session-transition' || diagnostic === 'settings-changing' || diagnostic === 'source-changed') return {state: 'waiting', reason: 'checking'};
+  if (diagnostic === 'guard-deadline') return {state: 'unverified', reason: 'timeout'};
+  const reason = failure === undefined ? undefined : FAILURE_REASONS[failure];
+  return {state: 'unverified', reason: reason ?? (diagnostic === 'settings-unavailable' ? 'settings-read' : 'timeout')};
 }
 export class HardModeMonitor {
   private readonly producer = randomUUID();
@@ -30,6 +51,10 @@ export class HardModeMonitor {
   private manualTimer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
   private followup = false;
+  /** The last failed read's code, cleared by any read that completes; it never leaves the service. */
+  private failure: ProfileDiagnosticCode | undefined;
+  private manualChecking = false;
+  private lastCheck: HardModeVerification['lastCheck'] = null;
   private pendingProof: {value: HardModeObservation; completedClientNs: bigint; deadlineClientNs: bigint; resolve: () => void; publish: (value: HardModeObservation, at: bigint) => void} | undefined;
   private bindProof(): void {
     if (this.guard && !this.guard.eligible()) {this.retireProof(); return;}
@@ -72,6 +97,8 @@ export class HardModeMonitor {
     const key = next ? profileSourceKey(next) : undefined;
     if (key !== undefined && key !== this.cadenceKey) {this.lastScanNs = undefined; this.cadenceKey = key;}
     this.epoch++; this.followup = false; this.manualPending = false; clearTimeout(this.manualTimer); this.manualTimer = undefined;
+    // A source change ends a manual check without a result; the new source has no failed read yet.
+    this.manualChecking = false; this.failure = undefined;
     this.controller?.abort(); this.retireProof(); this.publish(this.unknown('session-transition'));
     const epoch = this.epoch, draining = this.inFlight;
     if (draining) void draining.finally(() => {if (epoch === this.epoch && this.source) void this.refresh(this.manualPending);});
@@ -82,12 +109,16 @@ export class HardModeMonitor {
     if (this.expired()) return this.unknown();
     return structuredClone(this.observation);
   }
+  private verification(evidence: HardModeObservation): HardModeVerification {
+    return {...hardModeVerificationResult(this.source !== null, evidence, this.failure), checking: this.manualChecking, lastCheck: this.lastCheck && {...this.lastCheck}};
+  }
   publication(): Extract<HardModeServiceMessage, {update: 'assessment'}> {
     const age = this.healthNs === undefined ? -1n : this.nowNs() - this.healthNs;
     const remaining = age >= 0n && age < HARD_MODE_COVERAGE_NS ? HARD_MODE_COVERAGE_NS - age : 0n;
-    return {type: 'hard-mode', update: 'assessment', assessment: this.evidence().assessment, remainingNs: remaining.toString()};
+    const evidence = this.evidence();
+    return {type: 'hard-mode', update: 'assessment', assessment: evidence.assessment, verification: this.verification(evidence), remainingNs: remaining.toString()};
   }
-  status(): HardModeStatus {return {assessment: this.evidence().assessment, trip: null};}
+  status(): HardModeStatus {const evidence = this.evidence(); return {assessment: evidence.assessment, trip: null, verification: this.verification(evidence)};}
   /** Memory-only service lease: it never changes the observation's timestamp or causal watermark. */
   heartbeat(): void {this.expireCoverage(); if (this.source) {this.healthNs = this.nowNs(); this.publishHealth();}}
   private scheduleGuard(): void {
@@ -106,6 +137,9 @@ export class HardModeMonitor {
   refresh(manual = false, followup = false): Promise<void> {
     if (this.closed) return Promise.resolve();
     this.expireCoverage();
+    // A manual check shows its progress at once; without a game it completes at once as waiting for one.
+    if (manual && !this.source) {this.lastCheck = {atUtcMs: Date.now(), state: 'waiting', reason: 'no-game'}; this.manualChecking = false; this.publishHealth();}
+    else if (manual && !this.manualChecking) {this.manualChecking = true; this.publishHealth();}
     if (this.inFlight) {if (manual && (!this.forced || this.activeEpoch !== this.epoch)) this.manualPending = true; return this.inFlight;}
     const current = this.source;
     if (!current) return Promise.resolve();
@@ -136,6 +170,7 @@ export class HardModeMonitor {
     let deadline = setTimeout(expire, HARD_MODE_DEADLINE_MS);
     this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal, manual).then(result => {
       if (controller.signal.aborted || epoch !== this.epoch || this.guard && !this.guard.eligible()) return;
+      this.failure = undefined;
       const value = 'observation' in result ? result.observation : result;
       const completed = 'timing' in result ? result.timing.completedClientNs : this.nowNs();
       if ('timing' in result) {
@@ -161,6 +196,7 @@ export class HardModeMonitor {
         });
       }
     }, error => {if (epoch !== this.epoch) return;
+      this.failure = error instanceof ProfileVerificationError && !(error instanceof UnchangedVerificationError) ? error.code : undefined;
       if (error instanceof UnchangedVerificationError) {complete(this.observation); return;}
       complete(this.unknown(error instanceof ProfileVerificationError && error.code === 'PROFILE_DEADLINE' ? 'guard-deadline' : error instanceof ProfileSettingsUnavailableError || !(error instanceof ProfileVerificationError) ? 'settings-unavailable' : 'profile-verification'));
     }).finally(async () => {
@@ -170,6 +206,11 @@ export class HardModeMonitor {
       await this.drain();
       this.inFlight = undefined; this.forced = false;
       const requested = this.followup; this.followup = false;
+      // A manual check ends with its own result unless another manual run follows it; manual runs never count a check.
+      if (manual && epoch === this.epoch && !this.manualPending && !this.closed) {
+        this.lastCheck = {atUtcMs: Date.now(), ...hardModeVerificationResult(this.source !== null, this.evidence(), this.failure)};
+        this.manualChecking = false; this.publishHealth();
+      }
       if (epoch === this.epoch && this.source && !this.closed) {
         if (this.manualPending) return this.refresh(true, true);
         if (requested && !followup && !manual) return this.refresh(false, true);
@@ -177,5 +218,5 @@ export class HardModeMonitor {
     });
     return this.inFlight;
   }
-  close(): void {this.closed = true; this.guard?.select(undefined); this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown('session-transition'));}
+  close(): void {this.closed = true; this.guard?.select(undefined); this.started = false; clearTimeout(this.timer); clearTimeout(this.manualTimer); clearInterval(this.healthTimer); this.timer = undefined; this.manualTimer = undefined; this.healthTimer = undefined; this.manualPending = false; this.manualChecking = false; this.epoch++; this.controller?.abort(); this.retireProof(); this.publish(this.unknown('session-transition'));}
 }

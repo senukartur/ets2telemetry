@@ -2,12 +2,14 @@ import {performance} from 'node:perf_hooks';
 import {runInNewContext} from 'node:vm';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {HardModeMonitor} from '../../apps/desktop/src/hard-mode/monitor';
-import type {HardModeStatus, HardModeObservation} from '../../packages/contracts/src/hard-mode';
+import type {HardModeStatus, HardModeObservation, HardModeVerification} from '../../packages/contracts/src/hard-mode';
 import type {SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import {advanceHardModeV2, evaluateHardMode, newHardModeDetails, parseHardModeConfig} from '../../packages/telemetry-core/src/hard-mode';
 import {hardModeFixtureSnapshot, waitForHardModeFixture, type FixtureExpectation, type FixtureSnapshot, type FixtureRecord} from '../../scripts/ci/hard-mode-fixture-observation.mjs';
 import * as fixtureDiagnostics from '../../scripts/ci/hard-mode-fixture-observation.mjs';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
+/** The fixture's failing settings come from a verified profile. */
+const VERIFIED: HardModeVerification = {state: 'verified', reason: null, checking: false, lastCheck: null};
 beforeEach(() => {vi.useFakeTimers(); vi.setSystemTime(0); vi.spyOn(performance, 'now').mockImplementation(() => Date.now());});
 afterEach(() => {vi.clearAllTimers(); vi.restoreAllMocks(); vi.useRealTimers();});
 const failing = (at = Date.now()) => evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), at, 'fixture');
@@ -159,7 +161,7 @@ const expected: FixtureExpectation = {language: 'ru', hint: 'air', details: true
   label: id + ': ' + (id === 'fatigue' ? 'не выполнено' : 'выполнено'), name: id,
   tooltip: [id, 'Обнаружено: ' + values[i].join('/'), 'Требуется: fixture', 'Причина: fixture'],
   details: ['Обнаружено: ' + values[i].join('/'), 'Требуется: fixture']}))};
-function snapshot(status: HardModeStatus = {assessment: failing(), trip: null}): FixtureSnapshot {
+function snapshot(status: HardModeStatus = {assessment: failing(), trip: null, verification: VERIFIED}): FixtureSnapshot {
   return {status, language: 'ru', source: {count: 1, visible: true, text: 'Synthetic / replay settings · 0s since observation'},
     rows: expected.rules.map(({id, state, label, name}) => ({id, state, label, name, buttonCount: 1})),
     hint: {count: 1, visible: true, lines: [...expected.rules[1].tooltip]},
@@ -175,12 +177,12 @@ it('waits within the fixture deadline for the v2 trip and both localized banners
   const absent = {count: 0, visible: false, text: ''};
   const steps = [
     {...snapshot(), tripBanners: {ratio, diagnostic}},
-    {...snapshot({assessment, trip: openedTrip}), tripBanners: {ratio, diagnostic}},
-    {...snapshot({assessment, trip}), tripBanners: {ratio: absent, diagnostic: absent}},
-    {...snapshot({assessment, trip}), tripBanners: {ratio, diagnostic: {...diagnostic, visible: false}}},
-    {...snapshot({assessment, trip}), tripBanners: {ratio: {...ratio, count: 2}, diagnostic}},
-    {...snapshot({assessment, trip}), tripBanners: {ratio, diagnostic: {...diagnostic, text: 'Verified setting does not meet the rule · Fatigue simulation: 0'}}},
-    {...snapshot({assessment, trip}), tripBanners: {ratio, diagnostic}}
+    {...snapshot({assessment, trip: openedTrip, verification: VERIFIED}), tripBanners: {ratio, diagnostic}},
+    {...snapshot({assessment, trip, verification: VERIFIED}), tripBanners: {ratio: absent, diagnostic: absent}},
+    {...snapshot({assessment, trip, verification: VERIFIED}), tripBanners: {ratio, diagnostic: {...diagnostic, visible: false}}},
+    {...snapshot({assessment, trip, verification: VERIFIED}), tripBanners: {ratio: {...ratio, count: 2}, diagnostic}},
+    {...snapshot({assessment, trip, verification: VERIFIED}), tripBanners: {ratio, diagnostic: {...diagnostic, text: 'Verified setting does not meet the rule · Fatigue simulation: 0'}}},
+    {...snapshot({assessment, trip, verification: VERIFIED}), tripBanners: {ratio, diagnostic}}
   ];
   const record: FixtureRecord = {};
   const pending = waitForHardModeFixture({refresh: () => Promise.resolve(), observe: () => Promise.resolve(steps[Math.floor(Date.now() / 100)]),
@@ -233,7 +235,7 @@ it('reacquires genuine fail evidence after real monitor selection loss and waits
   const publications: HardModeObservation[] = [];
   let rendered = snapshot();
   const monitor = new HardModeMonitor(() => Promise.resolve({assessment: failing(), binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: null}),
-    value => {publications.push(value); setTimeout(() => {rendered = snapshot({assessment: value.assessment, trip: null});
+    value => {publications.push(value); setTimeout(() => {rendered = snapshot({assessment: value.assessment, trip: null, verification: VERIFIED});
       rendered.rows = rendered.rows.map(row => ({...row, state: value.assessment.rules.find(rule => rule.id === row.id)!.state}));}, 50);}, () => BigInt(Date.now()) * 1_000_000n);
   try {
     monitor.select({source, monotonicNs: '100', clockId: 'clock'}); await vi.advanceTimersByTimeAsync(100);
@@ -294,7 +296,7 @@ it.each(['unknown source','missing source','duplicate source','hidden source','w
 it.each([0, 1, 3])('bounds source facts from the actual snapshot collector with %i source nodes', async count => {
   const source = {getClientRects: () => [], innerText: 'x'.repeat(1000)};
   const observed = await runInNewContext('(' + hardModeFixtureSnapshot.toString() + ')()', {
-    desktop: {getHardModeStatus: () => Promise.resolve({assessment: failing(), trip: null})},
+    desktop: {getHardModeStatus: () => Promise.resolve({assessment: failing(), trip: null, verification: VERIFIED})},
     document: {documentElement: {lang: 'en'}, querySelectorAll: (selector: string) => selector === '[data-testid="hard-mode-source"]' ? Array.from({length: count}, () => source) : []},
     getComputedStyle: () => ({visibility: 'visible'})}) as FixtureSnapshot;
   expect(observed.source).toEqual({count: Math.min(count, 2), visible: false, text: count ? 'x'.repeat(256) : ''});
@@ -303,7 +305,7 @@ it('collects bounded visibility and text facts for both trip banners in the brow
   const ratio = {getClientRects: () => [{}], innerText: 'x'.repeat(1000)};
   const diagnostic = {getClientRects: () => [], innerText: 'Fatigue simulation: 0'};
   const observed = await runInNewContext('(' + hardModeFixtureSnapshot.toString() + ')({tripBanners:true})', {
-    desktop: {getHardModeStatus: () => Promise.resolve({assessment: failing(), trip: null})},
+    desktop: {getHardModeStatus: () => Promise.resolve({assessment: failing(), trip: null, verification: VERIFIED})},
     document: {documentElement: {lang: 'en'}, querySelectorAll: (selector: string) => {
       if (selector === '[data-testid="hard-mode-trip-ratio"]') return [ratio, ratio, ratio];
       if (selector === '[data-testid="hard-mode-diagnostic"]') return [diagnostic];
@@ -348,7 +350,7 @@ it('awaits backend status before one self-contained DOM snapshot, including exac
   const pending = runInNewContext('(' + hardModeFixtureSnapshot.toString() + ')({hint:"air",details:true})',
     {desktop: {getHardModeStatus: () => held}, document, getComputedStyle: () => ({visibility: 'visible'})}) as Promise<FixtureSnapshot>;
   await Promise.resolve(); expect(domReads).toBe(0);
-  release({assessment: failing(), trip: null}); const observed = await pending;
+  release({assessment: failing(), trip: null, verification: VERIFIED}); const observed = await pending;
   expect(observed).toEqual(snapshot());
   const record: FixtureRecord = {};
   await expect(waitForHardModeFixture({refresh: () => Promise.resolve(), observe: () => Promise.resolve(observed), expected, record, message: 'SNAPSHOT'})).resolves.toEqual(observed);

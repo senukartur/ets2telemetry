@@ -23,7 +23,16 @@ export interface HardModeDetailsV2 extends HardModeCounts {
   firstDiagnostic: HardModeDiagnostic | null; latestDiagnostic: HardModeDiagnostic | null;
 }
 export type HardModeDetails = HardModeDetailsV1 | HardModeDetailsV2;
-export interface HardModeStatus {assessment: HardModeAssessment; trip: HardModeDetails | null}
+/**
+ * Why the current profile is or is not verified, in fixed words: `waiting` while no game is connected or a check is
+ * still running, `unverified` when the profile check failed. Reader codes, paths and identities never cross.
+ */
+export const HARD_MODE_VERIFICATION_REASONS = ['no-game', 'checking', 'game-process', 'game-log', 'profile-selection', 'profile-files', 'settings-read', 'timeout'] as const;
+export type HardModeVerificationReason = typeof HARD_MODE_VERIFICATION_REASONS[number];
+export interface HardModeVerificationResult {state: 'verified' | 'waiting' | 'unverified'; reason: HardModeVerificationReason | null}
+/** The current verification, whether a manual check runs now, and the result of the last completed manual check. */
+export interface HardModeVerification extends HardModeVerificationResult {checking: boolean; lastCheck: (HardModeVerificationResult & {atUtcMs: number}) | null}
+export interface HardModeStatus {assessment: HardModeAssessment; trip: HardModeDetails | null; verification: HardModeVerification}
 // Internal evidence: digest binds process/session/profile/log generation without retaining names or absolute paths.
 // Accumulated checks retain their source session even when current assessment proof becomes unavailable.
 export interface HardModeObservation {assessment: HardModeAssessment; binding: string | null; pluginSessionId: string | null; sourceMonotonicNs: string | null; check?: {producer: string; sequence: number}; batch?: HardModeCheckBatch; batchSessionId?: string; diagnostic?: HardModeDiagnosticCode; member?: string; diagnostics?: HardModeDiagnostic[]}
@@ -70,8 +79,20 @@ export function isHardModeDetails(v: unknown): v is HardModeDetails {
       && v.checkpoint.failingChecks <= Number(v.failingChecks) && v.checkpoint.unknownChecks <= Number(v.unknownChecks))
     && diagnostic(v.firstDiagnostic) && diagnostic(v.latestDiagnostic) && (v.firstDiagnostic === null) === (v.latestDiagnostic === null);
 }
+/** Verified has no reason; waiting is no-game or checking; unverified names one of the six failure reasons. */
+function verificationResult(v: Record<string, unknown>): boolean {
+  if (v.state === 'verified') return v.reason === null;
+  if (v.state === 'waiting') return v.reason === 'no-game' || v.reason === 'checking';
+  return v.state === 'unverified' && HARD_MODE_VERIFICATION_REASONS.includes(v.reason as HardModeVerificationReason) && v.reason !== 'no-game' && v.reason !== 'checking';
+}
+export function isHardModeVerification(v: unknown): v is HardModeVerification {
+  return exact(v, ['state', 'reason', 'checking', 'lastCheck']) && verificationResult(v) && typeof v.checking === 'boolean'
+    && (v.lastCheck === null || exact(v.lastCheck, ['atUtcMs', 'state', 'reason']) && time(v.lastCheck.atUtcMs) && verificationResult(v.lastCheck));
+}
+/** Settings evidence is shown only from a verified profile, so a known assessment requires verified. */
 export function isHardModeStatus(v: unknown): v is HardModeStatus {
-  return exact(v, ['assessment', 'trip']) && isHardModeAssessment(v.assessment) && (v.trip === null || isHardModeDetails(v.trip));
+  return exact(v, ['assessment', 'trip', 'verification']) && isHardModeAssessment(v.assessment) && (v.trip === null || isHardModeDetails(v.trip))
+    && isHardModeVerification(v.verification) && (v.assessment.state === 'unknown' || v.verification.state === 'verified');
 }
 export function isHardModeObservation(v: unknown): v is HardModeObservation {
   return record(v) && exact(v, ['assessment', 'binding', 'pluginSessionId', 'sourceMonotonicNs', ...('check' in v ? ['check'] : []), ...('batch' in v ? ['batch'] : []), ...('batchSessionId' in v ? ['batchSessionId'] : []), ...('diagnostic' in v ? ['diagnostic'] : []), ...('member' in v ? ['member'] : []), ...('diagnostics' in v ? ['diagnostics'] : [])])

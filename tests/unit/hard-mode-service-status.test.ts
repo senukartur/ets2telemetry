@@ -4,7 +4,8 @@ import {advanceHardMode, evaluateHardMode, parseHardModeConfig} from '../../pack
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 const assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), 1000, 'fixture');
 const trip = advanceHardMode(null, assessment);
-const publication = (remainingNs = '3000000000') => ({type: 'hard-mode', update: 'assessment', assessment, remainingNs});
+const VERIFIED = {state: 'verified', reason: null, checking: false, lastCheck: null} as const;
+const publication = (remainingNs = '3000000000') => ({type: 'hard-mode', update: 'assessment', assessment, verification: VERIFIED, remainingNs});
 const tripUpdate = {type: 'hard-mode', update: 'trip', trip};
 afterEach(() => vi.restoreAllMocks());
 describe('private Hard Mode relative display lifetime', () => {
@@ -17,7 +18,7 @@ describe('private Hard Mode relative display lifetime', () => {
   it('counts down aged proof without renewal from repeated trip updates or UTC steps, then accepts a genuine publication', () => {
     let mono = 900_000_000_000n, utc = 1000; vi.spyOn(Date, 'now').mockImplementation(() => utc);
     const cache = new HardModeServiceCache(() => mono);
-    cache.accept(publication('100000000')); cache.accept(tripUpdate); expect(cache.status(true)).toEqual({assessment, trip});
+    cache.accept(publication('100000000')); cache.accept(tripUpdate); expect(cache.status(true)).toEqual({assessment, trip, verification: VERIFIED});
     mono += 50_000_000n; utc += 120_000; cache.accept(tripUpdate); expect(cache.status(true).assessment.state).toBe('pass');
     mono += 50_000_000n; utc = 1; cache.accept(tripUpdate); expect(cache.status(true)).toMatchObject({assessment: {state: 'unknown'}, trip});
     mono += 5_000_000_000n; cache.accept(tripUpdate); expect(cache.status(true).assessment.state).toBe('unknown');
@@ -83,5 +84,44 @@ describe('ET-070 lease expiry notification for the overlay indicator', () => {
     await vi.advanceTimersByTimeAsync(10_000); expect(invalidated.expired).not.toHaveBeenCalled();
     const tripOnly = timed(); tripOnly.cache.accept(tripUpdate);
     await vi.advanceTimersByTimeAsync(10_000); expect(tripOnly.expired).not.toHaveBeenCalled();
+  });
+});
+describe('ET-112d profile verification in the status reply (REG-011, REG-012)', () => {
+  const unknown = evaluateHardMode({}, 1000, 'local');
+  const lastCheck = {atUtcMs: 900, state: 'unverified', reason: 'game-log'} as const;
+  const unverified = {state: 'unverified', reason: 'game-log', checking: false, lastCheck} as const;
+  const waiting = (last: typeof lastCheck | null) => ({state: 'waiting', reason: 'no-game', checking: false, lastCheck: last});
+  const published = (verification: unknown, value: unknown = unknown) => ({type: 'hard-mode', update: 'assessment', assessment: value, verification, remainingNs: '3000000000'});
+  it('passes an accepted verification through while the lease is valid and the service is ready', () => {
+    const cache = new HardModeServiceCache(() => 0n); cache.accept(published(unverified));
+    expect(cache.status(true)).toEqual({assessment: unknown, trip: null, verification: unverified});
+  });
+  it.each([
+    ['an extra key', {...unverified, code: 'PROFILE_LOG_GENERATION'}],
+    ['an unknown reason', {...unverified, reason: 'C:/private/log.txt'}],
+    ['unverified without a reason', {...unverified, reason: null}],
+    ['verified with a reason', {...VERIFIED, reason: 'game-log'}],
+    ['waiting for a failure reason', {...unverified, state: 'waiting'}],
+    ['a last check with an extra key', {...unverified, lastCheck: {...lastCheck, path: 'private'}}],
+    ['a last check that is verified with a reason', {...unverified, lastCheck: {...lastCheck, state: 'verified'}}],
+    ['a missing verification', undefined]
+  ])('rejects %s and falls back to waiting', (_name, verification) => {
+    const cache = new HardModeServiceCache(() => 0n); cache.accept(published(unverified)); cache.accept(published(verification));
+    expect(cache.status(true)).toMatchObject({assessment: {state: 'unknown'}, verification: waiting(lastCheck)});
+  });
+  it('rejects a passing assessment that claims an unverified profile', () => {
+    const cache = new HardModeServiceCache(() => 0n); cache.accept(publication()); cache.accept(published(unverified, assessment));
+    expect(cache.status(true)).toMatchObject({assessment: {state: 'unknown'}, verification: {state: 'waiting', reason: 'no-game'}});
+  });
+  it('shows waiting for game telemetry, never unverified, after the lease or the service, and keeps the last check', () => {
+    let mono = 0n; const cache = new HardModeServiceCache(() => mono); cache.accept(published(unverified));
+    expect(cache.status(false)).toEqual({assessment: expect.objectContaining({state: 'unknown'}), trip: null, verification: waiting(lastCheck)});
+    mono = 3_000_000_000n; expect(cache.status(true).verification).toEqual(waiting(lastCheck));
+  });
+  it('marks a requested check as running until the next publication, and retirement clears the last check', () => {
+    const cache = new HardModeServiceCache(() => 0n); cache.accept(published(unverified));
+    cache.checkRequested(); expect(cache.status(true).verification).toEqual({...unverified, checking: true});
+    cache.accept(published(unverified)); expect(cache.status(true).verification).toEqual(unverified);
+    cache.retire(); expect(cache.status(true).verification).toEqual(waiting(null));
   });
 });

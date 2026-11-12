@@ -1,4 +1,4 @@
-import type {HardModeAssessment, HardModeDetails, HardModeDetailsV1, HardModeDetailsV2, HardModeCounts, HardModeObservation, HardModeDiagnostic, HardModeReason, HardModeRuleId} from '../../../contracts/src/hard-mode';
+import type {HardModeAssessment, HardModeDetails, HardModeDetailsV1, HardModeDetailsV2, HardModeCounts, HardModeObservation, HardModeDiagnostic, HardModeReason, HardModeRuleId, HardModeVerification} from '../../../contracts/src/hard-mode';
 export const HARD_MODE_TOLERANCE = 1e-6;
 export const HARD_MODE_RULES = [
   {id: 'fuel', label: 'Realistic fuel consumption', keys: ['g_fuel_simulation'], required: '= 1', limit: 1, op: 'eq'},
@@ -98,4 +98,8 @@ export function hardModeDiagnostic(observation: HardModeObservation, binding: st
   const code = observation.diagnostic ?? (observation.assessment.state === 'fail' ? 'rule-failed' : observation.assessment.state === 'unknown' ? 'settings-unavailable'
     : binding !== null && observation.binding !== null && binding !== observation.binding ? 'source-changed' : undefined);
   return code ? {atUtcMs: observation.assessment.observedUtcMs, code, rule: failed?.id ?? null, values: failed ? [...failed.values] : null} : null;
+}
+/** No game connected, or no current service evidence: waiting, keeping the last manual check's result. */
+export function waitingHardModeVerification(lastCheck: HardModeVerification['lastCheck'] = null): HardModeVerification {
+  return {state: 'waiting', reason: 'no-game', checking: false, lastCheck: lastCheck === null ? null : {...lastCheck}};
 }
