@@ -1045,7 +1045,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "hm.verify.reason.profile-selection": "не удалось определить загруженный профиль",
   "hm.verify.reason.profile-files": "не найдена папка профиля",
   "hm.verify.reason.settings-read": "не удалось прочитать настройки профиля",
-  "hm.verify.reason.timeout": "проверка не завершилась вовремя",
+  "hm.verify.reason.timeout": "проверку не удалось завершить",
   "hm.progress": "Выполненные условия настроек Hard Mode",
   "hm.unavailable": "Не удалось прочитать настройки. Необходимые данные неизвестны.",
   "hm.source.local": "Локальный профиль",

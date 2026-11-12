@@ -22,8 +22,8 @@ const FAILURE_REASONS: Partial<Record<ProfileDiagnosticCode, HardModeVerificatio
  * ET-112d: whether the current observation comes from a verified profile. No game is waiting, never unverified; a bound
  * observation is verified whatever its rules say; a source or settings transition is still checking; otherwise the
  * profile could not be verified, for the reason of the last failed read. Without a failed read, an invalidated proof is
- * still checking while a read is in flight or one is due after an invalidation (`rechecking`), and only otherwise did the
- * check not finish in time.
+ * still checking while a read is in flight or one is due after an invalidation (`rechecking`), and only otherwise could the
+ * check not be completed (`timeout`: a read deadline or cancellation, or a proof withdrawn without a completed read).
  */
 export function hardModeVerificationResult(hasSource: boolean, observation: HardModeObservation, failure?: ProfileDiagnosticCode, rechecking = false): HardModeVerificationResult {
   if (!hasSource) return {state: 'waiting', reason: 'no-game'};

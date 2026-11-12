@@ -1045,7 +1045,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "hm.verify.reason.profile-selection": "the loaded profile could not be identified",
   "hm.verify.reason.profile-files": "the profile folder could not be found",
   "hm.verify.reason.settings-read": "the profile settings could not be read",
-  "hm.verify.reason.timeout": "the check did not finish in time",
+  "hm.verify.reason.timeout": "the check could not be completed",
   "hm.progress": "Configured Hard Mode rules passing",
   "hm.unavailable": "Settings could not be read. Required evidence is unknown.",
   "hm.source.local": "Local profile",

@@ -1339,13 +1339,13 @@ describe('ET-112d profile verification status of the monitor (REG-003, REG-008, 
     m.invalidate('profile-verification'); expect(m.status().verification).toMatchObject({state: 'waiting', reason: 'checking'});
     clock.now = 5_000_000_000n; const scheduled = m.refresh(); reads[1].resolve(failing()); await scheduled;
     expect(m.status()).toMatchObject({assessment: {state: 'fail'}, verification: {state: 'verified', reason: null}});
-    // Without a failure code or a read in flight or due, the withdrawn proof did not finish in time; a failure code keeps its reason.
+    // Without a failure code or a read in flight or due, the withdrawn proof could not be completed (timeout); a failure code keeps its reason.
     const withdrawn: HardModeObservation = {assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null, diagnostic: 'profile-verification'};
     expect(hardModeVerificationResult(true, withdrawn, undefined, false)).toEqual({state: 'unverified', reason: 'timeout'});
     expect(hardModeVerificationResult(true, withdrawn, undefined, true)).toEqual({state: 'waiting', reason: 'checking'});
     expect(hardModeVerificationResult(true, withdrawn, LOG, true)).toEqual({state: 'unverified', reason: 'game-log'});
   });
-  it.each(['resolved', 'unchanged', 'ineligible'] as const)('V12 answers an invalidation once its read settles (%s): a later withdrawn proof did not finish in time', async settled => {
+  it.each(['resolved', 'unchanged', 'ineligible'] as const)('V12 answers an invalidation once its read settles (%s): a later withdrawn proof could not be completed', async settled => {
     const guard = {eligible: true};
     const {m, reads, clock, attach} = harness({eligible: () => guard.eligible, select: () => undefined});
     attach(); reads[0].resolve(failing()); await m.refresh();
