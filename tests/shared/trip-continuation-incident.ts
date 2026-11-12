@@ -28,15 +28,17 @@ export const INCIDENT_JOB: JobConfiguration = job({
   plannedDistance: {available: true, value: 192_000, unit: 'm'}, expectedIncome: money('10250', 'u64'),
   deliveryDeadline: {available: true, value: '20895', unit: 'min'}
 });
-/** J with an unavailable deadline, as one reading of a job without deadline evidence would carry it. */
+/** J with an unavailable deadline. The deadline takes no part in continuation identity, so this is still J. */
 export const INCIDENT_JOB_WITHOUT_DEADLINE: JobConfiguration = {...INCIDENT_JOB, deliveryDeadline: {available: false, reason: 'not-observed', unit: 'min'}};
-/** J with the u32 maximum as its deadline; the SDK defines no sentinel, so identity treats it as unavailable. */
+/** J with the u32 maximum as its deadline, as the staging World of Trucks contract carried it; it is still J. */
 export const INCIDENT_JOB_U32_MAX_DEADLINE: JobConfiguration = {...INCIDENT_JOB, deliveryDeadline: {available: true, value: '4294967295', unit: 'min'}};
 /** A different job of the same profile: another cargo to another destination. */
 export const INCIDENT_OTHER_JOB: JobConfiguration = {...INCIDENT_JOB, cargoId: {available: true, value: 'synthetic_other_cargo'},
   destinationCityId: {available: true, value: 'synthetic_leipzig'}, destinationCity: {available: true, value: 'Leipzig'}, expectedIncome: money('8100', 'u64')};
-/** The different job recorded without deadline evidence: it can neither join nor replace another job. */
+/** The different job without deadline evidence: still a complete job, so it replaces another unresolved job. */
 export const INCIDENT_OTHER_JOB_WITHOUT_DEADLINE: JobConfiguration = {...INCIDENT_OTHER_JOB, deliveryDeadline: {available: false, reason: 'not-observed', unit: 'min'}};
+/** J without its cargo ID: incomplete identity evidence that can neither join nor replace another job. */
+export const INCIDENT_JOB_WITHOUT_CARGO_ID: JobConfiguration = {...INCIDENT_JOB, cargoId: {available: false, reason: 'not-observed'}};
 
 export const INCIDENT_REVENUE = {raw: '9978', sdkType: 's64'} as const;
 export const INCIDENT_DELIVERED_DISTANCE_M = 187342.01049804688;
