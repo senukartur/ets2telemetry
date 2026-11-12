@@ -22,6 +22,8 @@ export interface OpenOptions {
   now?: () => number;
   /** In-process tests only; production always uses MIGRATIONS. */
   migrations?: readonly Migration[];
+  /** In-process tests only: the distance and fuel engine of groups this connection creates; production uses engine 1. */
+  accountingEngine?: 0 | 1;
   testHooks?: OpenTestHooks;
 }
 export interface OpenTestHooks extends BackupHooks {
@@ -34,6 +36,9 @@ export interface OpenTestHooks extends BackupHooks {
 }
 
 const DURABILITY: Durability = Object.freeze({journalMode: 'wal', synchronous: 'full', lockingMode: 'exclusive', foreignKeys: true});
+const ACCOUNTING_ENGINES = new WeakMap<Database.Database, 0 | 1>();
+/** The engine OpenOptions.accountingEngine registered for this writer, if any (sqlite/quantities.ts, defaultEngine). */
+export const registeredAccountingEngine = (db: Database.Database): 0 | 1 | undefined => ACCOUNTING_ENGINES.get(db);
 
 /** The verified writer connection. Writes go through `writer()`, which refuses a closed or unverified connection. */
 export class StorageConnection {
@@ -168,6 +173,7 @@ function openWriter(file: string, hooks: OpenTestHooks | undefined, check: (db: 
 export async function openConnection(options: OpenOptions): Promise<StorageConnection> {
   const now = options.now ?? Date.now, migrations = options.migrations ?? MIGRATIONS, supported = supportedVersion(migrations);
   if (!(options.purpose in ACCEPTED_ORIGIN) || typeof options.appVersion !== 'string' || !options.appVersion || options.appVersion.length > 64) fail('INVALID_INPUT');
+  if (options.accountingEngine !== undefined && options.accountingEngine !== 0 && options.accountingEngine !== 1) fail('INVALID_INPUT');
   validatePath(options.path, options.purpose);
   if (typeof options.backupsDirectory !== 'string' || !path.isAbsolute(options.backupsDirectory)) fail('DATA_PATH_INVALID');
   const inspection = inspect(options.path, options.purpose, supported);
@@ -206,6 +212,7 @@ export async function openConnection(options: OpenOptions): Promise<StorageConne
     const summary: OpenSummary = {schemaVersion: supported, created: inspection.fresh, databaseUuid: info.database_uuid, purpose: info.purpose};
     if (migratedFrom !== undefined) { summary.migratedFrom = migratedFrom; summary.backupFileName = backupFileName; }
     if (removedPartialBackups > 0) summary.removedPartialBackups = removedPartialBackups;
+    if (options.accountingEngine !== undefined) ACCOUNTING_ENGINES.set(db, options.accountingEngine);
     return new StorageConnection(db, DURABILITY, summary, now);
   } catch (error) {
     db.close();

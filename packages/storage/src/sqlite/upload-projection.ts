@@ -15,6 +15,7 @@ import {snapshot, type LogicalSnapshot} from './logical-snapshot';
 import {ACCOUNTING_PATH, encodeRow, decodeRow, type LogicalRow} from './logical-trips';
 import {deriveTripHardModeResult} from '../../../telemetry-core/src/hard-mode';
 import {decisionState, identityPending, rootBound} from './identity-pending';
+import {quantitiesIncomplete} from './quantities';
 
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
 const all = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as LogicalRow[];
@@ -75,7 +76,7 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
     job: jobValues(job), observedDistance: measure('observed_distance_m','m'), fuelUsed: measure('fuel_used_l','L'),
     deliveredDistance: (record.distance ?? {...unknown,unit:'m'}) as UploadFacts['deliveredDistance'], cargoDamage: (record.cargoDamage ?? {...unknown,unit:'fraction'}) as UploadFacts['cargoDamage'],
     revenue: money('revenue'), penalty: money('penalty'), moneyIncomplete: row._moneyIncomplete === true || snap.head !== null
-      && !!get(db,`${ACCOUNTING_PATH} SELECT 1 FROM path WHERE cut_odometer_m IS NOT NULL OR depth=256 AND prefix_ref IS NOT NULL LIMIT 1`,{head:snap.head}),
+      && !!get(db,`${ACCOUNTING_PATH} SELECT 1 FROM path WHERE cut_odometer_m IS NOT NULL OR depth=256 AND prefix_ref IS NOT NULL LIMIT 1`,{head:snap.head}) || quantitiesIncomplete(db,snap.head),
     clockAnomaly: opening?.utcMs !== null && opening?.utcMs !== undefined && opening.utcMs !== n(row.started_utc_ms)
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms),
     hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n)};
