@@ -190,4 +190,14 @@ describe('REG-014 history repair plan', () => {
       `  ${T} distance and fuel: stale`
     ]);
   });
+  it('flags money totals that a recalculation turns incomplete as a downgrade', () => {
+    const actions: RepairPlan['actions'] = [{kind: 'quantities', logicalTripUuid: T, fingerprint: F, before: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.03}}),
+      after: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.03}, accounting: {distance: 'complete', fuel: 'complete'}, moneyIncomplete: true})}];
+    const lines = planLines({...plan(), attested: [], actions, listings: [], confirmation: repairConfirmationCode(actions)});
+    expect(lines.slice(lines.indexOf(`  ${T}`) + 2, lines.indexOf(`  ${T}`) + 4)).toEqual([
+      '    after:  delivered, recording partial, 3 recordings, distance 60 m (complete), fuel 0.03 L (complete), game distance 187342.01049804688 m, revenue 9978 (s64), '
+        + 'money totals incomplete, Hard Mode 178/0/74 qualified, upload unbound, identity resolved',
+      '    DOWNGRADE: money totals become incomplete'
+    ]);
+  });
 });

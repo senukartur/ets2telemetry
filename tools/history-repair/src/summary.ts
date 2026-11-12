@@ -30,10 +30,14 @@ const QUANTITY_REASONS: readonly [RepairQuantityListing['reason'], string][] = [
   ['excluded', 'excluded'], ['open-member', 'a recording is still open'], ['too-large', 'too many samples'], ['no-truck-evidence', 'no complete reading'],
   ['unchanged', 'unchanged'], ['not-engine-0', 'engine-1 rows already present'], ['unknown-exclude', '--exclude names no legacy trip']
 ];
-/** A recalculation that turns an available quantity partial or unavailable: worth a look, and `--exclude` keeps the old value. */
+/**
+ * A recalculation that turns an available quantity partial or unavailable, or complete money totals incomplete: worth a
+ * look, and `--exclude` keeps the old values.
+ */
 function downgrades(action: RepairQuantitiesAction): string[] {
-  return (['distance', 'fuel'] as const).filter(quantity => action.before[quantity === 'distance' ? 'distanceM' : 'fuelUsedL'].available
+  const quantities = (['distance', 'fuel'] as const).filter(quantity => action.before[quantity === 'distance' ? 'distanceM' : 'fuelUsedL'].available
     && action.after.accounting !== undefined && action.after.accounting[quantity] !== 'complete').map(quantity => `${quantity} becomes ${action.after.accounting![quantity]}`);
+  return !action.before.moneyIncomplete && action.after.moneyIncomplete ? [...quantities, 'money totals become incomplete'] : quantities;
 }
 /** The dry run's report of `plan`, one line per entry. */
 export function planLines(plan: RepairPlan): string[] {
