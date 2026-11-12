@@ -5,8 +5,8 @@
 import {randomUUID} from 'node:crypto';
 import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import type {SampleInput, Storage} from '../../packages/storage/src';
-import {reconstructQuantities} from '../../packages/storage/src/sqlite/quantities';
+import {MAX_SAMPLE_BATCH, type SampleInput, type Storage} from '../../packages/storage/src';
+import {reconstructQuantities, SPLICE_SAMPLE_LIMIT} from '../../packages/storage/src/sqlite/quantities';
 import {mapUploadProjection, UPLOAD_PAGE_KINDS, type UploadProjectionPage} from '../../packages/storage/src/upload-projection';
 import {QUANTITY_FLAGS, tripUuidFor, type ProfileObservation, type QuantityPoint} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail} from '../../packages/contracts/src/journal';
@@ -18,7 +18,12 @@ import {ok, uploadGame, workspace} from './helpers';
 let ws: Awaited<ReturnType<typeof workspace>>;
 /** Upload projections need game-origin sources; the other cases keep the synthetic origin. */
 let gameOrigin = false;
-beforeEach(async () => {ws = await workspace(); gameOrigin = false;});
+/**
+ * Observed coverage and clean load windows: the root opens after a simulation start, and each later member opens at a
+ * paused job event with the simulation starting before its readings.
+ */
+let pausedOpen = false;
+beforeEach(async () => {ws = await workspace(); gameOrigin = false; pausedOpen = false;});
 const shaped = <T extends {source: {origin: string}}>(message: T): T => gameOrigin ? uploadGame(message) : message;
 afterEach(async () => {await ws.dispose();});
 
@@ -48,9 +53,11 @@ interface Member {member: string; script: Script; uuid: string; join: Join | 'ro
 function openMember(storage: Storage, member: string, join: Member['join'], events: readonly QuantityEvent[]): Member {
   const script = new Script(SESSIONS[member] ?? member);
   ok(storage.upsertSession({message: shaped(script.welcome())}));
-  const message = shaped(script.event(r.jobConfigured(job()))), uuid = tripUuidFor(script.session, message.data.eventSeq);
+  if (pausedOpen && join === 'root') ok(storage.commitEvent({message: shaped(script.event(r.started()))}));
+  const message = shaped(script.event(r.jobConfigured(job()), pausedOpen && join !== 'root' ? {simulation: 'paused'} : {})), uuid = tripUuidFor(script.session, message.data.eventSeq);
   ok(storage.commitEvent({message, ...(join === 'root' || join === 'open' ? {profile: proof(script)} : {}), effects: [{kind: 'trip.open', tripUuid: uuid, game: 'ets2', gameMode: mode,
     jobConfiguration: 'this-event', startedUtcMs: 1000, recordingCompleteness: 'complete'}, {kind: 'event.attribute', tripUuid: uuid, attribution: 'trip'}]}));
+  if (pausedOpen && join !== 'root') ok(storage.commitEvent({message: shaped(script.event(r.started()))}));
   return {member, script, uuid, join, events: events.filter(event => event.member === member).sort((a, b) => a.t - b.t), at: 1_001_000_000_000n};
 }
 function sampleOf(m: Member, reading: QuantityReading, withProof: boolean): SampleInput {
@@ -198,6 +205,19 @@ function deliver(storage: Storage, m: Member) {
     outcomeEvent: 'this-event', recordingCompleteness: 'partial', endedUtcMs: 2000}]}));
 }
 const scenario = (id: string) => QUANTITY_SCENARIOS.find(candidate => candidate.id === id)!;
+/**
+ * Records `count` linked readings of member B from A's s(1) save point at 1020 m, 20 m and 0.1 ml apart, in sample
+ * batches; the last one carries proof when `proofAtLast`.
+ */
+function longMember(storage: Storage, b: Member, count: number, proofAtLast = true) {
+  const rows: SampleInput[] = [];
+  for (let k = 0; k < count; k++) {
+    const reading = s(k, {member: 'B', odometerM: 1020 + 20 * k, x: 20 + 20 * k, fuelL: 399.99 - 0.0001 * k, linked: k > 0});
+    rows.push(sampleOf(b, reading, proofAtLast && k === count - 1));
+    b.previous = reading;
+  }
+  for (let from = 0; from < rows.length; from += MAX_SAMPLE_BATCH) ok(storage.appendSamples(b.script.session, rows.slice(from, from + MAX_SAMPLE_BATCH), {uniqueSeconds: true}));
+}
 
 describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
   it('F1a: a reading without proof right after each live join keeps both quantities', async () => {
@@ -207,7 +227,7 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     expectJournal(storage, root, INCIDENT_QUANTITIES);
     expectLedger(ledger(storage, root), INCIDENT_QUANTITIES);
   });
-  it('adds no row for duplicate samples, a duplicate delivery or a resolve replay, and keeps the totals after reopening', async () => {
+  it('adds no row for duplicate samples or a resolve replay, and keeps the totals after reopening', async () => {
     let storage = await ws.open();
     const {root, members} = record(storage, incidentReadings(), 'retro'), first = ledger(storage, root), last = members.at(-1)!;
     expectLedger(first, INCIDENT_QUANTITIES);
@@ -270,22 +290,89 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     const storage = await ws.open(), {root} = record(storage, scenario(id).readings, join);
     expect((ledger(storage, root)).annotations).toEqual(expected.map(flags => ({annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, ...flags})));
   });
-  // Budget: 3,602 recorded samples in three transactions, each through its full projection; it bounds work, not timing.
-  it('fails closed when a joining member recorded more than 3,600 samples before its join', {timeout: 120_000}, async () => {
+  // Budget: 28,804 recorded samples in sample batches, each through its full projection; it bounds work, not timing.
+  it('keeps the target subtotal as partial when a joining member recorded more than SPLICE_SAMPLE_LIMIT samples before its join', {timeout: 600_000}, async () => {
+    expect(SPLICE_SAMPLE_LIMIT).toBe(28_800);
     const storage = await ws.open(), {root, members} = record(storage, [s(0), s(1)]);
     closeMember(storage, members[0]);
-    const b = openMember(storage, 'B', 'pre-join', []), rows: SampleInput[] = [];
-    for (let k = 0; k <= 3_601; k++) {
-      const reading = s(k, {member: 'B', odometerM: 1020 + 20 * k, x: 20 + 20 * k, fuelL: 399.99 - 0.0001 * k, linked: k > 0});
-      rows.push(sampleOf(b, reading, k === 3_601));
-      b.previous = reading;
-    }
-    ok(storage.appendSamples(b.script.session, rows.slice(0, 3_600), {uniqueSeconds: true}));
-    ok(storage.appendSamples(b.script.session, rows.slice(3_600, 3_601), {uniqueSeconds: true}));
-    ok(storage.appendSamples(b.script.session, rows.slice(3_601), {uniqueSeconds: true}));
-    expectJournal(storage, root, {distanceM: null, distance: 'unavailable', fuelUsedL: null, fuel: 'unavailable', flags: [], cut: false});
+    const b = openMember(storage, 'B', 'pre-join', []);
+    longMember(storage, b, SPLICE_SAMPLE_LIMIT + 2);
+    // A's 20 m and 0.01 L kept at B's last reading before the join, with the gap bits; B's linked joining reading adds 20 m and 0.1 ml.
+    const expected: QuantityExpectation = {distanceM: 40, distance: 'partial', fuelUsedL: 0.0101, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+    expectJournal(storage, root, expected);
+    expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe('partial');
     const found = ledger(storage, root);
-    expect(found.head).toEqual({distance: null, fuel: null, flags: F.distanceUnproven | F.fuelUnproven | F.linked});
-    expect(found.unknown).toBe(1n);
+    expectLedger(found, expected);
+    expect(found.head!.flags).toBe(F.distanceGap | F.fuelBoundary | F.linked);
+    expect(found.reconstructed!.flags).toBe(found.head!.flags);
+    expect(found.unknown).toBe(0n);
+    expect(found.annotations).toEqual([{annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, distanceFlags: F.distanceGap, fuelFlags: F.fuelBoundary}]);
+  });
+  // Budget: 28,800 recorded samples, replayed once by the first resolve call; it bounds work, not timing.
+  it('replays at most SPLICE_SAMPLE_LIMIT samples in one resolve call and resolves the next pending segment in the next call', {timeout: 600_000}, async () => {
+    const storage = await ws.open(), {root, members} = record(storage, [s(0), s(1)]);
+    closeMember(storage, members[0]);
+    const b = openMember(storage, 'B', 'retro', []);
+    longMember(storage, b, SPLICE_SAMPLE_LIMIT, false);
+    deliver(storage, b);
+    // A second closed pending segment of B's session, after B's delivery.
+    const message = b.script.event(r.jobConfigured(job())), second = tripUuidFor(b.script.session, message.data.eventSeq);
+    ok(storage.commitEvent({message, effects: [{kind: 'trip.open', tripUuid: second, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', startedUtcMs: 3000,
+      recordingCompleteness: 'complete'}, {kind: 'event.attribute', tripUuid: second, attribution: 'trip'}]}));
+    ok(storage.commitEvent({message: b.script.event(r.delivered(), {advanceMs: 1_000}), effects: [{kind: 'trip.close', tripUuid: second, outcome: 'delivered', closeReason: 'outcome',
+      outcomeEvent: 'this-event', recordingCompleteness: 'partial', endedUtcMs: 4000}]}));
+    const at = ns(SPLICE_SAMPLE_LIMIT + 1_000), resolve = () => ok(storage.resolvePendingMemberships({pluginSessionId: b.script.session, nextEventSeq: b.script.next.toString(),
+      profile: {...proof(b.script), afterMonotonicNs: at}, sourceClockId: b.script.clockId, monotonicNs: at}));
+    expect(resolve()).toEqual({status: 'resolved', resolved: 1, remaining: 1});
+    expect(resolve()).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    // B continues A at A's save point (20 m, 0.01 L), then 28,799 linked steps of 20 m and 0.1 ml each.
+    const expected: QuantityExpectation = {distanceM: 576_000, distance: 'complete', fuelUsedL: 2.8899, fuel: 'complete', flags: [], cut: false};
+    expectJournal(storage, root, expected);
+    expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe('partial');
+    expectLedger(ledger(storage, root), expected);
+  });
+});
+
+describe('REG-005/006 engine 1 junction coverage', () => {
+  /** A stops at 1060 m with 60 m and 0.03 L; B's first reading is the junction, then B drives 20 m on 10 ml. */
+  const readings = (b0: Partial<QuantityReading> = {}, b1: Partial<QuantityReading> = {}) => [s(0), s(1), s(2), s(3, {speedMps: 0}),
+    s(0, {member: 'B', odometerM: 1060, fuelL: 399.97, x: 60, speedMps: 0, linked: false, ...b0}), s(1, {member: 'B', odometerM: 1080, fuelL: 399.96, x: 80, ...b1})];
+  const same: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'complete', flags: [], cut: false};
+  // Not the same save point: no fuel is credited across the junction, and fuel carries with the boundary bit.
+  const boundary: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'partial', flags: ['fuelBoundary'], cut: false};
+  it.each([
+    ['an open join at the same save point with proof and a clean load window', 'open', readings(), false, same, 'complete'],
+    ['an open join 25 ml of fuel away from the save point', 'open', readings({fuelL: 399.945}, {fuelL: 399.935}), false, boundary, 'partial'],
+    ['an open join 0.1 m away from the save point', 'open', readings({x: 60.1}), false, boundary, 'partial'],
+    ['a pre-join splice at the same save point', 'pre-join', readings(), false, same, 'complete'],
+    ['an open join whose junction reading has no proof (F1a)', 'open', readings(), true, same, 'partial'],
+    ['a retroactive join at the same save point (E6)', 'retro', readings(), false, same, 'partial']
+  ] as const)('%s', async (_name, join, rs, proofless, expected, completeness) => {
+    pausedOpen = true;
+    const storage = await ws.open(), {root} = record(storage, rs, join, [], new Set(proofless ? [rs[4]] : []));
+    expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe(completeness);
+    expectJournal(storage, root, expected);
+    expectLedger(ledger(storage, root), expected);
+  });
+});
+
+describe('ET-112c engine 1 member whose samples before the join are not replayed', () => {
+  // B stands at A's save point before its join, and its proof-bearing joining reading stands there too.
+  const before = s(0, {member: 'B', odometerM: 1060, fuelL: 399.97, x: 60, speedMps: 0, linked: false}), joining = s(1, {member: 'B', odometerM: 1060, fuelL: 399.97, x: 60, speedMps: 0});
+  // A's 60 m and 0.03 L kept with the gap bits: the unreplayed reading could have moved the truck.
+  const kept: QuantityExpectation = {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+  it.each(['an engine-0 member', 'a member without a complete reading'] as const)('keeps the target subtotal as partial for %s', async variant => {
+    let storage = await ws.open();
+    const {root, members} = record(storage, [s(0), s(1), s(2), s(3, {speedMps: 0})]);
+    closeMember(storage, members[0]);
+    if (variant === 'an engine-0 member') { ok(storage.close()); storage = await ws.open({accountingEngine: 0}); }
+    const b = openMember(storage, 'B', 'pre-join', []);
+    ok(storage.appendSamples(b.script.session, [sampleOf(b, variant === 'an engine-0 member' ? before : {...before, odometerM: null}, false)], {uniqueSeconds: true}));
+    b.previous = before;
+    ok(storage.appendSamples(b.script.session, [sampleOf(b, joining, true)], {uniqueSeconds: true}));
+    expectJournal(storage, root, kept);
+    const found = ledger(storage, root);
+    expectLedger(found, kept);
+    expect(found.annotations).toEqual([{annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, distanceFlags: F.distanceGap, fuelFlags: F.fuelBoundary}]);
   });
 });
