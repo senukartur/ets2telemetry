@@ -1,12 +1,14 @@
 // ET-112c engine 1 distance and fuel in storage (REG-003, REG-005, REG-006, REG-008, REG-014): the hand-written corpus
 // of tests/shared/quantity-scenarios.ts recorded through the storage API, live and equal to the read-only reconstruction,
 // across live joins at the opening event, joins after pre-join samples (the splice) and retroactive joins. Origin:
-// synthetic; every expected value is written by hand in the corpus or below.
+// synthetic; every expected value is written by hand in the corpus or below. ET-112g2 adds a legacy engine-0 group
+// recalculated with engine 1 (upgradeQuantities) whose rollback must read engine-1 rows only.
 import {randomUUID} from 'node:crypto';
 import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MAX_SAMPLE_BATCH, type SampleInput, type Storage} from '../../packages/storage/src';
-import {reconstructQuantities, SPLICE_SAMPLE_LIMIT} from '../../packages/storage/src/sqlite/quantities';
+import {revise} from '../../packages/storage/src/sqlite/logical-trips';
+import {reconstructQuantities, SPLICE_SAMPLE_LIMIT, upgradeQuantities} from '../../packages/storage/src/sqlite/quantities';
 import {mapUploadProjection, UPLOAD_PAGE_KINDS, type UploadProjectionPage} from '../../packages/storage/src/upload-projection';
 import {QUANTITY_FLAGS, tripUuidFor, type ProfileObservation, type QuantityPoint} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail} from '../../packages/contracts/src/journal';
@@ -540,5 +542,48 @@ describe('ET-112c engine 1 captured pause before a reload', () => {
     const found = ledger(storage, a.uuid);
     expectLedger(found, expected);
     expect(found.reconstructed!.flags).toBe(found.head!.flags);
+  });
+});
+
+describe('ET-112g2 a legacy engine-0 group recalculated with engine 1', () => {
+  // A drives 1000 to 1100 m on one run; its reading at 1050 m has no fuel, so engine 1 holds there while engine 0 keeps
+  // a self-anchored row of the same run. B then loads 1055 m, where no point matches: the newest retained engine-1 point
+  // at or below 1055 m is A's 1040 m reading (0.02 L), so 100 - (1100 - 1055) = 55 m and 0.02 L with the boundary bit,
+  // then B drives 20 + 20 m on 10 + 10 ml.
+  const fuelless = s(3, {odometerM: 1050, x: 50, speedMps: 10});
+  const a = [s(0), s(1), s(2), fuelless, s(4, {odometerM: 1060, x: 60, fuelL: 399.97, speedMps: 0}), s(5, {odometerM: 1080, x: 80, fuelL: 399.96}),
+    s(6, {odometerM: 1100, x: 100, fuelL: 399.95})];
+  const b = [s(0, {member: 'B', odometerM: 1055, x: 55, fuelL: 399.9, speedMps: 0, gameClock: CLOCK_B, linked: false}),
+    s(1, {member: 'B', odometerM: 1075, x: 75, fuelL: 399.89, gameClock: CLOCK_B}), s(2, {member: 'B', odometerM: 1095, x: 95, fuelL: 399.88, gameClock: CLOCK_B})];
+  const expected: QuantityExpectation = {distanceM: 95, distance: 'complete', fuelUsedL: 0.04, fuel: 'partial', flags: ['distanceRestored', 'fuelBoundary'], cut: true};
+  /** Replays the closed engine-0 group of `uuid` with engine 1 and revises it, as the history repair's action does. */
+  function upgrade(uuid: string) {
+    const db = new Database(ws.database);
+    try {
+      db.defaultSafeIntegers(true);
+      db.transaction(() => {
+        const logical = db.prepare('SELECT m.logical_ref FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE t.trip_uuid=?').pluck().get(uuid) as bigint;
+        expect(upgradeQuantities(db, logical)).toEqual({status: 'upgraded'});
+        revise(db, logical);
+      })();
+    } finally { db.close(); }
+  }
+  // The points of a rollback are engine-1 rows only: with A's engine-0 rows among them, the 1050 m row would be kept.
+  it.each(['native', 'upgraded'] as const)('restores a later member\'s load inside the root\'s run from engine-1 rows only: %s root', async root => {
+    let storage = await ws.open(root === 'upgraded' ? {accountingEngine: 0} : {});
+    const m = openMember(storage, 'A', 'root', []);
+    for (const reading of a) {
+      const sample = sampleOf(m, reading, true);
+      ok(storage.appendSamples(m.script.session, [reading === fuelless ? {...sample, fuel: absent} : sample], {uniqueSeconds: true}));
+      m.previous = reading;
+    }
+    closeMember(storage, m);
+    ok(storage.close());
+    if (root === 'upgraded') upgrade(m.uuid);
+    storage = await ws.open();
+    const later = openMember(storage, 'B', 'open', []);
+    for (const reading of b) { ok(storage.appendSamples(later.script.session, [sampleOf(later, reading, true)], {uniqueSeconds: true})); later.previous = reading; }
+    expectJournal(storage, m.uuid, expected);
+    expectLedger(ledger(storage, m.uuid), expected);
   });
 });
