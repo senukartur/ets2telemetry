@@ -166,10 +166,10 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(storage.commitEvent({message,effects:[{kind:'completeness.add',interval:{tripUuid:uuid,kind:'discontinuity',detail}}]})).toMatchObject({ok:false,error:{code:'INVALID_INPUT'}});
     expect(ok(storage.committedThrough(s.session))).toBe('1');expect(ok(storage.getEvent(s.session,'2'))).toBeUndefined();ok(storage.close());
   });
-  it.each(['after-driving','before-first-start','chain-break'] as const)('retains 750m and 1.5L through menu acceptance, sleep and three saved sources: %s',async scenario=>{
+  it.each(['after-driving','before-first-start','coalesced','chain-break'] as const)('retains 750m and 1.5L through menu acceptance, sleep and three saved sources: %s',async scenario=>{
     const values=job({market:{available:true,value:'external_contracts'}}),signals=new EventEmitter(),coverage=new Map<string,string>(),acks:{stored:string;through:string}[]=[];
     let worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),ingestion:V1Ingestion|undefined,currentProof:ProfileObservation|undefined,qualified=true;
-    const token={};let currentSink:TripRecorderSink;const prestart=scenario!=='after-driving',broken=scenario==='chain-break';let coalesced=false;
+    const token={};let currentSink:TripRecorderSink;const prestart=scenario!=='after-driving',broken=scenario==='chain-break',skipping=broken||scenario==='coalesced';let advanced=false;
     const create=()=>{
       const commit=client.commitEvent.bind(client),gap=client.commitGap.bind(client),attach=client.openAttachedTrip.bind(client);
       client.commitEvent=async input=>{const result=await commit(input);if(result.ok)coverage.set((input.message as ServerMessage).source.pluginSessionId,result.value.committedThroughEventSeq);return result;};
@@ -225,7 +225,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
             odometer:{available:true,value:odo,unit:'m'},fuel:{available:true,value:fuel,unit:'L'},speed:{available:true,value:simulation==='paused'||stationary?0:13.44,unit:'m/s'},
             gameTime:{available:true,value:minutes,unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}},ms);
           if(prestart&&!firstRunningSeen)message.data.state.gameTime={available:false,reason:'not-observed',unit:'min',clockId:s.clockId};
-          if(broken&&index===0){if(odo===1000250&&simulation==='running')coalesced=true;message.data.continuity.coalescedSnapshots=coalesced?'1':'0';}
+          // ET-112c1: a coalesced-snapshot advance is a seq skip and keeps the link; an offline transition breaks it.
+          if(skipping&&index===0){if(odo===1000250&&simulation==='running')advanced=true;message.data.continuity[broken?'offlineTransitions':'coalescedSnapshots']=advanced?'1':'0';}
           await waitSignal(persist?'endpoint':'reading',ns=>ns===message.capture.monotonicNs,()=>send(message));return message;
         };
         try{
@@ -247,7 +248,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
             savedFuel+=0.01171875;savedX+=prestart?(index===1?0.017:0.009):0.001953125;
             await capture(1000000+index*250,savedFuel,savedX,minutes(index),'paused',100,true);
           }
-          if(broken&&index===0)succeeded(await currentSink!.samples.write(3600,true));
+          if(skipping&&index===0)succeeded(await currentSink!.samples.write(3600,true));
           await event(r.started(),'running','2');
           if(prestart&&index>0)await capture(1000000+index*250,savedFuel,savedX,minutes(index),'running',1000,false,true,true);
           savedFuel-=0.5;savedX+=13.318;
@@ -277,9 +278,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
           else {await event(r.delivered(),'paused','2');await ingestion!.stop();}
           if(prestart&&index===1)succeeded(await currentSink!.samples.write(3600,true));
           const detail=validateJournalTripDetail(ok(await client.journalTrip(original)));
-          expect(detail.trip.recordingCompleteness,`source ${index}`).toBe('complete');
-          // ET-112c1: the chain-break scenario's coalesced-snapshot advance is a seq skip and keeps the supported totals.
-          expect(detail.trip.observedDistanceM).toEqual({available:true,value:(index+1)*250});expect(detail.trip.fuelUsedL.available&&detail.trip.fuelUsedL.value).toBeCloseTo((index+1)*0.5,9);
+          expect(detail.trip.recordingCompleteness,`source ${index}`).toBe('complete');if(broken){expect(detail.trip.observedDistanceM.available).toBe(false);expect(detail.trip.fuelUsedL.available).toBe(false);}
+          else{expect(detail.trip.observedDistanceM).toEqual({available:true,value:(index+1)*250});expect(detail.trip.fuelUsedL.available&&detail.trip.fuelUsedL.value).toBeCloseTo((index+1)*0.5,9);}
           expect(ok(await client.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([original]);if(index===0)oldSnapshot=detail.exportBounds.snapshot!.samples;
           if(index<2)await waitSignal('closed',()=>true,()=>peer!.end());
         }finally{peer?.destroy();await new Promise<void>(resolve=>server.close(()=>resolve()));}
@@ -293,9 +293,9 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
       expect(exported.formatVersion).toBe(5);expect(exported.intervals.length).toBeGreaterThan(0);expect(JSON.stringify(exported.intervals)).not.toMatch(/[a-f0-9]{64}/);
-      expect(exported.trip).toMatchObject({outcome:'delivered',recordingCompleteness:'complete',observedDistanceM:{available:true,value:750},fuelUsedL:{available:true,value:1.5}});
+      expect(exported.trip).toMatchObject({outcome:'delivered',recordingCompleteness:'complete',observedDistanceM:broken?{available:false}:{available:true,value:750},fuelUsedL:broken?{available:false}:{available:true,value:1.5}});
       const breaks=(exported.intervals as {cause:string;detail:unknown}[]).filter(note=>note.cause==='accounting-chain-break');
-      expect(breaks.map(note=>note.detail)).toEqual([]);
+      if(broken)expect(breaks).toMatchObject([{detail:{version:1,reason:'missing-predecessor',recorderReset:'offline-transition',distanceLost:true,fuelLost:true}}]);else expect(breaks.map(note=>note.detail)).toEqual([]);
       if(scenario==='before-first-start')expect(exported.trip).toMatchObject({is_hard_mode:true,hard_mode_details:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(exported.sources).toHaveLength(3);expect(exported.events.filter(event=>event.type==='job.delivered')).toHaveLength(1);expect(exported.samples).toHaveLength(prestart?8:4);
       for(const ack of acks)expect(BigInt(ack.through)).toBeLessThanOrEqual(BigInt(ack.stored));
@@ -309,13 +309,13 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const row=seedSample(s,uuid,second,base+second*1000,{speed:{available:true,value:20},odometer:{available:true,value:1000000+(second-3)*100},
         fuel:{available:true,value:100-(second-3)*0.2},position:{available:true,value:{x:(second-3)*5,y:0,z:0}},gameTime:{minutes:{available:true,value:500},clockId:s.clockId},
         recording:{profile:proof(s),job:job(),truck:'same-truck',processInstanceId:s.welcome().source.processInstanceId,
-          ...(second===5?{predecessorReset:'snapshot-coalesced' as const}:{}),
+          ...(second===5?{predecessorReset:'offline-transition' as const}:{}),
           ...(second===4||second===6?{previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:String(5_000_000_000_000n+BigInt(second-1)*1_000_000_000n)}}:{})}});
       ok(storage.appendSamples(s.session,[row],{uniqueSeconds:true}));
       expect(ok(storage.appendSamples(s.session,[row],{uniqueSeconds:true})).appended).toBe(0);
     }
     const notes=ok(storage.journalIntervals(uuid,{limit:100})).intervals.filter(note=>note.cause==='accounting-chain-break');
-    expect(notes).toHaveLength(1);expect(notes[0]).toMatchObject({annotation:true,endUtcMs:base+5000,detail:{reason:'missing-predecessor',recorderReset:'snapshot-coalesced',sameTruck:true,sameGameClock:true,odometerStep:'continuous',odometerDeltaM:100,positionDeltaM:5}});
+    expect(notes).toHaveLength(1);expect(notes[0]).toMatchObject({annotation:true,endUtcMs:base+5000,detail:{reason:'missing-predecessor',recorderReset:'offline-transition',sameTruck:true,sameGameClock:true,odometerStep:'continuous',odometerDeltaM:100,positionDeltaM:5}});
     expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe('complete');storage.close();
     readOnly(ws.database,db=>expect(db.prepare("SELECT created_utc_ms FROM completeness_intervals WHERE json_extract(detail_json,'$.cause')='accounting-chain-break'").pluck().get()).toBe(ws.now()));
   });
@@ -942,7 +942,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     expect(succeeded(await client.listSamples({tripUuid:uuid},{includeExcluded:true}))).toHaveLength(variant.endsWith('captured')?2:3);
     expect(await client.close()).toEqual({clean:true});
   });
-  it.each(['clean','counter','unqualified','foreign-trip','foreign-plugin','foreign-clock','foreign-proof','foreign-process','foreign-scope','foreign-load','late-proof','stale','ahead','ferry-first','train-second','gap','profile-change','clock-change','intermediate-regression','intermediate-teleport','intermediate-refuel'] as const)('advances two captured pauses through an unsampled running reading only with owned continuous evidence: %s',async variant=>{
+  it.each(['clean','coalesced','counter','unqualified','foreign-trip','foreign-plugin','foreign-clock','foreign-proof','foreign-process','foreign-scope','foreign-load','late-proof','stale','ahead','ferry-first','train-second','gap','profile-change','clock-change','intermediate-regression','intermediate-teleport','intermediate-refuel'] as const)('advances two captured pauses through an unsampled running reading only with owned continuous evidence: %s',async variant=>{
     const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),s=new Script(ETS2_A),context={receivedUtcMs:1000};
     let currentProof:ProfileObservation|undefined=proof(s);succeeded(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
     const recorder=new TripRecorderSink(client,{profileEvidence:()=>currentProof});succeeded(await recorder.openSession(s.welcome()));succeeded(recorder.observe(s.checkpoint(null),context));
@@ -970,6 +970,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
         gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}},advanceMs);
       if(variant==='clock-change' && odo===1000150 && message.data.state.gameTime.available)message.data.state.gameTime.clockId='40000000-0000-4000-8000-000000000099';
       if(variant==='counter' && odo===1000150)message.data.continuity.offlineTransitions='1';
+      // ET-112c1: a coalesced-snapshot advance at the paused endpoint is a seq skip and keeps the running witness.
+      if(variant==='coalesced' && odo===1000150)message.data.continuity.coalescedSnapshots='1';
       succeeded(recorder.observe(message,context));if(recorder.attach.due())succeeded(await recorder.attach.open(context));return message;
     };
     await capture(1000000,100,0,'running',1000);await capture(1000100,99,20,'running',1000);
@@ -987,17 +989,17 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     // The next refresh advances its causal lower bound; the already-qualified running witness must remain usable.
     currentProof={...proof(s),...(variant==='profile-change'?{binding:'8'.repeat(64)}:{}),afterMonotonicNs:(BigInt(running.capture.monotonicNs)+1n).toString()};
     succeeded(await recorder.commit(s.event(r.paused(),{simulation:'paused',advanceMs:100}),context));await capture(1000150,98,30,'paused',0);
-    const second=succeeded(await client.journalTrip(uuid));
-    if(variant==='clean'){expect(second.trip.observedDistanceM).toEqual({available:true,value:150});expect(second.trip.fuelUsedL).toEqual({available:true,value:2});}
+    const second=succeeded(await client.journalTrip(uuid)),kept=variant==='clean'||variant==='coalesced';
+    if(kept){expect(second.trip.observedDistanceM).toEqual({available:true,value:150});expect(second.trip.fuelUsedL).toEqual({available:true,value:2});}
     else {expect(second.trip.observedDistanceM.available).toBe(false);expect(second.trip.fuelUsedL.available).toBe(false);}
-    if(variant==='clean'){
+    if(kept){
       const before=writes;for(let n=0;n<20;n++)await capture(1000150,98,30,'paused',10);
       expect(writes).toBe(before); // no repeated pause commands or projection churn after the meaningful boundary
     }
     expect(succeeded(await client.listSamples({tripUuid:uuid}))).toHaveLength(2);expect(await client.close()).toEqual({clean:true});
     const reopened=await ws.open();expect(succeeded(reopened.journalTrip(uuid)).trip.observedDistanceM).toEqual(second.trip.observedDistanceM);reopened.close();
     readOnly(ws.database,db=>{db.defaultSafeIntegers(true);expect(logicalSnapshot(db,uuid,BigInt(first.exportBounds.snapshot!.samples.split(':')[3])).row.observed_distance_m).toBe(125);
-      if(variant==='clean'){
+      if(kept){
         const stored=JSON.parse(db.prepare('SELECT row_json FROM logical_projection_states WHERE id=(SELECT state_ref FROM logical_revisions ORDER BY id DESC LIMIT 1)').pluck().get() as string)._coverage.endpoint.running;
         expect(stored.monotonicNs).toBe(running.capture.monotonicNs);expect(stored.profile.afterMonotonicNs).toBe('0');
       }
