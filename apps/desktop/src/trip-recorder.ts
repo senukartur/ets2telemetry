@@ -623,6 +623,8 @@ export class TripRecorderSink implements DurableSink {
     const result=await this.client.resolvePendingMemberships({pluginSessionId:due.pluginSessionId,nextEventSeq:(BigInt(session.processedThrough)+1n).toString(),
       profile:structuredClone(profile),sourceClockId:point.capture.clockId,monotonicNs:point.capture.monotonicNs});
     if(!result.ok)return result;
+    // ET-112d: a resolved member joins its logical trip, whose summed Hard Mode the page shows instead of the pending segment's.
+    if(result.value.resolved>0)await this.readHardModeTrip(session.game);
     if(result.value.remaining===0)this.resolvedProofKey=due.key;
     return {ok:true,value:{status:result.value.status==='resolved'?'committed':'duplicate'}};
   }

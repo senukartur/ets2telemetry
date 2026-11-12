@@ -15,6 +15,8 @@ import type {
 import type {ProfileObservation} from '../../packages/telemetry-core/src/trips/continuation';
 import {storageError} from '../../packages/storage/src/errors';
 import {canonicalJson} from '../../packages/telemetry-core/src/index';
+import {newHardModeDetails, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import type {JournalTripDetail} from '../../packages/contracts/src/journal';
 import type {CoverageMessage, DurableSink, WelcomeMessage} from '../../apps/desktop/src/durable-sink';
 import type {TelemetrySocket} from '../../apps/desktop/src/native-pipe-client';
 import {RECORDER_FAILURE_CLASS, TripRecorderSink, type TripRecorderClient} from '../../apps/desktop/src/trip-recorder';
@@ -983,6 +985,29 @@ describe('ET-112b2b resolving closed pending memberships from a later proof', ()
     await settle();
     expect(storage.resolves.map(input => input.nextEventSeq)).toEqual(['1']);
     expect([latest().destroyed, state().durable]).toEqual([true, {state: 'pending', retryCode: 'DISK_FULL'}]);
+  });
+  it.each([
+    {answer: {status: 'resolved', resolved: 1, remaining: 0} as const, reads: 1},
+    {answer: {status: 'none', resolved: 0, remaining: 0} as const, reads: 0}
+  ])('R8 rereads the trip Hard Mode once only after a resolve joined a member: $answer.status (ET-112d, REG-003, REG-005)', async ({answer, reads}) => {
+    // The joined logical trip of the delivered member: 101 + 77 passing and 74 unknown checks.
+    const joined = {...newHardModeDetails(unknownHardMode(1), null), passingChecks: 178, failingChecks: 0, unknownChecks: 74};
+    class JournalStorage extends ResolvingStorage {
+      readonly journals: string[] = [];
+      journalTrip(tripUuid: string) {this.journals.push(tripUuid); return ok({trip: {hardModeDetails: joined}} as unknown as JournalTripDetail);}
+    }
+    const storage = new JournalStorage(), s = new Script(ETS2_A), evidence: {profile?: ProfileObservation} = {}, published: unknown[] = [];
+    const recorder = new TripRecorderSink(storage, {profileEvidence: () => evidence.profile, hardModeEvidence: () => ({assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null}),
+      onHardModeTrip: details => {published.push(details);}});
+    await recorder.openSession(s.welcome()); recorder.observe(s.checkpoint(null), context);
+    for (const record of [r.jobConfigured(), r.delivered()]) expect((await recorder.commit(s.event(record), context)).ok).toBe(true);
+    evidence.profile = proofOf(s);
+    const before = {journals: storage.journals.length, published: published.length};
+    storage.answers.push({ok: true, value: answer});
+    recorder.observe(s.snapshot(), context);
+    await recorder.attach.open(context);
+    expect(storage.journals.slice(before.journals)).toEqual(Array(reads).fill(uuid(ETS2_A, '1')));
+    expect(published.slice(before.published)).toEqual(Array(reads).fill(joined));
   });
   it('R7 never sends without the optional command', async () => {
     const storage = new ModelStorage(), {s, recorder} = await deliveredWithoutProof(storage);
