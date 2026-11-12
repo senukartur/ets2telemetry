@@ -435,7 +435,7 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     const attached=vi.spyOn(storage,'openAttachedTrip');await recorder.attach.open(context);
     expect(attached).toHaveBeenCalledTimes(1);expect(attached.mock.calls[0][0]).not.toHaveProperty('endpoint');
   });
-  it.each(['0','7'])('links unchanged cumulative counters after initial value %s and breaks only on advances',async initial=>{
+  it.each(['0','7'])('links unchanged cumulative counters after initial value %s and breaks only on offline advances',async initial=>{
     const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
     const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
     accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
@@ -446,7 +446,8 @@ describe('ET-015b one-second samples through the trip recorder', () => {
       accept(recorder.observe(message,context));
     }
     accept(await recorder.samples.write(3600,true));
-    expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,true,false,true,false,true]);
+    // ET-112c1: a coalesced-snapshot advance (the third reading) keeps the link; an offline advance (the fifth) breaks it.
+    expect(storage.model.samples.map(row=>row.recording?.previous!==undefined)).toEqual([false,true,true,true,false,true]);
   });
 
   it('resets continuity baselines on reconnect and source changes without poisoning subsequent samples',async()=>{
@@ -473,7 +474,7 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
     accept(await recorder.commit(s.event(r.jobConfigured()),context));
     for(const [ms,counter] of [[1000,'0'],[100,'1'],[1000,'1'],[1000,'1']] as const){
-      const message=s.snapshot({},ms);message.data.continuity={coalescedSnapshots:counter,offlineTransitions:'0'};
+      const message=s.snapshot({},ms);message.data.continuity={coalescedSnapshots:'0',offlineTransitions:counter};
       accept(recorder.observe(message,context));
     }
     accept(await recorder.samples.write(3600,true));
@@ -501,18 +502,113 @@ describe('ET-015b one-second samples through the trip recorder', () => {
     expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,undefined,undefined]);
   });
 
+  // ET-112c1 (F2): a seq skip alone loses no gameplay data (protocol v1 §continuity), so only an offline transition
+  // breaks the link between two running samples one second apart (REG-005).
+  it.each(['coalesced','offline'] as const)('links running samples across a coalesced-snapshot advance but not an offline transition: %s',async variant=>{
+    const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    for(const advanced of [false,true]){
+      const message=s.snapshot({simulation:'running'});
+      if(advanced)message.data.continuity=variant==='coalesced'?{coalescedSnapshots:'1',offlineTransitions:'0'}:{coalescedSnapshots:'0',offlineTransitions:'1'};
+      accept(recorder.observe(message,context));
+    }
+    accept(await recorder.samples.write(3600,true));
+    const [first,next]=storage.model.samples;
+    if(variant==='coalesced'){expect(next.recording?.previous?.monotonicNs).toBe(first.monotonicNs);expect(next.recording?.predecessorReset).toBeUndefined();}
+    else {expect(next.recording?.previous).toBeUndefined();expect(next.recording?.predecessorReset).toBe('offline-transition');}
+  });
+
+  // ET-112c1 (F1): a transient profile check (a reading with a status but no proof, or a pending check that ends in a
+  // handoff) keeps the consecutive sample link, and the handoff never restores an older predecessor (REG-005, REG-008).
+  it.each(['missing-proof','handoff'] as const)('keeps consecutive sample links through a transient profile check: %s',async variant=>{
+    const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},token={};
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const profile={version:1 as const,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2' as const,pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1};
+    let pending=false;
+    const recorder=new TripRecorderSink(storage,{profileEvidence:()=>pending&&variant==='missing-proof'?undefined:profile,profileStatus:()=>({phase:pending?'pending':'admitted',token})});
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    const configuration=s.checkpoint(job()).data.state.configuration;
+    for(const [index,odo] of [1000000,1000020,1000040,1000060].entries()){
+      pending=index===1;
+      accept(recorder.observe(s.snapshot({configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'},speed:{available:true,value:20,unit:'m/s'},
+        gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x:odo-1000000,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}}),context));
+    }
+    accept(await recorder.samples.write(3600,true));
+    const rows=storage.model.samples;
+    expect(rows.map(row=>row.recording?.profile!==undefined)).toEqual(variant==='missing-proof'?[true,false,true,true]:[true,true,true,true]);
+    expect(rows.map(row=>row.recording?.previous?.monotonicNs)).toEqual([undefined,rows[0].monotonicNs,rows[1].monotonicNs,rows[2].monotonicNs]);
+    expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,undefined,undefined]);
+  });
+
+  /**
+   * Running readings of one truck 1 s apart with a 20 m step; reading i carries the profile evidence `proofs(s)[i]`
+   * (undefined: no proof) and, with a status, is admitted while proven and pending otherwise.
+   */
+  const runningRows=async(proofs:(s:Script)=>(ProfileObservation|undefined)[],withStatus:boolean)=>{
+    const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},token={},list=proofs(s);let index=0;
+    const accept=<T>(result:{ok:true;value:T}|{ok:false;error:{code:string}}):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const recorder=new TripRecorderSink(storage,{profileEvidence:()=>list[index],
+      ...(withStatus?{profileStatus:()=>({phase:list[index]?'admitted' as const:'pending' as const,token})}:{})});
+    accept(await recorder.openSession(s.welcome()));accept(recorder.observe(s.checkpoint(null),context));
+    accept(await recorder.commit(s.event(r.jobConfigured()),context));
+    const configuration=s.checkpoint(job()).data.state.configuration;
+    for(index=0;index<list.length;index++){
+      const odo=1000000+index*20;
+      accept(recorder.observe(s.snapshot({configuration,simulation:'running',odometer:{available:true,value:odo,unit:'m'},speed:{available:true,value:20,unit:'m/s'},
+        gameTime:{available:true,value:'500',unit:'min',clockId:s.clockId},worldPlacement:{available:true,value:{position:{x:odo-1000000,y:0,z:0},orientation:{heading:0,pitch:0,roll:0}}}}),context));
+    }
+    accept(await recorder.samples.write(3600,true));
+    return storage.model.samples;
+  };
+  const proven=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,
+    processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
+  const changes={'load generation':{loadGeneration:2},binding:{binding:'c'.repeat(64)}} as const;
+
+  // ET-112c1: a proven change of the profile identity ends the live link between consecutive running samples, as before
+  // c1, whether or not an admitted handoff is retained (REG-005, REG-008).
+  it.each([['load generation',false],['load generation',true],['binding',false],['binding',true]] as const)(
+    'breaks the running sample link when the proven %s changes (profile status: %s)',async(field,withStatus)=>{
+      const rows=await runningRows(s=>{const p=proven(s),q={...p,...changes[field]};return [p,p,q,q];},withStatus);
+      expect(rows.map(row=>row.recording?.previous?.monotonicNs)).toEqual([undefined,rows[0].monotonicNs,undefined,rows[2].monotonicNs]);
+      expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,'profile-changed',undefined]);
+    });
+
+  // ET-112c1: a run of readings without proof that spans more than 5 s still links each row to the one just before it;
+  // storage checks each linked step on its own (REG-005).
+  it.each([false,true])('links every row of a proof-less running run longer than 5 s (profile status: %s)',async withStatus=>{
+    const rows=await runningRows(s=>{const p=proven(s);return [p,undefined,undefined,undefined,undefined,undefined,undefined,undefined,p];},withStatus);
+    expect(rows).toHaveLength(9);
+    expect(BigInt(rows[8].monotonicNs)-BigInt(rows[1].monotonicNs)).toBeGreaterThanOrEqual(6_000_000_000n);
+    expect(rows.map(row=>row.recording?.profile!==undefined)).toEqual([true,false,false,false,false,false,false,false,true]);
+    expect(rows.map(row=>row.recording?.previous?.monotonicNs)).toEqual([undefined,...rows.slice(0,8).map(row=>row.monotonicNs)]);
+    expect(rows.map(row=>row.recording?.predecessorReset)).toEqual(Array(9).fill(undefined));
+  });
+
+  // ET-112c1: when proof returns after a proof-less run, the identity it is compared with is the last proven one of the
+  // live link; only a different binding ends the link (REG-005, REG-008).
+  it.each([['different',false],['different',true],['same',false],['same',true]] as const)(
+    'compares returning proof with the last proven identity of the live link: %s binding (profile status: %s)',async(variant,withStatus)=>{
+      const rows=await runningRows(s=>{const p=proven(s);return [p,undefined,undefined,undefined,variant==='different'?{...p,...changes.binding}:p];},withStatus);
+      expect(rows.map(row=>row.recording?.previous?.monotonicNs)).toEqual([undefined,rows[0].monotonicNs,rows[1].monotonicNs,rows[2].monotonicNs,
+        variant==='different'?undefined:rows[3].monotonicNs]);
+      expect(rows.map(row=>row.recording?.predecessorReset)).toEqual([undefined,undefined,undefined,undefined,variant==='different'?'profile-changed':undefined]);
+    });
+
   it('retains the reset reason across a sampled row without recording evidence',async()=>{
     const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
     expect((await recorder.openSession(s.welcome())).ok).toBe(true);expect(recorder.observe(s.checkpoint(null),context).ok).toBe(true);
     expect((await recorder.commit(s.event(r.jobConfigured()),context)).ok).toBe(true);
     for(const [counter,hasJob] of [['0',true],['1',false],['1',true]] as const){
-      const message=s.snapshot();message.data.continuity.coalescedSnapshots=counter;
+      const message=s.snapshot();message.data.continuity.offlineTransitions=counter;
       if(!hasJob)message.data.state.configuration.job={available:false,reason:'not-observed'};
       expect(recorder.observe(message,context).ok).toBe(true);
     }
     expect((await recorder.samples.write(3600,true)).ok).toBe(true);
     const rows=storage.model.samples;expect(rows.at(-2)?.recording).toBeUndefined();
-    expect(rows.at(-1)?.recording).toMatchObject({predecessorReset:'snapshot-coalesced'});
+    expect(rows.at(-1)?.recording).toMatchObject({predecessorReset:'offline-transition'});
   });
 
   it('labels a trip-boundary predecessor reset separately from a game-clock reset',async()=>{

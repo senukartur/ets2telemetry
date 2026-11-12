@@ -305,9 +305,22 @@ export class TripRecorderSink implements DurableSink {
   private lastEndpoint: CapturedEndpoint | undefined;
   private previousSample: NonNullable<SampleInput['recording']>['previous'];
   private previousSampleQualified = false;
+  /**
+   * ET-112c1: the last proven profile identity along the live `previousSample` chain. A proof-less sampled row keeps it, and
+   * it is cleared with the link, so a later proof of another binding, scope or load generation ends the link.
+   */
+  private linkProfile: Pick<ProfileObservation, 'binding' | 'scope' | 'loadGeneration'> | undefined;
   private predecessorReset: NonNullable<SampleInput['recording']>['predecessorReset'];
   private notePredecessorReset(reason: NonNullable<SampleInput['recording']>['predecessorReset']): void {
-    if(reason==='snapshot-coalesced' || reason==='offline-transition' || this.previousSample || this.boundaryPrevious || this.trustedPredecessor)this.predecessorReset=reason;
+    if(reason==='offline-transition' || this.previousSample || this.boundaryPrevious || this.trustedPredecessor)this.predecessorReset=reason;
+  }
+  /**
+   * ET-112c1: a profile check retires only the qualified boundary witness and the trusted handoff. The within-segment
+   * sample link stays, because storage still checks each linked step's source, clock, odometer and transfer continuity.
+   */
+  private resetProfileBoundary(reason: 'profile-changed' | 'profile-handoff-unsafe'): void {
+    if(!this.previousSample)this.notePredecessorReset(reason);
+    this.trustedPredecessor=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;
   }
   private trustedPredecessor: TrustedPredecessor | undefined;
   private continuity: {pluginSessionId:string;processInstanceId:string;sourceClockId:string;coalescedSnapshots:string;offlineTransitions:string}|undefined;
@@ -337,7 +350,7 @@ export class TripRecorderSink implements DurableSink {
       if (!flushed.ok) return flushed;
     }
     this.predecessorReset=undefined;this.lastReadingProfile=undefined;this.trustedPredecessor=undefined;
-    this.pendingProfile=undefined;this.storedProfileKey=undefined;this.pendingResolve=undefined;this.resolvedProofKey=undefined;this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.continuity=undefined;
+    this.pendingProfile=undefined;this.storedProfileKey=undefined;this.pendingResolve=undefined;this.resolvedProofKey=undefined;this.previousSample=undefined;this.linkProfile=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.continuity=undefined;
     const stored = await this.client.upsertSession({message: welcome});
     if (!stored.ok) return stored;
     const coveredThrough = stored.value.committedThroughEventSeq, game = welcome.source.game;
@@ -414,7 +427,7 @@ export class TripRecorderSink implements DurableSink {
     if(message.kind==='gap' || message.kind==='event' && message.data.record.type==='gameTime.regression'
       || this.boundaryPrevious && this.boundaryPrevious.tripUuid!==this.view(message.source.game).current?.tripUuid){
       this.notePredecessorReset(message.kind==='gap'?'event-gap':message.data.record.type==='gameTime.regression'?'game-clock-reset':'trip-changed');
-      this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.pendingProfile=undefined;
+      this.previousSample=undefined;this.linkProfile=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.pendingProfile=undefined;
     }
     if(message.kind==='gap' || message.kind==='event' && ['job.configured','job.cleared','truck.configured','truck.cleared','timers.restart','gameTime.regression','player.use.ferry','player.use.train'].includes(message.data.record.type)
       || this.trustedPredecessor && this.trustedPredecessor.tripUuid!==this.view(message.source.game).current?.tripUuid)this.trustedPredecessor=undefined;
@@ -438,15 +451,16 @@ export class TripRecorderSink implements DurableSink {
     if(message.kind==='snapshot'){
       const current={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
       const before=this.continuity;
-      // Counters are cumulative. Update the baseline even when this reading occupies an already sampled second.
+      // Counters are cumulative. Update the baseline even when this reading occupies an already sampled second. A
+      // coalesced-snapshot advance alone is a seq skip, not lost gameplay data (protocol v1), so it keeps every link.
       if(before ? before.pluginSessionId!==current.pluginSessionId || before.processInstanceId!==current.processInstanceId || before.sourceClockId!==current.sourceClockId
-        || before.coalescedSnapshots!==current.coalescedSnapshots || before.offlineTransitions!==current.offlineTransitions
-        : current.coalescedSnapshots!=='0' || current.offlineTransitions!=='0'){this.notePredecessorReset(before && before.coalescedSnapshots!==current.coalescedSnapshots?'snapshot-coalesced':before && before.offlineTransitions!==current.offlineTransitions?'offline-transition':'source-change');this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.trustedPredecessor=undefined;}
+        || before.offlineTransitions!==current.offlineTransitions
+        : current.offlineTransitions!=='0'){this.notePredecessorReset(before && before.offlineTransitions!==current.offlineTransitions?'offline-transition':'source-change');this.previousSample=undefined;this.linkProfile=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.lastEndpoint=undefined;this.trustedPredecessor=undefined;}
       this.continuity=current;
     }
     if (message.kind === 'checkpoint') {
       this.notePredecessorReset('checkpoint');
-      this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.trustedPredecessor=undefined;
+      this.previousSample=undefined;this.linkProfile=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.trustedPredecessor=undefined;
       // A running checkpoint may own a sampled endpoint; unchanged counters must preserve its next observed step.
       this.continuity={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
       const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs});
@@ -470,7 +484,7 @@ export class TripRecorderSink implements DurableSink {
         && this.lastReadingProfile.processInstanceId===retained.profile.processInstanceId && this.lastReadingProfile.sourceClockId===retained.profile.sourceClockId;
       if(!status || status.phase==='unavailable' || status.token!==retained.token || !current.available || !compatibleContinuation(retained.job,current.value)
         || retained.tripUuid!==view.current?.tripUuid
-        || this.lastReadingProfile && !sameProfile){this.notePredecessorReset('profile-changed');this.trustedPredecessor=undefined;this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;}
+        || this.lastReadingProfile && !sameProfile)this.resetProfileBoundary('profile-changed');
       else if(retained.suspended || status.phase==='pending' || !this.lastReadingProfile){
         retained.suspended=true;
         // The accounting anchor may be older; safety always compares the actual consecutive readings.
@@ -479,15 +493,23 @@ export class TripRecorderSink implements DurableSink {
         if(elapsed<=0n || elapsed>=5_000_000_000n || normalizedBoundary.simulation==='unavailable'
           || Object.values(capturedPoint(normalizedBoundary)).some(value=>value===null) || !step || step.boundary || step.elapsedNs===null || step.elapsedNs<=0n
           || step.odometer.kind!=='continuous' || step.positionJump!==null || step.fuel.kind!=='consumed' && step.fuel.kind!=='unchanged'){
-          this.notePredecessorReset('profile-handoff-unsafe');this.trustedPredecessor=undefined;this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;
+          this.resetProfileBoundary('profile-handoff-unsafe');
         }else if(status.phase==='admitted' && sameProfile){
-          this.predecessorReset=undefined;this.previousSample=retained.previous;this.boundaryPrevious=retained.boundary;this.boundaryRunning=retained.running;
-          this.previousSampleQualified=retained.previous!==undefined;
+          // A live sample link is never older than the retained one; the retained link only replaces a missing one.
+          this.predecessorReset=undefined;this.boundaryPrevious=retained.boundary;this.boundaryRunning=retained.running;
+          if(!this.previousSample){this.previousSample=retained.previous;this.previousSampleQualified=retained.previous!==undefined;
+            this.linkProfile=retained.previous?{binding:retained.profile.binding,scope:retained.profile.scope,loadGeneration:retained.profile.loadGeneration}:undefined;}
           this.trustedPredecessor=undefined; // A handoff is consumed; admitted reads must keep their newer live state.
         }
       }
     }
-    if(status && !this.lastReadingProfile){this.notePredecessorReset('profile-unavailable');this.previousSample=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;}
+    // A proven change of the profile identity ends the live sample link, with or without a retained handoff; a missing
+    // proof alone never does.
+    if(this.lastReadingProfile && this.previousSample && this.linkProfile && (this.linkProfile.binding!==this.lastReadingProfile.binding
+      || this.linkProfile.scope!==this.lastReadingProfile.scope || this.linkProfile.loadGeneration!==this.lastReadingProfile.loadGeneration)){
+      this.notePredecessorReset('profile-changed');this.previousSample=undefined;this.linkProfile=undefined;
+    }
+    if(status && !this.lastReadingProfile){if(!this.previousSample)this.notePredecessorReset('profile-unavailable');this.boundaryPrevious=undefined;this.boundaryRunning=undefined;}
     // One retained witness cannot conceal an unsupported intermediate reading or an unretained refuel episode.
     const boundaryStep=this.boundaryPrevious && previousReading && session.lastReading ? classifyStep(previousReading,session.lastReading,session.lastTransfer) : null;
     if(this.boundaryPrevious && (!this.lastReadingProfile || this.boundaryPrevious.tripUuid!==view.current?.tripUuid || this.boundaryPrevious.sourceClockId!==message.capture.clockId
@@ -523,6 +545,8 @@ export class TripRecorderSink implements DurableSink {
       }
       if(sampled.row.recording)this.predecessorReset=undefined;
       this.previousSample=sampled.row.recording && sampled.row.tripUuid ? {tripUuid:sampled.row.tripUuid,sourceClockId:sampled.row.sourceClockId,monotonicNs:sampled.row.monotonicNs}:undefined;
+      const proven=sampled.row.recording?.profile;
+      this.linkProfile=!this.previousSample?undefined:proven?{binding:proven.binding,scope:proven.scope,loadGeneration:proven.loadGeneration}:this.linkProfile;
       this.previousSampleQualified=sampled.row.recording?.profile!==undefined;
       if(!this.lastReadingProfile)this.trustedPredecessor=undefined;
       this.boundaryPrevious=undefined;this.boundaryRunning=undefined;
@@ -532,7 +556,7 @@ export class TripRecorderSink implements DurableSink {
       this.boundaryRunning={...capturedPoint(normalizedBoundary),tripUuid:view.current.tripUuid,pluginSessionId:message.source.pluginSessionId,
         sourceClockId:message.capture.clockId,monotonicNs:message.capture.monotonicNs,profile:structuredClone(this.lastReadingProfile)};
     }
-    if(message.data.state.simulation!=='running')this.previousSample=undefined;
+    if(message.data.state.simulation!=='running'){this.previousSample=undefined;this.linkProfile=undefined;}
     const predecessor=this.previousSample??this.boundaryPrevious;
     if(status?.phase==='admitted' && this.lastReadingProfile && current.available && view.current && point && predecessor && (!this.previousSample || this.previousSampleQualified)
       && !Object.values(capturedPoint(normalizedBoundary)).some(value=>value===null)){
