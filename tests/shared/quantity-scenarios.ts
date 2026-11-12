@@ -1,7 +1,8 @@
 // ET-112c engine 1 distance and fuel corpus (REG-008, REG-009), shared by tests/unit/trip-quantities.test.ts and the
 // storage engine tests. Origin: synthetic. Base series S_k: t = k s, odometer 1000 + 20k m, fuel 400 - 0.01k L, x = 20k m,
 // game minute 600, speed 20 m/s, truck T1, one member and one game clock. Every expected value is written by hand from
-// the engine rules in docs/trips.md; the incident readings come from tests/shared/trip-continuation-incident.ts.
+// the engine 1 rules (QUANTITY_FLAGS and advanceQuantities in packages/telemetry-core/src/trips/quantities.ts, schema in
+// docs/storage.md, Schema version 10); the incident readings come from tests/shared/trip-continuation-incident.ts.
 import {INCIDENT_SEGMENTS} from './trip-continuation-incident';
 
 /** One stored reading. A change of `member` is a member junction; a change of `gameClock` inside a member is a boundary. */
@@ -32,16 +33,23 @@ export function s(k: number, overrides: Partial<QuantityReading> = {}): Quantity
 const base = (count: number) => Array.from({length: count}, (_, k) => s(k));
 const none: QuantityFlagName[] = [];
 
-/** Q8: k3 and k4 stopped at 1060 (the save point is k4), driven on to 1100, then a load on a new game clock back to 1060. */
-function rollback(load: {member?: string; fuel: [number, number, number]}): QuantityReading[] {
-  const member = load.member ?? 'A', t = member === 'A' ? 7 : 0;
-  return [s(0), s(1), s(2), s(3, {fuelL: 399.970, speedMps: 0}), s(4, {odometerM: 1060, fuelL: 399.969, x: 60, speedMps: 0}),
+/**
+ * Q8: k3 and k4 stopped at 1060 m with the `stops` fuels (both match a load within 20 ml), driven on to 1100, then a load
+ * on a new game clock back to 1060.
+ */
+function rollback(load: {member?: string; fuel: [number, number, number]; stops?: [number, number]}): QuantityReading[] {
+  const member = load.member ?? 'A', t = member === 'A' ? 7 : 0, [k3, k4] = load.stops ?? [399.970, 399.969];
+  return [s(0), s(1), s(2), s(3, {fuelL: k3, speedMps: 0}), s(4, {odometerM: 1060, fuelL: k4, x: 60, speedMps: 0}),
     s(5, {odometerM: 1080, fuelL: 399.959, x: 80}), s(6, {odometerM: 1100, fuelL: 399.949, x: 100}),
     s(7, {member, t, odometerM: 1060, fuelL: load.fuel[0], x: 60, speedMps: 0, gameClock: CLOCK_B, linked: false}),
     s(8, {member, t: t + 1, odometerM: 1080, fuelL: load.fuel[1], x: 80, gameClock: CLOCK_B}),
     s(9, {member, t: t + 2, odometerM: 1100, fuelL: load.fuel[2], x: 100, gameClock: CLOCK_B})];
 }
 /** Q11: A on T1 to 1060 at minute 600, then B on T2 from 50,000 m at `minutes`, driving 40 m. */
+/** Binary-exact stop fuels 1/128 L apart (fuel used 0.03125 and 0.0390625 L), so that equal fuel distances are exact. */
+const EXACT_STOPS: [number, number] = [399.96875, 399.9609375];
+/** k0-k3, then member B starting a new run at 1100 m (a forward gap) and driving to 1140 m. */
+const forwardGap = () => [...base(4), ...[0, 1, 2].map(k => s(k, {member: 'B', odometerM: 1100 + 20 * k, fuelL: 399.96 - 0.01 * k, x: 100 + 20 * k, linked: k > 0}))];
 function otherTruck(minutes: number): QuantityReading[] {
   return [...base(4), ...[0, 1, 2].map(k => s(k, {member: 'B', odometerM: 50_000 + 20 * k, fuelL: 300 - 0.01 * k, x: 5_000 + 20 * k, minutes, truck: T2, linked: k > 0}))];
 }
@@ -52,6 +60,10 @@ export const QUANTITY_SCENARIOS: readonly QuantityScenario[] = [
   {id: 'Q2-linked', description: 'an 8 s hole inside one connection bridges distance; fuel carries with the hole bit',
     readings: [...base(3), s(10, {fuelL: 399.90}), s(11, {fuelL: 399.89})],
     expected: {distanceM: 220, distance: 'complete', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceBridged', 'fuelHole'], cut: false}},
+  // The linked t10 reading has k2's position after 160 odometer metres: a jump, not continuous movement.
+  {id: 'Q2-jump', description: 'a linked 8 s hole whose step is not continuous breaks distance and starts a new run',
+    readings: [...base(3), s(10, {fuelL: 399.90, x: 40}), s(11, {fuelL: 399.89, x: 60})],
+    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false}},
   {id: 'Q2-unlinked', description: 'an 8 s hole without the recorder link breaks distance; both subtotals carry',
     readings: [...base(3), s(10, {fuelL: 399.90, linked: false}), s(11, {fuelL: 399.89})],
     expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false}},
@@ -73,6 +85,11 @@ export const QUANTITY_SCENARIOS: readonly QuantityScenario[] = [
     events: [{member: 'A', t: 1.5, type: 'player.use.ferry'}],
     expected: {distanceM: 40, distance: 'partial', fuelUsedL: 0.02, fuel: 'complete', flags: ['distanceTransfer'], cut: false}},
   // Fuel as in Q6 (k2 unchanged at 399.99, k3 399.98): the hand-written 0.02 L needs the teleported reading to keep its fuel.
+  // A 40 ml drop during the crossing is beyond the 10 ml noise band: it is carried, not consumed.
+  {id: 'Q6-fuel', description: 'a ferry crossing that changed the fuel by more than the noise band breaks fuel only',
+    readings: [s(0), s(1), s(2, {odometerM: 1020, fuelL: 399.95, x: 90_000, minutes: 900}), s(3, {odometerM: 1040, fuelL: 399.94, x: 90_020, minutes: 900})],
+    events: [{member: 'A', t: 1.5, type: 'player.use.ferry'}],
+    expected: {distanceM: 40, distance: 'complete', fuelUsedL: 0.02, fuel: 'partial', flags: ['fuelTransfer'], cut: false}},
   {id: 'Q7', description: 'a road-service teleport with an unchanged odometer adds nothing',
     readings: [s(0), s(1), s(2, {odometerM: 1020, fuelL: 399.99, x: 5_020}), s(3, {odometerM: 1040, fuelL: 399.98, x: 5_040})],
     expected: {distanceM: 40, distance: 'complete', fuelUsedL: 0.02, fuel: 'complete', flags: none, cut: false}},
@@ -85,12 +102,27 @@ export const QUANTITY_SCENARIOS: readonly QuantityScenario[] = [
   {id: 'Q8-fuel', description: 'a load whose fuel matches no retained save point keeps the newest retained fuel with the boundary bit',
     readings: rollback({fuel: [399.90, 399.89, 399.88]}),
     expected: {distanceM: 100, distance: 'complete', fuelUsedL: 0.051, fuel: 'partial', flags: ['distanceRestored', 'fuelBoundary'], cut: true}},
+  // Load fuel 399.96875 equals the older stop k3 (0.03125 L used) and is 7.8 ml from k4: the closer, older k3 is kept.
+  {id: 'Q8-closest', description: 'a load matching two stopped save points keeps the closer fuel even when it is the older point',
+    readings: rollback({stops: EXACT_STOPS, fuel: [399.96875, 399.95875, 399.94875]}),
+    expected: {distanceM: 100, distance: 'complete', fuelUsedL: 0.05125, fuel: 'complete', flags: ['distanceRestored'], cut: true}},
+  // Load fuel 399.96484375 is exactly 3.90625 ml from both stops: the newer k4 (0.0390625 L used) is kept.
+  {id: 'Q8-tie', description: 'a load equally close to two stopped save points keeps the newer one',
+    readings: rollback({stops: EXACT_STOPS, fuel: [399.96484375, 399.95484375, 399.94484375]}),
+    expected: {distanceM: 100, distance: 'complete', fuelUsedL: 0.0590625, fuel: 'complete', flags: ['distanceRestored'], cut: true}},
+  // k4 drives back to k2's odometer, position and fuel on the same game clock; k2 is the moving save point (0.02 L).
+  {id: 'Q8-running', description: 'an odometer regression inside a running step restores the run of its member like a load',
+    readings: [...base(4), s(4, {odometerM: 1040, fuelL: 399.98, x: 40}), s(5, {odometerM: 1060, fuelL: 399.97, x: 60})],
+    expected: {distanceM: 60, distance: 'complete', fuelUsedL: 0.03, fuel: 'complete', flags: ['distanceRestored'], cut: true}},
+  {id: 'Q8-running-member', description: 'an odometer regression inside a running step searches only its own member',
+    readings: [...forwardGap(), s(3, {member: 'B', odometerM: 1040, fuelL: 399.98, x: 40})],
+    expected: {distanceM: null, distance: 'unavailable', fuelUsedL: null, fuel: 'unavailable', flags: ['distanceGap', 'fuelBoundary', 'distanceUnproven', 'fuelUnproven'], cut: false}},
   {id: 'Q9', description: 'a load before the first retained run makes both unavailable for the rest of the trip',
     readings: [...base(4), s(4, {odometerM: 950, fuelL: 399.5, x: -50, gameClock: CLOCK_B, linked: false}), s(5, {odometerM: 970, fuelL: 399.49, x: -30, gameClock: CLOCK_B})],
     expected: {distanceM: null, distance: 'unavailable', fuelUsedL: null, fuel: 'unavailable', flags: ['distanceUnproven', 'fuelUnproven'], cut: false}},
   // B's own fuel starts at 399.96 (any start: nothing is credited across the junction) and drops 0.01 L per reading.
   {id: 'Q10', description: 'a forward member gap keeps both subtotals and breaks both',
-    readings: [...base(4), ...[0, 1, 2].map(k => s(k, {member: 'B', odometerM: 1100 + 20 * k, fuelL: 399.96 - 0.01 * k, x: 100 + 20 * k, linked: k > 0}))],
+    readings: forwardGap(),
     expected: {distanceM: 100, distance: 'partial', fuelUsedL: 0.05, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false}},
   {id: 'Q11', description: 'a different truck at a later game minute is a member gap',
     readings: otherTruck(610),

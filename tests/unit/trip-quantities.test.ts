@@ -1,7 +1,7 @@
 // ET-112c engine 1 distance and fuel (REG-008, REG-009): the pure engine over the hand-written corpus of
 // tests/shared/quantity-scenarios.ts, its flags and status, and the run and point bounds of a rollback search.
 import {describe, expect, it} from 'vitest';
-import {advanceQuantities, completeAnchor, composeOffset, memoryPath, QUANTITY_ENGINE_VERSION, QUANTITY_FLAGS, QUANTITY_POINT_LIMIT, QUANTITY_RUN_LIMIT,
+import {advanceQuantities, completeAnchor, composeOffset, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAGS, memoryPath, QUANTITY_ENGINE_VERSION, QUANTITY_FLAGS, QUANTITY_POINT_LIMIT, QUANTITY_RUN_LIMIT,
   quantityStatus, type QuantityAdvance, type QuantityAnchor, type QuantityPoint, type QuantityStep, type MemoryRun} from '../../packages/telemetry-core/src/index';
 import {CLOCK_B, INCIDENT_25ML_QUANTITIES, INCIDENT_25ML_SHIFT_L, INCIDENT_QUANTITIES, incidentReadings, QUANTITY_SCENARIOS, s, type QuantityEvent, type QuantityExpectation,
   type QuantityFlagName, type QuantityReading} from '../shared/quantity-scenarios';
@@ -33,6 +33,7 @@ function fold(readings: readonly QuantityReading[], events: readonly QuantityEve
   });
   return {path, advances, point: path.head!};
 }
+const scenario = (id: string) => QUANTITY_SCENARIOS.find(candidate => candidate.id === id)!;
 function expectQuantities(point: QuantityPoint, expected: QuantityExpectation) {
   if (expected.distanceM === null) expect(point.distanceM).toBeNull(); else expect(point.distanceM).toBeCloseTo(expected.distanceM, 9);
   if (expected.fuelUsedL === null) expect(point.fuelUsedL).toBeNull(); else expect(point.fuelUsedL).toBeCloseTo(expected.fuelUsedL, 9);
@@ -45,6 +46,13 @@ describe('REG-008/009 engine 1 distance and fuel corpus', () => {
     expect(QUANTITY_ENGINE_VERSION).toBe(1);
     const values = Object.values(F);
     expect(values.sort((a, b) => a - b)).toEqual(Array.from({length: 16}, (_, bit) => 2 ** bit));
+  });
+  it('persists the bit layout of the plan by name', () => {
+    expect(F).toStrictEqual({distanceTruck: 0x0001, distanceJump: 0x0002, distanceTransfer: 0x0004, distanceHole: 0x0008, distanceGap: 0x0010, distanceUnproven: 0x0020,
+      distanceBridged: 0x0040, distanceRestored: 0x0080, fuelTruck: 0x0100, fuelHole: 0x0200, fuelTransfer: 0x0400, fuelBoundary: 0x0800, fuelUnproven: 0x1000,
+      fuelRefuelExcluded: 0x2000, base: 0x4000, linked: 0x8000});
+    expect(DISTANCE_BREAK_FLAGS).toBe(0x003f);
+    expect(FUEL_BREAK_FLAGS).toBe(0x1f00);
   });
   it.each(QUANTITY_SCENARIOS.map(scenario => [scenario.id, scenario] as const))('%s', (_id, scenario) => {
     const {point, advances} = fold(scenario.readings, scenario.events);
@@ -69,6 +77,33 @@ describe('REG-008/009 engine 1 distance and fuel corpus', () => {
     expect(load.unproven).toBe(false);
     // The new run starts at the load; the restored run now ends at the cut, and nothing newer than it is retained.
     expect(path.runs('trip').map(run => [run.startOdometerM, run.end.anchor.odometerM])).toEqual([[1060, 1100], [1000, 1060]]);
+  });
+  it('Q6-fuel carries fuel across the crossing with the transfer bit and consumes again after it', () => {
+    const {advances} = fold(scenario('Q6-fuel').readings, scenario('Q6-fuel').events);
+    expect(advances.map(advance => [advance.run, advance.added])).toEqual([['new', 0], ['continue', 0], ['continue', F.fuelTransfer], ['continue', 0]]);
+    expect(advances[2].point!.fuelUsedL).toBeCloseTo(0.01, 9);
+  });
+  it('Q8-closest keeps the older stop k3 and Q8-tie the newer stop k4 at the load', () => {
+    for (const [id, fuelUsedL] of [['Q8-closest', 0.03125], ['Q8-tie', 0.0390625]] as const) {
+      const load = fold(scenario(id).readings).advances[7];
+      expect([load.cut?.odometerM, load.savePoint], id).toEqual([1060, true]);
+      expect(load.point!.distanceM, id).toBeCloseTo(60, 9);
+      expect(load.point!.fuelUsedL, id).toBeCloseTo(fuelUsedL, 9);
+    }
+  });
+  it('Q8-running cuts at the regressed reading with k2 as the save point; Q8-running-member finds no run of its own member', () => {
+    const running = fold(scenario('Q8-running').readings);
+    const back = running.advances[4];
+    expect([back.cut?.odometerM, back.savePoint, back.run, back.unproven]).toEqual([1040, true, 'new', false]);
+    expect([back.point!.distanceM, back.point!.fuelUsedL]).toEqual([expect.closeTo(40, 9), expect.closeTo(0.02, 9)]);
+    expect(running.path.runs('member').map(run => [run.startOdometerM, run.end.anchor.odometerM])).toEqual([[1040, 1060], [1000, 1040]]);
+    const member = fold(scenario('Q8-running-member').readings).advances.at(-1)!;
+    expect([member.cut, member.unproven]).toEqual([null, true]);
+  });
+  it('Q2-jump starts a new run at the linked hole that is not continuous', () => {
+    const {advances} = fold(scenario('Q2-jump').readings);
+    expect(advances.map(advance => [advance.run, advance.added])).toEqual([['new', 0], ['continue', 0], ['continue', 0], ['new', F.distanceHole | F.fuelHole], ['continue', 0]]);
+    expect(advances[3].point!.flags & F.linked).toBe(F.linked);
   });
   it('Q9 is unproven at the load and stays unavailable after a later load to a retained point', () => {
     // After Q9: on to 1100 m, then a load back to 1020 m, inside the first retained run; its k1 is the same save point.
