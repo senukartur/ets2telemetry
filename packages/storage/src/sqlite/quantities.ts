@@ -7,6 +7,7 @@
 import type Database from 'better-sqlite3';
 import {advanceQuantities, completeAnchor, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAGS, memoryPath, QUANTITY_FLAGS, QUANTITY_POINT_LIMIT, QUANTITY_RUN_LIMIT, quantityStatus,
   type QuantityAdvance, type QuantityAnchor, type QuantityPath, type QuantityPoint, type QuantityRun, type QuantityStep} from '../../../telemetry-core/src/trips/quantities';
+import {JOURNAL_DISTANCE_BREAKS, JOURNAL_DISTANCE_QUALITY, JOURNAL_FUEL_BREAKS, JOURNAL_FUEL_QUALITY, type JournalAccounting, type JournalQuantityStatus} from '../../../contracts/src/journal';
 import {MAX_RESOLVE_MEMBERSHIPS, MAX_SAMPLE_BATCH, type SampleInput} from '../api';
 import {registeredAccountingEngine} from './connection';
 import {cleanLoadWindow, COVERAGE_LOSS, type LogicalCoverage} from './logical-coverage';
@@ -286,6 +287,25 @@ export function applyQuantities(db: Database.Database, row: Row, head: unknown):
     row[`${column}_state`] = invalid ? 'invalid' : value === null ? 'not-observed' : 'available';
   }
   return row;
+}
+/** The status of a quantity from its shown availability and its break names (JournalQuantityStatus). */
+const statusOf = (available: boolean, breaks: readonly string[]): JournalQuantityStatus => !available ? 'unavailable' : breaks.length ? 'partial' : 'complete';
+/** The names of the set bits of `flags` from bit `first` on, one name per bit, in bit order. */
+const named = <N extends string>(flags: number, first: number, names: readonly N[]) => names.filter((_, index) => (flags & (1 << (first + index))) !== 0);
+/**
+ * The Journal's provenance of an engine-1 group's distance and fuel (ET-112e): the break and quality bits 0-13 of the head
+ * row the shown values come from, by name; the row facts 14 and 15 are not shown. `distanceAvailable` and `fuelAvailable`
+ * are the shown values' availability, so the status agrees with them. Without an engine-1 head row both lists are empty.
+ * Undefined below schema 10 and for an engine-0 group, whose values keep their legacy rules.
+ */
+export function journalAccounting(db: Database.Database, logical: unknown, head: unknown, distanceAvailable: boolean, fuelAvailable: boolean): JournalAccounting | undefined {
+  if (!quantitiesEnabled(db) || logical === null || logical === undefined) return undefined;
+  const group = get(db, 'SELECT accounting_engine FROM logical_trips WHERE id=?', logical);
+  if (group === undefined || Number(group.accounting_engine) !== 1) return undefined;
+  const flags = Number(quantityHead(db, head)?.quantity_flags ?? 0);
+  const distance = named(flags, 0, JOURNAL_DISTANCE_BREAKS), fuel = named(flags, 8, JOURNAL_FUEL_BREAKS);
+  return {engine: 1, distance: {status: statusOf(distanceAvailable, distance), breaks: distance, quality: named(flags, 6, JOURNAL_DISTANCE_QUALITY)},
+    fuel: {status: statusOf(fuelAvailable, fuel), breaks: fuel, quality: named(flags, 13, JOURNAL_FUEL_QUALITY)}};
 }
 /** Upload: a partial or unavailable engine-1 quantity at the snapshot head keeps the money totals incomplete (accounting-unavailable). */
 export function quantitiesIncomplete(db: Database.Database, head: bigint | null): boolean {

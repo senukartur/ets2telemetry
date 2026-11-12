@@ -8,6 +8,7 @@ import {JournalSyncBadge} from './dashboard-upload/journal-sync';
 import {journalSyncView} from './dashboard-upload/view';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
 import {t} from './i18n';
+import {InfoHint} from './info-hint';
 import {journalSiteSaved, type JournalBadge, type JournalCompletenessText, type JournalDetailText, type JournalJobBadge, type JournalModeBadge, type JournalSection, type JournalTextOptions, type JournalTimelineItem, type JournalTripSideText} from './journal-view';
 import type {journalTileValues} from './screens/journal-tiles';
 
@@ -48,6 +49,10 @@ export function TripHeading({game, outcome, isHardMode, cargo, text, side, langu
       <OutcomeChip outcome={outcome} text={text.outcome} />
       <CompletenessChip badge={text.completeness} testId="journal-detail-completeness" />
       {isHardMode ? <HardModeBadge language={language} /> : null}
+      {text.membership ? <>
+        <Badge variant="neutral" className="yu-trip-chip" data-testid="journal-detail-membership"><CircleHelp aria-hidden="true" strokeWidth={1.8} /><span>{text.membership}</span></Badge>
+        <InfoHint testId="journal-detail-membership-hint" label={t('ui.moreAbout', {v: text.membership}, language)}>{t('j.membershipPendingHint', undefined, language)}</InfoHint>
+      </> : null}
     </div>
     <p className="yu-trip-route" data-testid="trip.header.route">{side.route}</p>
     <p className="sr-only" data-testid="journal-detail-title">{text.title}</p>
@@ -57,14 +62,17 @@ export function TripHeading({game, outcome, isHardMode, cargo, text, side, langu
 function Kpi({label, value, notes, testId}: {label: string; value: string; notes: readonly (string | null)[]; testId: string}) {
   return <div className="yu-trip-kpi" data-testid={testId}><span>{label}</span><strong>{value}</strong>{notes.map(note => note ? <small key={note}>{note}</small> : null)}</div>;
 }
-/** The totals row: what the odometer observed, what the job planned and what the game reported are separate labels. */
+/**
+ * The totals row: what the odometer observed, what the job planned and what the game reported are separate labels. A
+ * delivered trip shows the game's distance as the hero and the odometer distance as a note (ET-112e).
+ */
 export function TripKpis({tiles, outcome, language}: {tiles: Tiles; outcome: JournalOutcome; language: AppLanguage}) {
   const text = (key: Parameters<typeof t>[0], values?: Record<string, string | number>) => t(key, values, language);
   return <section className="yu-trip-kpis" data-testid="trip.tiles" aria-label={text('tr.kpis')}>
-    <Kpi testId="trip.tile.distance" label={text('tr.distance')} value={tiles.distance.value} notes={[tiles.distance.note, text('tr.planned', {v: tiles.planned}), tiles.gameDistance === null ? null : text('tr.delivered', {v: tiles.gameDistance})]} />
+    <Kpi testId="trip.tile.distance" label={tiles.distanceTile.label} value={tiles.distanceTile.value} notes={tiles.distanceTile.notes} />
     <Kpi testId="trip.tile.money" label={text(outcome === 'cancelled' ? 'tr.penalty' : 'tr.revenue')} value={tiles.money.value} notes={[tiles.money.note, text('tr.expected', {v: tiles.expected})]} />
     <Kpi testId="trip.tile.time" label={text('tr.recordedTime')} value={tiles.recorded.value} notes={[tiles.recorded.note, tiles.gameTime]} />
-    <Kpi testId="trip.tile.fuel" label={text('tr.fuel')} value={tiles.fuel.value} notes={[tiles.fuel.note, text('tr.fuelNote')]} />
+    <Kpi testId="trip.tile.fuel" label={text('tr.fuel')} value={tiles.fuel.value} notes={[tiles.fuel.note, text('tr.fuelNote'), tiles.fuelPartial]} />
   </section>;
 }
 

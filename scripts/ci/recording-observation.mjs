@@ -526,10 +526,14 @@ const JOB_VALUES = {sourceCityId: {available: true, value: 'synthetic_city_a'}, 
 const DELIVERED_RECORD = {type: 'job.delivered', revenue: unknownMoney('12000', 's64'), earnedXp: {available: true, value: 250},
   cargoDamage: {available: true, value: 0.03125, unit: 'fraction'}, distance: {available: true, value: 152500, unit: 'm'}, deliveryDuration: {available: true, value: '300', unit: 'min'},
   autoParkUsed: {available: true, value: false}, autoLoadUsed: {available: true, value: false}};
-/** The trip section of the export: the hand-written trip row with its stable identifiers and the close carrier, job.delivered (8). */
+/**
+ * The trip section of the export: the hand-written trip row with its stable identifiers and the close carrier, job.delivered (8).
+ * Format 6 adds the engine-1 provenance: without a complete anchor both quantities are unavailable without a reason.
+ */
 const exportTripSection = (session, trip, audit) => ({is_hard_mode: false, hard_mode_details: audit, tripUuid: trip, pluginSessionId: session, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
   gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: labelAt(30), endedUtcMs: labelAt(600),
-  observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
+  observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'},
+  accounting: {engine: 1, distance: {status: 'unavailable', breaks: [], quality: []}, fuel: {status: 'unavailable', breaks: [], quality: []}}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
   closedBy: {pluginSessionId: session, eventSeq: '8'}});
 /** Independent oracle: no Hard Mode fixture is enabled, so the normal reader refuses this synthetic source before
  * process/filesystem access. Opening has no eligible proof and is historical; ordered monitor failures publish all
@@ -576,13 +580,13 @@ async function reconcileExport({config, record, raw, session, restartMainEvents}
   const document = JSON.parse(await readFile(path.join(config.output, 'recording-export', 'trip.json'), 'utf8'));
   const problemsOf = await exportValidator(config);
   journal.exportProblems = problemsOf(document);
-  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 5 document');
+  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 6 document');
   journal.exportValidated = true;
 
   // Hand-written sections.
   assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
     schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-  {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 10, sessionOrigin: 'synthetic'});
+  {format: 'ets2telemetry.trip-export', formatVersion: 6, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 10, sessionOrigin: 'synthetic'});
   assert.deepEqual(document.trip, exportTripSection(session, trip, recordingHardModeAudit(document, record)), 'The exported trip differs from the hand-written row');
   assert.deepEqual(document.window, {known: true, pluginSessionId: session, fromEventSeq: '3', throughEventSeq: '8', end: 'close-event'});
   assert.deepEqual({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq, values: document.job.values},

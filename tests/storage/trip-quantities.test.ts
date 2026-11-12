@@ -134,12 +134,33 @@ function expectLedger(found: Ledger, expected: QuantityExpectation) {
   expect([found.reconstructed!.distanceM, found.reconstructed!.fuelUsedL]).toEqual([near(found.head!.distance), near(found.head!.fuel)]);
   expect(found.reconstructed!.flags & CUMULATIVE).toBe(found.head!.flags & CUMULATIVE);
 }
-/** The Journal shows the head values; a cut or an unproven quantity marks the money totals incomplete. */
+/** ET-112e: the Journal name of each cumulative bit, written by hand from the contract. */
+const JOURNAL_NAMES: Record<QuantityFlagName, ['distance' | 'fuel', 'breaks' | 'quality', string]> = {
+  distanceTruck: ['distance', 'breaks', 'truck-change'], distanceJump: ['distance', 'breaks', 'position-jump'], distanceTransfer: ['distance', 'breaks', 'transfer'],
+  distanceHole: ['distance', 'breaks', 'reading-hole'], distanceGap: ['distance', 'breaks', 'recording-gap'], distanceUnproven: ['distance', 'breaks', 'unsupported'],
+  distanceBridged: ['distance', 'quality', 'bridged'], distanceRestored: ['distance', 'quality', 'restored'], fuelTruck: ['fuel', 'breaks', 'truck-change'],
+  fuelHole: ['fuel', 'breaks', 'reading-hole'], fuelTransfer: ['fuel', 'breaks', 'transfer'], fuelBoundary: ['fuel', 'breaks', 'recording-boundary'],
+  fuelUnproven: ['fuel', 'breaks', 'unsupported'], fuelRefuelExcluded: ['fuel', 'quality', 'refuel-excluded']
+};
+/** The expected trip provenance: the corpus statuses with the names of the expected bits in contract order. */
+function accountingOf(expected: QuantityExpectation) {
+  const names = (quantity: 'distance' | 'fuel', kind: 'breaks' | 'quality') => (Object.keys(JOURNAL_NAMES) as QuantityFlagName[])
+    .filter(flag => expected.flags.includes(flag) && JOURNAL_NAMES[flag][0] === quantity && JOURNAL_NAMES[flag][1] === kind).map(flag => JOURNAL_NAMES[flag][2]);
+  return {engine: 1, distance: {status: expected.distance, breaks: names('distance', 'breaks'), quality: names('distance', 'quality')},
+    fuel: {status: expected.fuel, breaks: names('fuel', 'breaks'), quality: names('fuel', 'quality')}};
+}
+/**
+ * The Journal shows the head values and their provenance, the same on the list row and the detail; a cut or an unproven
+ * quantity marks the money totals incomplete.
+ */
 function expectJournal(storage: Storage, root: string, expected: QuantityExpectation) {
   const detail = validateJournalTripDetail(ok(storage.journalTrip(root)));
   expect(detail.trip.observedDistanceM).toEqual(expected.distanceM === null ? absent : {available: true, value: near(expected.distanceM)});
   expect(detail.trip.fuelUsedL).toEqual(expected.fuelUsedL === null ? absent : {available: true, value: near(expected.fuelUsedL)});
   expect(detail.money.incomplete).toBe(expected.cut || expected.distanceM === null);
+  expect(detail.trip.accounting).toEqual(accountingOf(expected));
+  const listed = ok(storage.journalTrips()).trips.find(trip => trip.tripUuid === root)!;
+  expect([listed.accounting, listed.observedDistanceM, listed.fuelUsedL]).toEqual([detail.trip.accounting, detail.trip.observedDistanceM, detail.trip.fuelUsedL]);
 }
 async function recorded(readings: readonly QuantityReading[], expected: QuantityExpectation, join: Join = 'open', events: readonly QuantityEvent[] = []) {
   const storage = await ws.open(), {root} = record(storage, readings, join, events);
@@ -262,6 +283,9 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     const b = openMember(storage, 'B', 'open', []);
     for (const reading of readings.slice(4)) { ok(storage.appendSamples(b.script.session, [sampleOf(b, reading, true)], {uniqueSeconds: true})); b.previous = reading; }
     expect(ok(storage.journalTrips()).trips.map(trip => trip.tripUuid)).toEqual([a.uuid]);
+    // ET-112e: an engine-0 group carries no provenance on the list or the detail.
+    expect(ok(storage.journalTrips()).trips[0]).not.toHaveProperty('accounting');
+    expect(ok(storage.journalTrip(a.uuid)).trip).not.toHaveProperty('accounting');
     ok(storage.close());
     const db = new Database(ws.database, {readonly: true});
     try {

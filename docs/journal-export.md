@@ -4,7 +4,7 @@ ET-016 PR-5 exports one recorded trip as a JSON file, `ets2telemetry.trip-export
 
 Status (October 17, 2026): the format, the save flow and the Export button are implemented and tested with synthetic databases only. `GAME_HISTORY_RECORDING` has been `true` since October 25, 2026, but no real game trip has been recorded or exported yet. The Windows Save dialog itself (overwrite prompt, cancel by Esc and by the close box, OneDrive Documents, long paths, a read-only folder) remains a pending manual check.
 
-Current exports use format 5: one immutable logical snapshot, its reconciled current-save totals, and paged source-qualified evidence. `bounds.projection` contains database/trip/revision/page-kind tokens; `sources` records every original recording window and its row bounds. Samples retain their original session/raw-trip identity and `accountingIncluded` flag, including observations excluded after rollback. Event identity is the original plugin session plus eventSeq. Connection diagnostics are collected for every included session under the retained-log/record limits. No source session or missing distance, fuel, money or active time is synthesized. The format-1 example and format-2/3/4 shapes remain historical coverage.
+Current exports use format 6: one immutable logical snapshot, its reconciled current-save totals, and paged source-qualified evidence. `bounds.projection` contains database/trip/revision/page-kind tokens; `sources` records every original recording window and its row bounds. Samples retain their original session/raw-trip identity and `accountingIncluded` flag, including observations excluded after rollback. Event identity is the original plugin session plus eventSeq. Connection diagnostics are collected for every included session under the retained-log/record limits. No source session or missing distance, fuel, money or active time is synthesized. The format-1 example and format-2/3/4/5 shapes remain historical coverage.
 
 ## Saving a trip (J16, J17)
 
@@ -144,7 +144,11 @@ Canonical units, streaming/bounds, identifiers, save cancellation/refusal and mo
 
 Format 5 retains format 4's streaming arrays, immutable logical snapshot, sources, connection diagnostics and canonical units. `trip.hard_mode_details` additionally accepts the strict v2 audit: pass/fail/unknown counters, the last cumulative producer checkpoint, bounded first/latest fixed-code diagnostics with UTC labels and original rule values, and null `firstLoss`/`manualDelivery`. New delivered trips qualify when `known > 0 && passingChecks * 100 >= known * 95`; unknown is excluded. Logical trips add member counts before applying this one threshold. The exported boolean and audit are the same snapshot as the Journal, including after restart/save restoration. Diagnostics survive without retained logs and contain no paths, profile names, raw config or command lines.
 
-Stored v1 audits and qualification remain unchanged, including legacy first-loss/parking evidence. The independent validator accepts formats 1–5 under their own exact shapes; v2 audits are accepted only in format 5. No import or restore is added.
+Stored v1 audits and qualification remain unchanged, including legacy first-loss/parking evidence. The independent validator accepts formats 1–6 under their own exact shapes; v2 audits are accepted only in formats 5 and 6. No import or restore is added.
+
+## Quantity provenance: format 6
+
+Format 6 is format 5 with `trip.accounting` right after `trip.fuelUsedL` (ET-112e). It is `null` for an engine-0 trip, and otherwise `{engine: 1, distance, fuel}`, each `{status, breaks, quality}` from the trip's ledger head as the [Journal](journal.md#read-commands-and-bounds-j5) reads it. Distance breaks are `truck-change`, `position-jump`, `transfer`, `reading-hole`, `recording-gap` and `unsupported`, with the quality marks `bridged` and `restored`; fuel breaks are `truck-change`, `reading-hole`, `transfer`, `recording-boundary` and `unsupported`, with the quality mark `refuel-excluded`. Names keep this order. `status` is `unavailable` exactly when the value is unavailable, otherwise `partial` exactly when a break is listed, otherwise `complete`. The Journal's page-time `membership` hint is never exported. Values, units and every other key are unchanged.
 
 ## Connection diagnostics: format 3
 

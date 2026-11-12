@@ -596,6 +596,8 @@ export type I18nKey =
   | 'j.emptyTitle' | 'j.emptyText' | 'j.specialTransport' | 'j.worldOfTrucks'
   | 'tr.back' | 'tr.distance' | 'tr.planned' | 'tr.delivered' | 'tr.revenue' | 'tr.penalty' | 'tr.expected'
   | 'tr.time' | 'tr.gameTime' | 'tr.fuel' | 'tr.fuelNote'
+  | 'tr.gameDistance' | 'tr.odometer' | 'j.qty.partial' | 'j.qty.partialReasons' | 'j.qty.truck-change' | 'j.qty.position-jump' | 'j.qty.transfer' | 'j.qty.reading-hole'
+  | 'j.qty.recording-gap' | 'j.qty.recording-boundary' | 'j.qty.unsupported' | 'j.qty.bridged' | 'j.qty.restored' | 'j.membershipPending' | 'j.membershipPendingHint'
   | 'tr.tab.summary' | 'tr.tab.timeline' | 'tr.tab.completeness' | 'tr.speed' | 'tr.samples' | 'tr.gap'
   | 'tr.money' | 'tr.fines' | 'tr.tolls' | 'tr.ferry' | 'tr.hmStart' | 'tr.hmEnd' | 'tr.hmSnapshot' | 'tr.truck'
   | 'tr.ivRecorded' | 'tr.ivGap' | 'tr.ivTotal'

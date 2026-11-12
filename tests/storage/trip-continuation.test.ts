@@ -19,7 +19,7 @@ import {readFileSync,type BigIntStats} from 'node:fs';
 import path from 'node:path';
 import type {SampleInput, Storage} from '../../packages/storage/src';
 import {attachTripUuidFor,tripUuidFor, type EventMessage, type ProfileObservation} from '../../packages/telemetry-core/src';
-import {validateJournalTripDetail, validateJournalEventPage,validateJournalIntervalPage} from '../../packages/contracts/src/journal';
+import {validateJournalTripDetail, validateJournalEventPage,validateJournalIntervalPage,type JournalTripDetail,type JournalTripPage} from '../../packages/contracts/src/journal';
 import {ETS2_A, ETS2_B, GAME_CLOCK_1, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
 import {FINAL_PROCESS_PROFILE_DELAY_MS, INCIDENT_EXPECTED, INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB,
   INCIDENT_OTHER_JOB_WITHOUT_DEADLINE, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentDelivered, incidentTripUuid, type IncidentSegment} from '../shared/trip-continuation-incident';
@@ -36,7 +36,8 @@ import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
 import {StorageClient} from '../../packages/storage/src/client';
 import {ENGINE_0, storageWorker} from './recording-helpers';
 import {seedSample} from '../shared/journal-seed';
-import {JournalService} from '../../apps/desktop/src/journal-service';
+import {JournalService,type JournalClient} from '../../apps/desktop/src/journal-service';
+import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {TripExportSerializer,tripExportHeader} from '../../apps/desktop/src/journal-export';
 import {tripExportProblems} from '../shared/trip-export-validator';
 import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
@@ -296,7 +297,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
-      expect(exported.formatVersion).toBe(5);expect(exported.intervals.length).toBeGreaterThan(0);expect(JSON.stringify(exported.intervals)).not.toMatch(/[a-f0-9]{64}/);
+      expect(exported.formatVersion).toBe(6);expect(exported.intervals.length).toBeGreaterThan(0);expect(JSON.stringify(exported.intervals)).not.toMatch(/[a-f0-9]{64}/);
       expect(exported.trip).toMatchObject({outcome:'delivered',recordingCompleteness:'complete',observedDistanceM:broken?{available:false}:{available:true,value:750},fuelUsedL:broken?{available:false}:{available:true,value:1.5}});
       const breaks=(exported.intervals as {cause:string;detail:unknown}[]).filter(note=>note.cause==='accounting-chain-break');
       if(broken)expect(breaks).toMatchObject([{detail:{version:1,reason:'missing-predecessor',recorderReset:'offline-transition',distanceLost:true,fuelLost:true}}]);else expect(breaks.map(note=>note.detail)).toEqual([]);
@@ -1960,6 +1961,83 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expectIncidentHardMode(storage);
     // The recorder rereads the trip by the resolved segment's raw UUID; the journal answers it with the group's sums.
     expect(validateJournalTripDetail(ok(storage.journalTrip(lastUuid))).trip).toMatchObject({isHardMode:true,hardModeDetails:{passingChecks:178,failingChecks:0,unknownChecks:74}});
+  });
+  /**
+   * ET-112e: the Journal reads and the JSON export of the in-process storage through the service and main's reply checks,
+   * as the dashboard sees them. `exported` writes one export of `uuid` and returns the parsed document.
+   */
+  function journalReads(storage:Storage){
+    const sync=storage as unknown as Record<string,(...args:unknown[])=>unknown>;
+    const client=Object.fromEntries(['journalTrips','journalTrip','journalEvents','journalIntervals','listSamples','deleteTrip']
+      .map(name=>[name,(...args:unknown[])=>Promise.resolve(sync[name](...args))])) as unknown as JournalClient;
+    const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:10},databaseUuid:'30000000-0000-4000-8000-000000000112'},
+      stopping:()=>false,log:()=>undefined});
+    const read=async(query:JournalQuery)=>{const reply=parseJournalReply(query,await service.query(query));expect(reply?.ok).toBe(true);return (reply as {value:unknown}).value;};
+    let files=0;
+    const exported=async(uuid:string)=>{
+      const file=path.join(ws.directory,`provenance-${++files}.json`);
+      const exporter=new JournalExporter({read:async query=>parseJournalReply(query,await service.query(query))!,showSaveDialog:()=>Promise.resolve({canceled:false,filePath:file}),
+        documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
+      expect(await exporter.export(uuid)).toMatchObject({ok:true,value:{outcome:'saved'}});
+      const document=JSON.parse(readFileSync(file,'utf8')) as {formatVersion:number;trip:Record<string,unknown>;outcomeDetails:unknown;money:{incomplete:boolean}};
+      expect(tripExportProblems(document)).toEqual([]);
+      return document;
+    };
+    return {list:async()=>(await read({kind:'trips',query:{}}) as JournalTripPage).trips,detail:async(uuid:string)=>await read({kind:'trip',tripUuid:uuid}) as JournalTripDetail,exported};
+  }
+  it('ET-112e M4 shows the same delivered trip, quantities, provenance and Hard Mode in the Journal list, the detail and the export',async()=>{
+    const {storage,input}=await delayedIncident(),root=INCIDENT_EXPECTED.rootTripUuid,reads=journalReads(storage);
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});
+    // INCIDENT_QUANTITIES: 40 m + 40 m + 100 m and 0.02 L + 0.02 L + 0.05 L across two same-save-point junctions, both complete
+    // without a break or quality mark; the Hard Mode sum is 101 + 77 passing and 74 unknown.
+    const values={outcome:'delivered',recordingCompleteness:'partial',observedDistanceM:{available:true,value:expect.closeTo(180,9)},fuelUsedL:{available:true,value:expect.closeTo(0.09,9)}};
+    const accounting={engine:1,distance:{status:'complete',breaks:[],quality:[]},fuel:{status:'complete',breaks:[],quality:[]}};
+    const hardMode={version:2,passingChecks:178,failingChecks:0,unknownChecks:74};
+    const outcome={type:'job.delivered',revenue:{available:true,value:{raw:'9978',sdkType:'s64'}},distance:{available:true,value:187342.01049804688,unit:'m'}};
+    const list=await reads.list();
+    expect(list.map(row=>row.tripUuid)).toEqual([root]);
+    expect(list[0]).toMatchObject({...values,accounting,isHardMode:true,hardModeDetails:hardMode});
+    expect(list[0]).not.toHaveProperty('membership');
+    const detail=await reads.detail(root);
+    expect(detail.trip).toMatchObject({...values,accounting,isHardMode:true,hardModeDetails:hardMode});
+    expect(detail.trip).not.toHaveProperty('membership');
+    expect(detail.outcomeDetails?.record).toMatchObject(outcome);expect(detail.money.incomplete).toBe(false);
+    const document=await reads.exported(root);
+    expect(document.formatVersion).toBe(6);
+    expect(document.trip).toMatchObject({...values,accounting,is_hard_mode:true,hard_mode_details:hardMode});
+    expect(Object.keys(document.trip).slice(Object.keys(document.trip).indexOf('fuelUsedL'),Object.keys(document.trip).indexOf('fuelUsedL')+2)).toEqual(['fuelUsedL','accounting']);
+    expect(document.trip).not.toHaveProperty('membership');
+    expect((document.outcomeDetails as {record:unknown}).record).toMatchObject(outcome);expect(document.money.incomplete).toBe(false);
+  });
+  it('ET-112e marks the closed pending segment as waiting for its profile check until the resolve joins it, and never exports the mark',async()=>{
+    const {storage,input}=await delayedIncident(),root=INCIDENT_EXPECTED.rootTripUuid,lastUuid=incidentTripUuid(2),reads=journalReads(storage);
+    // Before the resolve: the delivered segment C is its own pending root; the open root A + B has no pending decision.
+    const rows=await reads.list();
+    expect(rows.map(row=>row.tripUuid).sort()).toEqual([root,lastUuid].sort());
+    expect(rows.find(row=>row.tripUuid===lastUuid)).toMatchObject({outcome:'delivered',membership:'pending'});
+    expect(rows.find(row=>row.tripUuid===root)).not.toHaveProperty('membership');
+    expect((await reads.detail(lastUuid)).trip).toMatchObject({membership:'pending'});
+    const before=await reads.exported(lastUuid);
+    expect(before.trip).toMatchObject({outcome:'delivered'});expect(before.trip).not.toHaveProperty('membership');
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});
+    const after=await reads.list();
+    expect(after.map(row=>row.tripUuid)).toEqual([root]);expect(after[0]).not.toHaveProperty('membership');
+    // The dashboard now opens the root; main refuses a detail answered for another UUID.
+    expect((await reads.detail(root)).trip).not.toHaveProperty('membership');
+  });
+  it('ET-112e shows no pending profile check for a closed segment that is pending only for incomplete job evidence',async()=>{
+    // As M3, but every reading after the delayed proof lacks the deadline: the verified profile leaves segment C pending with
+    // reason job-evidence-incomplete through its delivery, so it stays its own root and carries no pending profile check.
+    const {storage}=await incident(await ws.open(),0,undefined,index=>index<2?{}:{readingJob:reading=>reading>=2?INCIDENT_JOB_WITHOUT_DEADLINE:INCIDENT_JOB});
+    const root=INCIDENT_EXPECTED.rootTripUuid,lastUuid=incidentTripUuid(2),reads=journalReads(storage);
+    const rows=await reads.list();
+    expect(rows.map(row=>row.tripUuid).sort()).toEqual([root,lastUuid].sort());
+    expect(rows.find(row=>row.tripUuid===lastUuid)).toMatchObject({outcome:'delivered'});
+    for(const row of rows)expect(row).not.toHaveProperty('membership');
+    expect((await reads.detail(lastUuid)).trip).not.toHaveProperty('membership');
+    ok(storage.close());
+    readOnly(ws.database,db=>expect(db.prepare(`SELECT d.state,d.reason,d.raw_closed_event_seq IS NOT NULL AS closed FROM logical_membership_decisions d JOIN trips t ON t.id=d.trip_ref WHERE t.trip_uuid=?`)
+      .get(lastUuid)).toEqual({state:'pending',reason:'job-evidence-incomplete',closed:1}));
   });
   it('M12 replays the resolve and the delivery without a second continuation or delivery',async()=>{
     const {storage,last,input}=await delayedIncident(),delivery=last.close!;

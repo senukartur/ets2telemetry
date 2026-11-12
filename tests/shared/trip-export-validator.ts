@@ -1,4 +1,4 @@
-// An independent check of an `ets2telemetry.trip-export` format version 1 document (ET-016 PR-5, J15, J17), written by
+// An independent check of an `ets2telemetry.trip-export` document of format versions 1 to 6 (ET-016 PR-5, J15, J17), written by
 // hand from docs/journal-export.md and never from the serializer. It has no runtime imports, so the unit and storage
 // suites import it directly and the journal runtime smoke bundles it with Vite. It returns every problem it finds as a
 // fixed text with a JSON path; an empty list means the document is valid.
@@ -28,15 +28,17 @@ const textOf = (value: unknown) => typeof value === 'string' ? value : '';
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 const sameKeys = (value: Json, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key, index) => Object.keys(value)[index] === key);
 
-/** Every problem of `document` as a format version 1 trip export; an empty list for a valid one. */
+/** Every problem of `document` as a trip export of format version 1 to 6; an empty list for a valid one. */
 export function tripExportProblems(document: unknown): string[] {
   const problems: string[] = [];
   const problem = (where: string, what: string) => { problems.push(`${where}: ${what}`); };
   if (!isObject(document)) return ['$: not an object'];
-  const topKeys = (document.formatVersion === 4 || document.formatVersion === 5) ? [...TOP_KEYS.slice(0,12),'diagnostics','sources',...TOP_KEYS.slice(12)] : document.formatVersion === 3 ? [...TOP_KEYS.slice(0,12),'diagnostics',...TOP_KEYS.slice(12)] : TOP_KEYS;
+  // Formats 4 to 6 add the recording sources; format 6 adds the trip's quantity provenance.
+  const sourced = document.formatVersion === 4 || document.formatVersion === 5 || document.formatVersion === 6;
+  const topKeys = sourced ? [...TOP_KEYS.slice(0,12),'diagnostics','sources',...TOP_KEYS.slice(12)] : document.formatVersion === 3 ? [...TOP_KEYS.slice(0,12),'diagnostics',...TOP_KEYS.slice(12)] : TOP_KEYS;
   if (!sameKeys(document, topKeys)) problem('$', `keys are not ${topKeys.join(', ')} in this order`);
   if (document.format !== 'ets2telemetry.trip-export') problem('$.format', 'not ets2telemetry.trip-export');
-  if (document.formatVersion !== 1 && document.formatVersion !== 2 && document.formatVersion !== 3 && document.formatVersion !== 4 && document.formatVersion !== 5) problem('$.formatVersion', 'not 1, 2, 3, 4 or 5');
+  if (![1, 2, 3, 4, 5, 6].includes(document.formatVersion as number)) problem('$.formatVersion', 'not 1, 2, 3, 4, 5 or 6');
 
   const header = document.header;
   if (!isObject(header) || !isObject(header.application) || header.application.name !== 'ETS2Telemetry' || typeof header.application.version !== 'string'
@@ -67,12 +69,13 @@ export function tripExportProblems(document: unknown): string[] {
   walk(document, '$');
 
   const trip = document.trip, bounds = document.bounds;
-  if (!isObject(trip) || !sameKeys(trip, document.formatVersion !== 1 ? ['is_hard_mode', 'hard_mode_details', ...TRIP_KEYS] : TRIP_KEYS) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
+  const tripKeys = document.formatVersion === 6 ? [...TRIP_KEYS.slice(0, 12), 'accounting', ...TRIP_KEYS.slice(12)] : TRIP_KEYS;
+  if (!isObject(trip) || !sameKeys(trip, document.formatVersion !== 1 ? ['is_hard_mode', 'hard_mode_details', ...tripKeys] : tripKeys) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
   else if ((trip.outcome === 'open') !== (trip.closeReason === null) || (trip.outcome === 'open') !== (trip.endedUtcMs === null)) problem('$.trip', 'outcome, close reason and end disagree');
-  if (!isObject(bounds) || !sameKeys(bounds, [...((document.formatVersion === 4 || document.formatVersion === 5) && isObject(bounds) && bounds.projection !== undefined ? ['projection','sources','sourceTotal','accountingHead']:[]), 'committedThroughEventSeq', 'lastSampleId', 'lastIntervalId', 'snapshot']) || !U64.test(textOf(bounds.committedThroughEventSeq))
+  if (!isObject(bounds) || !sameKeys(bounds, [...(sourced && isObject(bounds) && bounds.projection !== undefined ? ['projection','sources','sourceTotal','accountingHead']:[]), 'committedThroughEventSeq', 'lastSampleId', 'lastIntervalId', 'snapshot']) || !U64.test(textOf(bounds.committedThroughEventSeq))
     || (bounds.lastSampleId !== null && !ROW_ID.test(textOf(bounds.lastSampleId))) || (bounds.lastIntervalId !== null && !ROW_ID.test(textOf(bounds.lastIntervalId)))
     || bounds.snapshot !== (isObject(trip) && trip.outcome === 'open')) { problem('$.bounds', 'malformed'); return problems; }
-  if ((document.formatVersion === 4 || document.formatVersion === 5) && bounds.projection !== undefined) {
+  if (sourced && bounds.projection !== undefined) {
     if (!isObject(bounds.projection) || !sameKeys(bounds.projection,['events','intervals','samples','sources']) || !Array.isArray(bounds.sources) || bounds.sources.length>256) problem('$.bounds','invalid logical projection');
     else for (const [kind,name] of [['e','events'],['i','intervals'],['s','samples'],['r','sources']]) if (!new RegExp('^v4:[0-9a-f-]{36}:[0-9a-f-]{36}:[1-9][0-9]{0,18}:'+kind+':0$').test(textOf(bounds.projection[name]))) problem('$.bounds.projection','invalid page token');
     for (const source of Array.isArray(bounds.sources)?bounds.sources:[]) if (!isObject(source) || !sameKeys(source,['pluginSessionId','committedThroughEventSeq']) || !UUID.test(textOf(source.pluginSessionId)) || !U64.test(textOf(source.committedThroughEventSeq))) problem('$.bounds.sources','invalid source bound');
@@ -81,7 +84,7 @@ export function tripExportProblems(document: unknown): string[] {
     if (typeof trip.is_hard_mode !== 'boolean') problem('$.trip.is_hard_mode', 'not boolean');
     const audit = trip.hard_mode_details;
     const keys = ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery'];
-    if (document.formatVersion === 5 && isObject(audit) && audit.version === 2) {
+    if ((document.formatVersion === 5 || document.formatVersion === 6) && isObject(audit) && audit.version === 2) {
       const safe = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
       const countKeys = ['passingChecks', 'failingChecks', 'unknownChecks'];
       const codes = ['settings-changing', 'settings-unavailable', 'profile-verification', 'source-changed', 'guard-deadline', 'session-transition', 'storage-failure', 'rule-failed'];
@@ -117,8 +120,22 @@ export function tripExportProblems(document: unknown): string[] {
       if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null || audit.manualDelivery === false)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
     }
   }
+  if (document.formatVersion === 6 && isObject(trip) && trip.accounting !== null && trip.accounting !== undefined) {
+    // The status agrees with the value's availability: unavailable exactly when it is unavailable, otherwise partial exactly
+    // when a break is named. Names are known, each once, in the documented order.
+    const names = (value: unknown, known: readonly string[]) => Array.isArray(value) && value.every((name, index) => known.includes(textOf(name))
+      && (index === 0 || known.indexOf(textOf(name)) > known.indexOf(textOf(value[index - 1]))));
+    const provenance = (value: unknown, quantity: unknown, breaks: readonly string[], quality: readonly string[]) => isObject(value) && sameKeys(value, ['status', 'breaks', 'quality'])
+      && names(value.breaks, breaks) && names(value.quality, quality) && ['complete', 'partial', 'unavailable'].includes(textOf(value.status))
+      && (value.status === 'unavailable') === !(isObject(quantity) && quantity.available === true)
+      && (value.status !== 'complete' || (value.breaks as unknown[]).length === 0) && (value.status !== 'partial' || (value.breaks as unknown[]).length > 0);
+    const a = trip.accounting;
+    if (!isObject(a) || !sameKeys(a, ['engine', 'distance', 'fuel']) || a.engine !== 1
+      || !provenance(a.distance, trip.observedDistanceM, ['truck-change', 'position-jump', 'transfer', 'reading-hole', 'recording-gap', 'unsupported'], ['bridged', 'restored'])
+      || !provenance(a.fuel, trip.fuelUsedL, ['truck-change', 'reading-hole', 'transfer', 'recording-boundary', 'unsupported'], ['refuel-excluded'])) problem('$.trip.accounting', 'malformed');
+  }
   const window = document.window;
-  if ((document.formatVersion === 3 || (document.formatVersion === 4 || document.formatVersion === 5))) {
+  if ((document.formatVersion === 3 || sourced)) {
     const d = document.diagnostics;
     if (!isObject(d) || !sameKeys(d, ['collection', 'matchedBy', 'status', 'notes', 'records']) || d.collection !== 'retained-logs-at-export'
       || d.matchedBy !== 'plugin-session-and-utc-window' || !['records-found', 'no-matching-records', 'unavailable', 'not-applicable'].includes(textOf(d.status))
@@ -127,7 +144,7 @@ export function tripExportProblems(document: unknown): string[] {
     else for (const row of d.records) {
       if (!isObject(row) || !sameKeys(row, ['time', 'event', 'facts']) || !Number.isFinite(Date.parse(textOf(row.time)))
         || !['PLUGIN_V1_CONNECTION_CLOSED', 'NATIVE_BROKER_V1_EXIT'].includes(textOf(row.event)) || !isObject(row.facts) || !isObject(trip)
-        || row.facts.game !== trip.game || !((document.formatVersion===4 || document.formatVersion===5) && Array.isArray(document.sources) && document.sources.length?document.sources:Array.isArray(bounds.sources)?bounds.sources:[{pluginSessionId:trip.pluginSessionId}]).some(s=>isObject(s)&&s.pluginSessionId===(row.facts as Json).pluginSessionId)) { problem('$.diagnostics.records', 'malformed or unrelated'); continue; }
+        || row.facts.game !== trip.game || !(sourced && Array.isArray(document.sources) && document.sources.length?document.sources:Array.isArray(bounds.sources)?bounds.sources:[{pluginSessionId:trip.pluginSessionId}]).some(s=>isObject(s)&&s.pluginSessionId===(row.facts as Json).pluginSessionId)) { problem('$.diagnostics.records', 'malformed or unrelated'); continue; }
       const allowed = row.event === 'PLUGIN_V1_CONNECTION_CLOSED'
         ? ['game', 'pluginSessionId', 'reason', 'phase', 'write', 'end', 'win32', 'durable', 'connection', 'durationMs']
         : ['game', 'pluginSessionId', 'outcome', 'exitCode', 'serviceMs', 'stage', 'win32Error', 'elapsedMs', 'slowStage', 'slowMs', 'repeats'];
@@ -148,7 +165,7 @@ export function tripExportProblems(document: unknown): string[] {
     let previous = -1n;
     list.forEach((row: unknown, index) => {
       const where = `$.${name}[${index}]`;
-      const qualified = (document.formatVersion === 4 || document.formatVersion === 5) && isObject(row) && row.pluginSessionId !== undefined;
+      const qualified = sourced && isObject(row) && row.pluginSessionId !== undefined;
       const sourceKeys = qualified ? name === 'events' ? ['id','pluginSessionId','rawTripUuid'] : name === 'samples' ? ['pluginSessionId','rawTripUuid','accountingIncluded'] : ['pluginSessionId','rawTripUuid'] : [];
       if (!isObject(row) || !sameKeys(row, [...sourceKeys,...keys])) { problem(where, 'keys differ'); return; }
       if (qualified && (!UUID.test(textOf(row.pluginSessionId)) || !UUID.test(textOf(row.rawTripUuid)) || name==='samples' && typeof row.accountingIncluded!=='boolean')) problem(where,'invalid source provenance');
@@ -165,7 +182,7 @@ export function tripExportProblems(document: unknown): string[] {
   rows('intervals', INTERVAL_KEYS, row => row.id, bounds.lastIntervalId as string | null, true);
   rows('events', EVENT_KEYS, row => row.eventSeq, bounds.committedThroughEventSeq as string);
   rows('samples', SAMPLE_KEYS, row => row.id, bounds.lastSampleId as string | null, true);
-  if((document.formatVersion===4 || document.formatVersion===5)){
+  if(sourced){
     if(!Array.isArray(document.sources)) problem('$.sources','not an array');
     else {let previous=0n;for(const source of document.sources){
       if(!isObject(source)||!sameKeys(source,['id','rawTripUuid','pluginSessionId','fromEventSeq','throughEventSeq','lastSampleId','lastIntervalId'])||!ROW_ID.test(textOf(source.id))||!UUID.test(textOf(source.rawTripUuid))||!UUID.test(textOf(source.pluginSessionId))||!U64.test(textOf(source.fromEventSeq))||!U64.test(textOf(source.throughEventSeq))) {problem('$.sources','invalid source');continue;}
@@ -176,7 +193,7 @@ export function tripExportProblems(document: unknown): string[] {
   for (const [index, event] of (Array.isArray(document.events) ? document.events : []).entries()) {
     if (!isObject(event) || !isObject(event.record) || event.record.type !== event.type) problem(`$.events[${index}]`, 'record type differs');
     const attribution = isObject(event) ? event.attribution : undefined;
-    if (attribution !== null && !(isObject(attribution) && sameKeys(attribution, [...((document.formatVersion===4 || document.formatVersion===5) && attribution.logicalTripUuid!==undefined?['logicalTripUuid']:[]),'kind', 'tripUuid']))) problem(`$.events[${index}].attribution`, 'malformed');
+    if (attribution !== null && !(isObject(attribution) && sameKeys(attribution, [...(sourced && attribution.logicalTripUuid!==undefined?['logicalTripUuid']:[]),'kind', 'tripUuid']))) problem(`$.events[${index}].attribution`, 'malformed');
   }
   return problems;
 }

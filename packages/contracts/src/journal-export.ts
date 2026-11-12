@@ -1,15 +1,15 @@
-// Trip export format version 5. One recorded trip as a versioned JSON document for the user's own
+// Trip export format version 6. One recorded trip as a versioned JSON document for the user's own
 // records: canonical units, stable identifiers, the protocol v1 availability and money shapes, and the bounds that fix
 // what an export of a still changing trip contains. The application never imports or restores it. Plain data only;
 // Node-safe and renderer-safe. See docs/journal-export.md.
 import type {HardModeDetails} from './hard-mode';
 import type {JournalCallCode, JournalCallResult, JournalSample} from './index';
-import type {JournalEvent, JournalInterval, JournalRecordingSource, JournalPurpose, JournalTripDetail} from './journal';
+import type {JournalAccounting, JournalEvent, JournalInterval, JournalRecordingSource, JournalPurpose, JournalTripDetail} from './journal';
 import type {Uint64} from './protocol-v1';
 
 export const TRIP_EXPORT_FORMAT = 'ets2telemetry.trip-export';
 /** Bumped by any change to the document below; there is no import, so older versions are never read back. */
-export const TRIP_EXPORT_FORMAT_VERSION = 5;
+export const TRIP_EXPORT_FORMAT_VERSION = 6;
 
 /**
  * The canonical units of every number in the document (J15). Values are never converted for display: a measure of a
@@ -52,8 +52,13 @@ export interface TripExportHeader {
 export interface TripExportBounds {projection?: JournalTripDetail['exportBounds']['snapshot']; sources?: JournalTripDetail['exportBounds']['sources']; sourceTotal?:number;accountingHead?:string|null;committedThroughEventSeq: Uint64; lastSampleId: string | null; lastIntervalId: string | null; snapshot: boolean}
 /** One stored one-second sample of the trip in canonical units; the trip is the document's own. */
 export type TripExportSample = Omit<JournalSample, 'tripUuid'>;
-/** The trip section: the stored trip row with its outcome, close reason, recording completeness, UTC labels, observed distance and fuel used. */
-export type TripExportTrip = Omit<JournalTripDetail['trip'], 'job' | 'isHardMode' | 'hardModeDetails'> & {is_hard_mode: boolean; hard_mode_details: HardModeDetails | null};
+/**
+ * The trip section: the stored trip row with its outcome, close reason, recording completeness, UTC labels, observed
+ * distance and fuel used, and their provenance (`accounting`, null for a trip of the legacy engine 0). The Journal's
+ * page-time membership hint is not exported.
+ */
+export type TripExportTrip = Omit<JournalTripDetail['trip'], 'job' | 'isHardMode' | 'hardModeDetails' | 'accounting' | 'membership'>
+  & {is_hard_mode: boolean; hard_mode_details: HardModeDetails | null; accounting: JournalAccounting | null};
 
 /** Best-effort evidence from retained logs at export, never a claim that every disconnect was observed. */
 export interface TripExportDiagnostics {
@@ -69,7 +74,7 @@ export interface TripExportDiagnosticRecord {
   facts: {game: 'ets2' | 'ats'; pluginSessionId: string; [key: string]: string | number | boolean | null};
 }
 
-/** Format version 3 of `ets2telemetry.trip-export`, in key order. */
+/** The current format version of `ets2telemetry.trip-export`, in key order. */
 export interface TripExportDocument {
   format: typeof TRIP_EXPORT_FORMAT;
   formatVersion: typeof TRIP_EXPORT_FORMAT_VERSION;

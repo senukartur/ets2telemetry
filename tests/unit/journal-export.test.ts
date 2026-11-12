@@ -64,6 +64,12 @@ const EXPECTED_V2 = {...EXPECTED, formatVersion: 2, trip: {is_hard_mode: false, 
 const {intervals: expectedIntervals, events: expectedEvents, samples: expectedSamples, ...fixedV2} = EXPECTED_V2;
 const EXPECTED_V4 = {...fixedV2, formatVersion: 4, diagnostics: {collection: 'retained-logs-at-export', matchedBy: 'plugin-session-and-utc-window',
   status: 'not-applicable', notes: [], records: []}, sources:[],intervals: expectedIntervals, events: expectedEvents, samples: expectedSamples};
+const EXPECTED_V5 = {...EXPECTED_V4, formatVersion: 5};
+/** ET-112e: format 6 is format 5 with the trip's quantity provenance right after fuel used; null for a trip without it (engine 0). */
+const {openedBy, openedEventSeq, outcomeEventSeq, closedBy, ...tripHead} = EXPECTED_V2.trip;
+const EXPECTED_V6 = {...EXPECTED_V4, formatVersion: 6, trip: {...tripHead, accounting: null, openedBy, openedEventSeq, outcomeEventSeq, closedBy}};
+/** A partial engine-1 distance across a reading hole, and an unavailable fuel used whose quality note names a refuel left out. */
+const PARTIAL = {engine: 1, distance: {status: 'partial', breaks: ['reading-hole'], quality: []}, fuel: {status: 'unavailable', breaks: [], quality: ['refuel-excluded']}} as const;
 
 describe('trip-scoped connection diagnostics (REG-011, REG-014)', () => {
   const start = DETAIL.trip.startedUtcMs, now = start + 10_000;
@@ -130,15 +136,46 @@ describe('trip-scoped connection diagnostics (REG-011, REG-014)', () => {
 
 it('independently validates the historical format-3 shape', () => {const v3:Record<string,unknown>={...EXPECTED_V4,formatVersion:3};delete v3.sources;expect(tripExportProblems(v3)).toEqual([]);});
 it('independently validates the frozen format-4 shape', () => {expect(tripExportProblems(EXPECTED_V4)).toEqual([]);});
+it('independently validates the frozen format-5 shape', () => {expect(tripExportProblems(EXPECTED_V5)).toEqual([]);});
 
-describe('format version 5 (J15, REG-014)', () => {
+describe('format version 6 quantity provenance (ET-112e; REG-011, REG-014)', () => {
+  const withAccounting = (document: typeof EXPECTED_V6, accounting: unknown) => ({...document, trip: {...document.trip, accounting}});
+  it('accepts null and a provenance whose status agrees with the value', () => {
+    expect(tripExportProblems(EXPECTED_V6)).toEqual([]);
+    // The fixture's distance is 0 m (a value) and its fuel used is unavailable.
+    expect(tripExportProblems(withAccounting(EXPECTED_V6, PARTIAL))).toEqual([]);
+    expect(tripExportProblems(withAccounting(EXPECTED_V6, {...PARTIAL, distance: {status: 'complete', breaks: [], quality: ['bridged', 'restored']}}))).toEqual([]);
+  });
+  it('refuses a format-6 trip without accounting and a format-5 trip with it', () => {
+    const {accounting, ...without} = EXPECTED_V6.trip; void accounting;
+    expect(tripExportProblems({...EXPECTED_V6, trip: without})).toEqual(['$.trip: malformed']);
+    expect(tripExportProblems(withAccounting({...EXPECTED_V6, formatVersion: 5}, null))).toEqual(['$.trip: malformed']);
+  });
+  it.each([
+    ['a status that contradicts the available distance', {...PARTIAL, distance: {status: 'unavailable', breaks: [], quality: []}}],
+    ['a status that contradicts the unavailable fuel', {...PARTIAL, fuel: {status: 'complete', breaks: [], quality: []}}],
+    ['complete with a break', {...PARTIAL, distance: {status: 'complete', breaks: ['transfer'], quality: []}}],
+    ['partial without a break', {...PARTIAL, distance: {status: 'partial', breaks: [], quality: []}}],
+    ['an unknown reason', {...PARTIAL, distance: {status: 'partial', breaks: ['teleport'], quality: []}}],
+    ['a fuel reason for distance', {...PARTIAL, distance: {status: 'partial', breaks: ['recording-boundary'], quality: []}}],
+    ['reasons out of order', {...PARTIAL, distance: {status: 'partial', breaks: ['reading-hole', 'truck-change'], quality: []}}],
+    ['a repeated reason', {...PARTIAL, distance: {status: 'partial', breaks: ['reading-hole', 'reading-hole'], quality: []}}],
+    ['engine 0', {...PARTIAL, engine: 0}],
+    ['the raw flag integer', 8]
+  ])('refuses %s', (_name, accounting) => {
+    expect(tripExportProblems(withAccounting(EXPECTED_V6, accounting))).toEqual(['$.trip.accounting: malformed']);
+  });
+});
+
+describe('format version 6 (J15, REG-014)', () => {
   it('still validates the hand-written historical format-1 document', () => {expect(tripExportProblems(EXPECTED)).toEqual([]);});
   it('still validates the historical format-2 document', () => {expect(tripExportProblems(EXPECTED_V2)).toEqual([]);});
   it('writes the open anchor exactly as the hand-written document, in key order, one row per line', () => {
     const text = serialize(detail, {intervals: [[INTERVAL]], events: [[EVENT], [EVENT_4]], samples: [[SAMPLE]]});
     const document = JSON.parse(text) as Record<string, unknown>;
-    expect(document).toEqual({...EXPECTED_V4,formatVersion:5});
-    expect(Object.keys(document)).toEqual(Object.keys(EXPECTED_V4));
+    expect(document).toEqual(EXPECTED_V6);
+    expect(Object.keys(document)).toEqual(Object.keys(EXPECTED_V6));
+    expect(Object.keys(document.trip as object)).toEqual(Object.keys(EXPECTED_V6.trip));
     expect(tripExportProblems(document)).toEqual([]);
     // Fixed sections, then each row of each section on its own line, then the closing lines.
     const lines = text.split('\n');

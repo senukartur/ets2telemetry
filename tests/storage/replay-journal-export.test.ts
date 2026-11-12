@@ -165,6 +165,11 @@ interface TripExpectation {
 const LEDGER_TOTALS: Record<string, Record<string, {observedDistanceM: Json; fuelUsedL: Json}>> = {
   'timers-truck-refuel-trip': {'trip@3': {observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}}}
 };
+/**
+ * ET-112e: no replayed frame carries the truck, the position and the game time a complete anchor needs, so every engine-1
+ * group shows both quantities unavailable without a reason (format 6 `accounting`).
+ */
+const REPLAY_ACCOUNTING = {engine: 1, distance: {status: 'unavailable', breaks: [], quality: []}, fuel: {status: 'unavailable', breaks: [], quality: []}};
 function expectationsOf(s: Scenario, gapCommittedUtcMs?: number): TripExpectation[] {
   const original=JOURNAL.scenarios[s.id];
   const journal=s.id==='app-absent-hydration'?{...original,trips:[{...original.trips[0],trip:'attach@5',closedBy:null,window:{fromEventSeq:'5',throughEventSeq:null,end:'open'},outcome:null,money:[],samples:[]},...original.trips]}:original;
@@ -183,7 +188,10 @@ function expectationsOf(s: Scenario, gapCommittedUtcMs?: number): TripExpectatio
     }
     const listItem = {isHardMode: false, hardModeDetails, tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
       recordingCompleteness: row.recordingCompleteness, startedUtcMs: row.startedUtcMs, endedUtcMs: row.endedUtcMs, ...(LEDGER_TOTALS[s.id]?.[t.trip] ?? {observedDistanceM: row.observedDistanceM, fuelUsedL: row.fuelUsedL}),
-      job: expandMoney(t.job)};
+      job: expandMoney(t.job), accounting: REPLAY_ACCOUNTING,
+      // ET-112e: one plugin session without profile proof: every closed trip keeps its pending decision, so the Journal
+      // shows the pending profile check on it; an open trip never carries it.
+      ...(t.closedBy === null ? {} : {membership: 'pending'})};
     // A trip opened at an event has its job at its job configuration event; a late-attach trip (attach@<nextEventSeq>) has the checkpoint's job (J9).
     const checkpoint = row.openedEventSeq === null ? t.trip.replace(/^attach@/, '') : null;
     const intervals = (s.rows.intervals as StoredInterval[]).filter(i => i.trip === t.trip).map(i => ({kind: i.kind, annotation: i.detail?.annotation === true,
@@ -295,7 +303,8 @@ async function expectExports(journal: JournalService, s: Scenario, trips: TripEx
     expect(document.bounds, t.label).toMatchObject({committedThroughEventSeq: coverage, snapshot: t.listItem.outcome === 'open'});
     expect([document.bounds.lastSampleId === null, document.bounds.lastIntervalId === null], t.label).toEqual([t.samples.length === 0, t.intervals.length === 0]);
     // The export's trip block is the detail's trip without the list's job summary (docs/journal-export.md).
-    const {job: summary, isHardMode, hardModeDetails, ...trip} = t.detailTrip; void summary;
+    // The pending profile check is a page-time hint the export never writes (format 6).
+    const {job: summary, isHardMode, hardModeDetails, membership, ...trip} = t.detailTrip; void summary; void membership;
     expect(document.trip, t.label).toEqual({is_hard_mode: isHardMode, hard_mode_details: hardModeDetails, ...trip});
     expect({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq}, t.label).toEqual(t.job);
     expect([document.truck?.eventSeq ?? null, {eventSeqs: document.trailers.items.map(i => i.eventSeq), total: document.trailers.total}], t.label).toEqual([t.truck, t.trailers]);

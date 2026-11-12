@@ -68,4 +68,16 @@ describe('TripTable (ET-076)', () => {
     expect(html).toMatch(/data-testid="journal-row-observed">0\.0 км<\/div><small data-testid="journal-row-planned">из 152\.0 км<\/small>/);
     expect(html).toContain('<small data-testid="journal-row-companies">Vltava · Donau</small>');
   });
+
+  it('adds the partial distance line and the pending profile check chip only when the trip carries them (ET-112e)', () => {
+    const accounting = {engine: 1 as const, distance: {status: 'partial' as const, breaks: ['reading-hole' as const], quality: []}, fuel: {status: 'complete' as const, breaks: [], quality: []}};
+    const marked = render([{...ITEM, accounting, membership: 'pending'}], 'en');
+    expect(marked).toMatch(/data-testid="journal-row-observed">0\.0 km<\/div><small data-testid="journal-row-planned">of 152\.0 km<\/small><small data-testid="journal-row-distance-partial">partial<\/small>/);
+    expect(marked).toMatch(/data-testid="journal-row-membership"[^>]*>Profile check pending<\/span>/);
+    expect(marked).toContain('This recording may still join an earlier trip of the same job if the profile is confirmed in this game session; otherwise it stays separate.');
+    expect(render([{...ITEM, accounting, membership: 'pending'}], 'ru')).toMatch(/data-testid="journal-row-distance-partial">частично<\/small>.*data-testid="journal-row-membership"[^>]*>Ожидает проверки профиля<\/span>/);
+    const plain = render([{...ITEM, accounting: {...accounting, distance: {status: 'complete' as const, breaks: [], quality: []}}}], 'en');
+    expect(plain).not.toContain('journal-row-distance-partial'); expect(plain).not.toContain('journal-row-membership');
+    expect(render([ITEM], 'en')).not.toContain('journal-row-distance-partial');
+  });
 });

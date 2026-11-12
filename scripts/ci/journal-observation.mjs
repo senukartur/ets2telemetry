@@ -419,7 +419,9 @@ const DELIVERED_EXPORT = {
   bounds: {committedThroughEventSeq: '29', lastSampleId: '9', lastIntervalId: null, snapshot: false},
   trip: {is_hard_mode: false, hard_mode_details: unobservedHardModeAudit(BASE_UTC+4_000), tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
     outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000,
-    observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
+    observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'},
+    // Format 6: the seed records engine 0, whose trips carry no quantity provenance.
+    accounting: null, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
     closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}},
   events: [['4', 'job.configured', null], ['5', 'player.fined', 'trip'], ['6', 'player.tollgate.paid', 'trip'], ['7', 'player.use.ferry', 'trip'], ['8', 'player.fined', 'trip'],
     ['9', 'job.delivered', 'trip']],
@@ -500,10 +502,10 @@ export async function runJournalExport({application, dashboard, config, record})
   const documents = {};
   for (const name of ['paging', 'delivered']) {
     const document = documents[name] = JSON.parse(await readFile(path.join(folder, `${name}.json`), 'utf8'));
-    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 5 document`);
+    assert.deepEqual(problemsOf(document), [], `The ${name} export is not a valid format version 6 document`);
     assert.deepEqual({format: document.format, formatVersion: document.formatVersion, application: document.header.application, purpose: document.header.database.purpose,
       schemaVersion: document.header.database.schemaVersion, sessionOrigin: document.header.sessionOrigin},
-    {format: 'ets2telemetry.trip-export', formatVersion: 5, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 10, sessionOrigin: 'synthetic'});
+    {format: 'ets2telemetry.trip-export', formatVersion: 6, application: {name: 'ETS2Telemetry', version: smokeBuild(config).version}, purpose: 'synthetic', schemaVersion: 10, sessionOrigin: 'synthetic'});
   }
   assert.equal(documents.paging.header.database.uuid, documents.delivered.header.database.uuid);
   // Current synthetic seeds supply no verification observations: zero known checks cannot qualify.
