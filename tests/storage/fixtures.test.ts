@@ -160,3 +160,47 @@ it('REG-013 freezes schema8 with a proof-bearing restart-closed group, proof-les
     expect(db.pragma('foreign_key_check')).toEqual([]);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');
   });
 });
+
+// ET-112c2: the last schema 9 history before the quantity engine. Its meaning, read with SQL and through the Journal, is the
+// same on the frozen schema and after migration 0010, where every group and ledger row keeps the schema 9 meaning.
+it('REG-013 freezes schema9 with a rebased delivered singleton, a live and retroactive incident join and a pending open trip, and keeps their meaning on schema 10',async()=>{
+  const copy=ws.copyFixture('schema-v9-representative.sqlite'),expected=JSON.parse(readFileSync(path.join(STORAGE_FIXTURES,'schema-v9-representative.expected.json'),'utf8'));
+  const journal=(storage:Storage)=>{
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual(expected.journal.map((row:{tripUuid:string})=>row.tripUuid).sort());
+    return expected.journal.map((row:{tripUuid:string})=>{
+      const detail=ok(storage.journalTrip(row.tripUuid));
+      return {tripUuid:detail.trip.tripUuid,outcome:detail.trip.outcome,recordingCompleteness:detail.trip.recordingCompleteness,sources:detail.exportBounds.sources?.map(source=>source.pluginSessionId),
+        observedDistanceM:detail.trip.observedDistanceM,fuelUsedL:detail.trip.fuelUsedL};
+    });
+  };
+  const meaning=(file:string,schema:number)=>readOnly(file,db=>{
+    expect(db.prepare('SELECT plugin_session_uuid FROM plugin_sessions ORDER BY id').pluck().all()).toEqual(expected.sessions);
+    expect(db.prepare(`SELECT t.id,t.trip_uuid,s.plugin_session_uuid AS session,t.outcome,t.close_reason,t.recording_completeness,t.observed_distance_m,t.fuel_used_l
+      FROM trips t JOIN plugin_sessions s ON s.id=t.plugin_session_ref ORDER BY t.id`).all()).toEqual(expected.trips);
+    expect(db.prepare('SELECT trip_ref,logical_ref,previous_logical_ref,proof_json IS NOT NULL AS proof FROM logical_memberships ORDER BY trip_ref').all()).toEqual(expected.memberships);
+    expect(db.prepare('SELECT id,latest_trip_ref,member_count,retired,accounting_rebased,reconciliation_unknown FROM logical_trips ORDER BY id').all()).toEqual(expected.logicalTrips);
+    expect(db.prepare('SELECT trip_ref,state,reason,target_logical_ref FROM logical_membership_decisions ORDER BY trip_ref').all()).toEqual(expected.decisions);
+    expect(db.prepare('SELECT s.plugin_session_uuid AS session,b.through_event_seq FROM session_profile_boundaries b JOIN plugin_sessions s ON s.id=b.plugin_session_ref ORDER BY b.plugin_session_ref').all())
+      .toEqual(expected.profileBoundaries);
+    const breaks=db.prepare("SELECT trip_ref,detail_json FROM completeness_intervals WHERE json_extract(detail_json,'$.cause')='accounting-chain-break' ORDER BY id").all() as {trip_ref:number;detail_json:string}[];
+    expect(breaks.map(({trip_ref,detail_json})=>{const d=JSON.parse(detail_json) as Record<string,unknown>;
+      return {trip_ref,version:d.version,reason:d.reason,recorderReset:d.recorderReset,distanceLost:d.distanceLost,fuelLost:d.fuelLost};})).toEqual(expected.chainBreaks);
+    expect(db.prepare(`SELECT t.trip_uuid,a.amount_raw AS raw,a.amount_sdk_type AS sdkType,d.distance_m AS distanceM FROM trips t
+      JOIN job_deliveries d ON d.event_ref=t.outcome_event_ref JOIN event_amounts a ON a.event_ref=t.outcome_event_ref ORDER BY t.id`).all()
+      .map(row=>{const {trip_uuid,raw,sdkType,distanceM}=row as Record<string,unknown>;return {trip_uuid,revenue:{raw,sdkType},distanceM};})).toEqual(expected.deliveries);
+    const counts=contentDigest(db).rowCounts;
+    expect(Object.fromEntries(Object.keys(expected.rowCounts).map(table=>[table,counts[table]]))).toEqual({...expected.rowCounts,schema_migrations:schema});
+    expect(db.pragma('foreign_key_check')).toEqual([]);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');
+  });
+  const frozen=await ws.open({path:copy,migrations:MIGRATIONS.slice(0,9)});
+  expect(frozen.summary).toMatchObject({schemaVersion:9,created:false,databaseUuid:expected.databaseUuid});expect(frozen.summary.migratedFrom).toBeUndefined();
+  expect(journal(frozen)).toEqual(expected.journal);frozen.close();
+  const fresh=await ws.open({migrations:MIGRATIONS.slice(0,9)});fresh.close();expect(schemaOf(copy)).toEqual(schemaOf(ws.database));
+  meaning(copy,9);
+  const upgraded=await ws.open({path:copy});
+  expect(upgraded.summary).toMatchObject({schemaVersion:10,migratedFrom:9,databaseUuid:expected.databaseUuid});
+  expect(journal(upgraded)).toEqual(expected.journal);upgraded.close();
+  meaning(copy,10);
+  expect(readOnly(copy,db=>[db.prepare('SELECT DISTINCT accounting_engine FROM logical_trips').pluck().all(),db.prepare('SELECT count(*) FROM logical_progress WHERE quantity_flags IS NOT NULL').pluck().get()]))
+    .toEqual([[0],0]);
+});

@@ -15,7 +15,7 @@ describe('ET-062 migration 0008 (0008-haulmp-mode)', () => {
     const sessionsBefore = readOnly(file, db => db.prepare('SELECT * FROM plugin_sessions ORDER BY id').all()) as Record<string, unknown>[];
 
     const storage = await ws.open({path: file});
-    expect(storage.summary.schemaVersion).toBe(9);
+    expect(storage.summary.schemaVersion).toBe(10);
     expect(storage.summary.migratedFrom).toBe(version);
     const backup = path.join(ws.backups, storage.summary.backupFileName!);
     expect(digestOf(backup)).toEqual(before);
@@ -104,7 +104,7 @@ describe('ET-062 migration 0008 (0008-haulmp-mode)', () => {
     expect(error.backupFileName).toBeTruthy();
     const backupFiles = files(ws.backups);
     const storage = await ws.open({path: file});
-    expect(storage.summary.schemaVersion).toBe(9);
+    expect(storage.summary.schemaVersion).toBe(10);
     expect(storage.summary.backupFileName).toBe(error.backupFileName);
     storage.close();
     expect(files(ws.backups)).toEqual(backupFiles);

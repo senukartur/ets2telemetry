@@ -136,6 +136,26 @@ describe('schema version 2 constraints', () => {
   });
 });
 
+// ET-112c2 (schema 10): a logical trip's distance and fuel engine and the 16-bit engine-1 ledger flags, on rows inserted by
+// hand next to the session, clocks and job configuration that the beforeEach commit stored.
+describe('schema version 10 constraints', () => {
+  it('keeps the accounting engine at 0 or 1 and the quantity flags NULL or within 16 bits', () => {
+    const uuid = '70000000-0000-4000-8000-000000000001';
+    sql("INSERT INTO trips (trip_uuid, plugin_session_ref, game, game_mode, game_mode_method, game_mode_confidence, job_configuration_ref, opened_event_ref, opened_by, outcome, recording_completeness, started_utc_ms, observed_distance_m_state, created_utc_ms, updated_utc_ms) VALUES (?, 1, 'ets2', 'unknown', 'none', 'none', 1, 1, 'event', 'open', 'unknown', 0, 'not-observed', 0, 0)", uuid);
+    const group = "INSERT INTO logical_trips (id, trip_uuid, latest_trip_ref, game, accounting_engine) VALUES (1, ?, 1, 'ets2', ?)";
+    for (const engine of [2, -1]) rejected(group, 'SQLITE_CONSTRAINT_CHECK', uuid, engine);
+    rejected(group, 'SQLITE_CONSTRAINT_NOTNULL', uuid, null);
+    sql(group, uuid, 1);
+    sql('INSERT INTO samples (plugin_session_ref, utc_ms, source_clock_ref, monotonic_ns) VALUES (1, 0, 1, 0)');
+    const row = 'INSERT INTO logical_progress (logical_ref, trip_ref, anchor_sample_ref, quantity_flags) VALUES (1, 1, 1, ?)';
+    for (const flags of [65536, -1]) rejected(row, 'SQLITE_CONSTRAINT_CHECK', flags);
+    rejected(row, 'SQLITE_CONSTRAINT_DATATYPE', 'partial');
+    for (const flags of [0, 65535, null]) sql(row, flags);
+    expect(connection.reader().prepare('SELECT quantity_flags FROM logical_progress ORDER BY id').pluck().all()).toEqual([0n, 65535n, null]);
+    expect(connection.reader().prepare('SELECT accounting_engine FROM logical_trips').pluck().all()).toEqual([1n]);
+  });
+});
+
 describe('synthetic and replay data never enter history', () => {
   it('accepts only the origin of the database purpose', async () => {
     const history = await ws.open({path: `${ws.directory}\\history.sqlite`, purpose: 'history'});
