@@ -137,7 +137,8 @@ export function jobValues(job: Row): JobConfiguration {
 /**
  * One list row. `progress` is the logical trip and the ledger head its values were read at, for the engine-1 provenance
  * of distance and fuel (ET-112e); a legacy raw row has none. A closed self-root whose schema-9 decision is still pending
- * is marked `membership: 'pending'` at this read; its logical id is its own raw trip id.
+ * for want of a verified profile (`profile-unverified`) is marked `membership: 'pending'` at this read; its logical id is
+ * its own raw trip id. A pending `job-evidence-incomplete` decision already had a verified profile and is not marked.
  */
 export function listItem(db: Database.Database, r: Row, progress?: {logical: unknown; head: unknown}): JournalTripListItem {
   const job = get(db, JOURNAL_QUERIES.job, r.job_configuration_ref);
@@ -145,7 +146,7 @@ export function listItem(db: Database.Database, r: Row, progress?: {logical: unk
   const values = jobValues(job);
   const observedDistanceM = fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal), fuelUsedL = fromAvailability(r.fuel_used_l, r.fuel_used_l_state, toReal);
   const accounting = progress && journalAccounting(db, progress.logical, progress.head, observedDistanceM.available, fuelUsedL.available);
-  const pending = decisionsEnabled(db) && get(db, `SELECT 1 AS pending FROM logical_membership_decisions WHERE trip_ref=? AND state='pending' AND raw_closed_event_seq IS NOT NULL`, r.id) !== undefined;
+  const pending = decisionsEnabled(db) && get(db, `SELECT 1 AS pending FROM logical_membership_decisions WHERE trip_ref=? AND state='pending' AND reason='profile-unverified' AND raw_closed_event_seq IS NOT NULL`, r.id) !== undefined;
   return {
     isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
     tripUuid: String(r.trip_uuid), game: r.game as JournalTripListItem['game'],

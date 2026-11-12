@@ -74,7 +74,7 @@ describe('TripTable (ET-076)', () => {
     const marked = render([{...ITEM, accounting, membership: 'pending'}], 'en');
     expect(marked).toMatch(/data-testid="journal-row-observed">0\.0 km<\/div><small data-testid="journal-row-planned">of 152\.0 km<\/small><small data-testid="journal-row-distance-partial">partial<\/small>/);
     expect(marked).toMatch(/data-testid="journal-row-membership"[^>]*>Profile check pending<\/span>/);
-    expect(marked).toContain('This recording can still join an earlier trip of the same job when the profile is confirmed in this game session; otherwise it stays separate.');
+    expect(marked).toContain('This recording may still join an earlier trip of the same job if the profile is confirmed in this game session; otherwise it stays separate.');
     expect(render([{...ITEM, accounting, membership: 'pending'}], 'ru')).toMatch(/data-testid="journal-row-distance-partial">частично<\/small>.*data-testid="journal-row-membership"[^>]*>Ожидает проверки профиля<\/span>/);
     const plain = render([{...ITEM, accounting: {...accounting, distance: {status: 'complete' as const, breaks: [], quality: []}}}], 'en');
     expect(plain).not.toContain('journal-row-distance-partial'); expect(plain).not.toContain('journal-row-membership');

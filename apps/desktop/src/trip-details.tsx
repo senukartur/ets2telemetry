@@ -8,6 +8,7 @@ import {JournalSyncBadge} from './dashboard-upload/journal-sync';
 import {journalSyncView} from './dashboard-upload/view';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
 import {t} from './i18n';
+import {InfoHint} from './info-hint';
 import {journalSiteSaved, type JournalBadge, type JournalCompletenessText, type JournalDetailText, type JournalJobBadge, type JournalModeBadge, type JournalSection, type JournalTextOptions, type JournalTimelineItem, type JournalTripSideText} from './journal-view';
 import type {journalTileValues} from './screens/journal-tiles';
 
@@ -48,7 +49,10 @@ export function TripHeading({game, outcome, isHardMode, cargo, text, side, langu
       <OutcomeChip outcome={outcome} text={text.outcome} />
       <CompletenessChip badge={text.completeness} testId="journal-detail-completeness" />
       {isHardMode ? <HardModeBadge language={language} /> : null}
-      {text.membership ? <Badge variant="neutral" className="yu-trip-chip" data-testid="journal-detail-membership" title={t('j.membershipPendingHint', undefined, language)}><CircleHelp aria-hidden="true" strokeWidth={1.8} /><span>{text.membership}</span></Badge> : null}
+      {text.membership ? <>
+        <Badge variant="neutral" className="yu-trip-chip" data-testid="journal-detail-membership"><CircleHelp aria-hidden="true" strokeWidth={1.8} /><span>{text.membership}</span></Badge>
+        <InfoHint testId="journal-detail-membership-hint" label={t('ui.moreAbout', {v: text.membership}, language)}>{t('j.membershipPendingHint', undefined, language)}</InfoHint>
+      </> : null}
     </div>
     <p className="yu-trip-route" data-testid="trip.header.route">{side.route}</p>
     <p className="sr-only" data-testid="journal-detail-title">{text.title}</p>

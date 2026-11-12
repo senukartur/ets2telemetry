@@ -419,7 +419,9 @@ const DELIVERED_EXPORT = {
   bounds: {committedThroughEventSeq: '29', lastSampleId: '9', lastIntervalId: null, snapshot: false},
   trip: {is_hard_mode: false, hard_mode_details: unobservedHardModeAudit(BASE_UTC+4_000), tripUuid: T.delivered, pluginSessionId: ETS2_A, game: 'ets2', gameMode: {mode: 'single-player', method: 'module-scan', confidence: 'weak'}, gameModeAmbiguous: false,
     outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete', startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000,
-    observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'}, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
+    observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: {available: false, reason: 'not-observed'},
+    // Format 6: the seed records engine 0, whose trips carry no quantity provenance.
+    accounting: null, openedBy: 'event', openedEventSeq: '4', outcomeEventSeq: '9',
     closedBy: {pluginSessionId: ETS2_A, eventSeq: '9'}},
   events: [['4', 'job.configured', null], ['5', 'player.fined', 'trip'], ['6', 'player.tollgate.paid', 'trip'], ['7', 'player.use.ferry', 'trip'], ['8', 'player.fined', 'trip'],
     ['9', 'job.delivered', 'trip']],

@@ -2025,6 +2025,20 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     // The dashboard now opens the root; main refuses a detail answered for another UUID.
     expect((await reads.detail(root)).trip).not.toHaveProperty('membership');
   });
+  it('ET-112e shows no pending profile check for a closed segment that is pending only for incomplete job evidence',async()=>{
+    // As M3, but every reading after the delayed proof lacks the deadline: the verified profile leaves segment C pending with
+    // reason job-evidence-incomplete through its delivery, so it stays its own root and carries no pending profile check.
+    const {storage}=await incident(await ws.open(),0,undefined,index=>index<2?{}:{readingJob:reading=>reading>=2?INCIDENT_JOB_WITHOUT_DEADLINE:INCIDENT_JOB});
+    const root=INCIDENT_EXPECTED.rootTripUuid,lastUuid=incidentTripUuid(2),reads=journalReads(storage);
+    const rows=await reads.list();
+    expect(rows.map(row=>row.tripUuid).sort()).toEqual([root,lastUuid].sort());
+    expect(rows.find(row=>row.tripUuid===lastUuid)).toMatchObject({outcome:'delivered'});
+    for(const row of rows)expect(row).not.toHaveProperty('membership');
+    expect((await reads.detail(lastUuid)).trip).not.toHaveProperty('membership');
+    ok(storage.close());
+    readOnly(ws.database,db=>expect(db.prepare(`SELECT d.state,d.reason,d.raw_closed_event_seq IS NOT NULL AS closed FROM logical_membership_decisions d JOIN trips t ON t.id=d.trip_ref WHERE t.trip_uuid=?`)
+      .get(lastUuid)).toEqual({state:'pending',reason:'job-evidence-incomplete',closed:1}));
+  });
   it('M12 replays the resolve and the delivery without a second continuation or delivery',async()=>{
     const {storage,last,input}=await delayedIncident(),delivery=last.close!;
     expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});

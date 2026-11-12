@@ -50,10 +50,13 @@ describe('compact trip page (ET-077)', () => {
     expect(html).toContain('<small>from samples, refuels excluded</small><small>partial: truck changed</small></div>');
     expect(kpis({...DELIVERED, trip: {...DELIVERED.trip, accounting}}, 'ru')).toContain('<small>одометр 0.0 км · частично</small><small>по заказу 152.0 км</small>');
   });
-  it.each([['en', 'Profile check pending'], ['ru', 'Ожидает проверки профиля']] as const)('shows the pending profile check chip only when the trip carries it in %s', (language, chip) => {
+  it.each([['en', 'Profile check pending', 'This recording may still join an earlier trip of the same job if the profile is confirmed in this game session; otherwise it stays separate.'],
+    ['ru', 'Ожидает проверки профиля', 'Эта запись может ещё присоединиться к более раннему рейсу с тем же заказом, если профиль подтвердится в этом игровом сеансе; иначе она останется отдельной.']] as const)(
+    'shows the pending profile check chip and its keyboard-reachable hint only when the trip carries it in %s', (language, chip, hint) => {
     const heading = (detail: JournalTripDetail) => renderToStaticMarkup(React.createElement(TripHeading, {game: 'ets2', outcome: detail.trip.outcome, isHardMode: false, cargo: 'Synthetic Cargo',
       text: journalDetailText(detail, {language}), side: journalTripSideText(detail, {language}), language}));
     expect(heading({...DELIVERED, trip: {...DELIVERED.trip, membership: 'pending'}})).toMatch(new RegExp(`data-testid="journal-detail-membership"[^>]*><svg.*?<span>${chip}</span>`));
+    expect(heading({...DELIVERED, trip: {...DELIVERED.trip, membership: 'pending'}})).toMatch(new RegExp(`data-testid="journal-detail-membership-hint"[^>]*>${hint}<`));
     expect(heading(DELIVERED)).not.toContain('journal-detail-membership');
   });
 

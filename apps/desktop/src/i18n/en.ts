@@ -792,7 +792,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'j.qty.bridged': 'bridged across missing readings',
   'j.qty.restored': 'restored after a save load',
   'j.membershipPending': 'Profile check pending',
-  'j.membershipPendingHint': 'This recording can still join an earlier trip of the same job when the profile is confirmed in this game session; otherwise it stays separate.',
+  'j.membershipPendingHint': 'This recording may still join an earlier trip of the same job if the profile is confirmed in this game session; otherwise it stays separate.',
   'tr.tab.summary': 'Summary',
   'tr.tab.timeline': 'Timeline',
   'tr.tab.completeness': 'Completeness',
