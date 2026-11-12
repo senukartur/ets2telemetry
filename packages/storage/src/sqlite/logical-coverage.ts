@@ -181,8 +181,10 @@ export function pausedReconnect(db: Database.Database, row: Row, requireStarted 
   if (details.filter(({kind, detail}) => kind === 'not-connected' && detail.cause === 'late-attach').length !== 1
     || details.filter(({kind, detail}) => kind === 'discontinuity' && detail.cause === 'discontinuity' && detail.decision === 'not-merged'
       && detail.continuationOf === previous.trip_uuid).length !== 1) return null;
-  const pause = get(db, `SELECT event_seq,type FROM events WHERE plugin_session_id=? AND event_seq<? AND type IN ('simulation.started','simulation.paused')
-    ORDER BY event_seq DESC LIMIT 1`, row.plugin_session_ref, n);
+  // The lookup reads at most the 65 events before N; an older pause is rejected by the window bound below anyway.
+  const floor = BigInt(n) > 65n ? (BigInt(n) - 65n).toString().padStart(20, '0') : '00000000000000000000';
+  const pause = get(db, `SELECT event_seq,type FROM events WHERE plugin_session_id=? AND event_seq<? AND event_seq>=? AND type IN ('simulation.started','simulation.paused')
+    ORDER BY event_seq DESC LIMIT 1`, row.plugin_session_ref, n, floor);
   if (pause?.type !== 'simulation.paused' || typeof pause.event_seq !== 'string') return null;
   const p = pause.event_seq, between = BigInt(n) - BigInt(p) - 1n;
   const window = db.prepare('SELECT type FROM events WHERE plugin_session_id=? AND event_seq>? AND event_seq<? ORDER BY event_seq LIMIT 65').all(row.plugin_session_ref, p, n) as Row[];
