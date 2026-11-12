@@ -45,9 +45,21 @@ export function resolveBinding(db:Database.Database,root:unknown):Row|undefined 
     if(bound)db.prepare("UPDATE upload_source_bindings SET held=1,hold_reason='reconciliation-required' WHERE root_ref=?").run(root);
     return undefined;
   }
-  if(bound){identityState(db,root,'resolved');return bound;}
+  // A root whose group holds another member with its own source binding would publish that member's evidence twice.
+  const memberBound=get(db,`SELECT 1 FROM logical_memberships m JOIN upload_source_bindings b ON b.root_ref=m.trip_ref
+    WHERE m.logical_ref=? AND m.trip_ref<>? LIMIT 1`,root,root)!==undefined;
+  if(bound){
+    identityState(db,root,'resolved');
+    if(!memberBound||bound.held===1n)return bound;
+    db.prepare("UPDATE upload_source_bindings SET held=1,hold_reason='reconciliation-required' WHERE root_ref=?").run(root);
+    return required(get(db,'SELECT * FROM upload_source_bindings WHERE root_ref=?',root));
+  }
   const entry=candidate(db,root);if(!entry)return undefined;
-  const owner=reservation(db,entry);
+  let owner=reservation(db,entry);
+  if(memberBound&&owner.hold_reason===null){
+    db.prepare("UPDATE upload_reservations SET hold_reason='reconciliation-required' WHERE candidate_ref=?").run(entry.ordinal);
+    owner={...owner,hold_reason:'reconciliation-required'};
+  }
   // The bound check above returned already; a schema-9 pending decision holds the root like an unproven open trip.
   const pending=identityPending(t,decisionState(db,root),false);
   const state=owner.hold_reason!==null?'held':owner.registration_ref===null?'unbound':pending?'pending':'resolved';
