@@ -1236,11 +1236,11 @@ describe('ET-112d profile verification status of the monitor (REG-003, REG-008, 
   const failing = () => bound(evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')));
   const waiting = {state: 'waiting', reason: 'no-game', checking: false, lastCheck: null};
   /** A monitor whose reads wait for the case; `health` counts the publications pushed outside an observation change. */
-  function harness() {
+  function harness(guard?: ConstructorParameters<typeof HardModeMonitor>[7]) {
     vi.useFakeTimers(); vi.setSystemTime(10_000);
     const reads: Pending[] = [], published: HardModeObservation[] = [], clock = {now: 0n}, health = {count: 0};
     const m = ownedMonitor(() => {const read = pending(); reads.push(read); return read.promise;}, value => published.push(value), () => clock.now,
-      undefined, undefined, () => {health.count++;});
+      undefined, undefined, () => {health.count++;}, undefined, guard);
     const attach = (session = source.pluginSessionId) => m.select({source: {...source, pluginSessionId: session}, monotonicNs: '100', clockId: 'clock'});
     const bind = () => m.select({source, monotonicNs: '100', clockId: 'clock', boundary: {clockId: 'clock', probeSentClientNs: (clock.now + 1n).toString(), receivedSourceNs: '200'}});
     return {m, reads, published, clock, health, attach, bind};
@@ -1344,6 +1344,21 @@ describe('ET-112d profile verification status of the monitor (REG-003, REG-008, 
     expect(hardModeVerificationResult(true, withdrawn, undefined, false)).toEqual({state: 'unverified', reason: 'timeout'});
     expect(hardModeVerificationResult(true, withdrawn, undefined, true)).toEqual({state: 'waiting', reason: 'checking'});
     expect(hardModeVerificationResult(true, withdrawn, LOG, true)).toEqual({state: 'unverified', reason: 'game-log'});
+  });
+  it.each(['resolved', 'unchanged', 'ineligible'] as const)('V12 answers an invalidation once its read settles (%s): a later withdrawn proof did not finish in time', async settled => {
+    const guard = {eligible: true};
+    const {m, reads, clock, attach} = harness({eligible: () => guard.eligible, select: () => undefined});
+    attach(); reads[0].resolve(failing()); await m.refresh();
+    m.invalidate('profile-verification'); expect(m.status().verification).toMatchObject({state: 'waiting', reason: 'checking'});
+    clock.now = 5_000_000_000n; const scheduled = m.refresh();
+    // The scheduled read settles: with a result, as an unchanged guard without a failure code, or after the guard retired.
+    if (settled === 'resolved') reads[1].resolve(failing());
+    else if (settled === 'unchanged') reads[1].reject(new UnchangedVerificationError(new Error('unchanged'), 'PROFILE_DEADLINE'));
+    else {guard.eligible = false; reads[1].resolve(failing());}
+    await scheduled; expect(reads).toHaveLength(2);
+    // An unbound profile-verification observation without a failure code, a read in flight or a new invalidation.
+    guard.eligible = false;
+    expect(m.status()).toMatchObject({assessment: {state: 'unknown'}, verification: {state: 'unverified', reason: 'timeout', checking: false, lastCheck: null}});
   });
   it('V10 ends a manual check without a result when the source changes during it', async () => {
     const {m, reads, attach} = harness(); attach(); reads[0].resolve(failing()); await m.refresh();
