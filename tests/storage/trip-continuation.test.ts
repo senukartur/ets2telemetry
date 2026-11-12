@@ -1958,6 +1958,8 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(sum.every(Number.isSafeInteger)).toBe(true);expect(counts(detail.trip.hardModeDetails)).toEqual(sum);
     // ET-112d: the retroactive join revises the root to the same qualified 178/0/74 as the live join.
     expectIncidentHardMode(storage);
+    // The recorder rereads the trip by the resolved segment's raw UUID; the journal answers it with the group's sums.
+    expect(validateJournalTripDetail(ok(storage.journalTrip(lastUuid))).trip).toMatchObject({isHardMode:true,hardModeDetails:{passingChecks:178,failingChecks:0,unknownChecks:74}});
   });
   it('M12 replays the resolve and the delivery without a second continuation or delivery',async()=>{
     const {storage,last,input}=await delayedIncident(),delivery=last.close!;
