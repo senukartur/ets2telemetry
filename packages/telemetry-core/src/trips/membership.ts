@@ -98,3 +98,58 @@ export function decideRetroactive<T>(facts: RetroactiveFacts, evidence: {recorde
   if (decision.state === 'joined' && latest(decision.target) >= segment) return {state: 'separate', reason: 'out-of-order'};
   return decision.state === 'root' ? {...decision, interrupt: false} : decision;
 }
+
+/** What storage knows about a closed, proof-less singleton segment S that the history repair may join (ET-112g). */
+export interface RepairJoinFacts {
+  /** S's schema 9 membership decision, or null when S has none (closed legacy rows). */
+  decision: {state: 'pending' | 'joined' | 'root' | 'separate'; reason: string} | null;
+  /** The owner attested S by its full UUID; it stands in for S's missing profile proof and for nothing else. */
+  attested: boolean;
+  /** S's own logical root already has an upload source binding. */
+  ownRootBound: boolean;
+}
+/** What storage knows about one candidate target T of a repair join. */
+export interface RepairTargetFacts {
+  /** T's latest raw member. */
+  latest: bigint;
+  /** T's latest raw member is still open. */
+  latestOpen: boolean;
+  /** Another raw trip of the same game lies between T's latest member and S. */
+  intervening: boolean;
+}
+export type RepairIneligibleReason = 'decided' | 'out-of-order' | 'target-open' | 'intervening-trip' | Exclude<MembershipDecision<unknown>['reason'], 'matched'>;
+/** The result of decideRepairJoin. Only `joined` becomes a repair action. */
+export type RepairJoinDecision<T> =
+  /** Every rule holds and the owner attested S. */
+  | {state: 'joined'; target: T; fingerprint: string}
+  /** Every rule holds, but S is not attested: a candidate that needs the owner's evidence. */
+  | {state: 'needs-attestation'; target: T; fingerprint: string}
+  /** S was published separately: the join is listed and never applied (F-D7). */
+  | {state: 'reconciliation-required'; target: T; fingerprint: string}
+  /** S's decision is still pending; a later proof of its own session may still decide it. */
+  | {state: 'wait'; reason: 'pending'}
+  | {state: 'not-eligible'; reason: RepairIneligibleReason};
+
+/**
+ * The owner-attested repair join of a closed, proof-less singleton segment S (ET-112g). Only S without a decision row or
+ * with `separate/process-ended` is eligible; a pending S waits. The live rules decide with the recorded job as the current
+ * reading and the attestation in place of the profile proof, over the live candidates of any profile scope. The one
+ * compatible target must precede S (`latest(target) < segment`), have its latest member closed and have no other raw trip
+ * of the game between its latest member and S. A published S (its root is bound, or its decision is `separate/published`)
+ * passes the decision veto so that such a join is listed: it is reconciliation-required, attested or not, and never joined.
+ */
+export function decideRepairJoin<T>(facts: RepairJoinFacts, evidence: {recordedJob: JobConfiguration; consistent: boolean; candidates: readonly MembershipCandidate<T>[]},
+  target: (target: T) => RepairTargetFacts, segment: bigint): RepairJoinDecision<T> {
+  if (facts.decision?.state === 'pending') return {state: 'wait', reason: 'pending'};
+  const published = facts.ownRootBound || (facts.decision?.state === 'separate' && facts.decision.reason === 'published');
+  if (facts.decision && !published && !(facts.decision.state === 'separate' && facts.decision.reason === 'process-ended')) return {state: 'not-eligible', reason: 'decided'};
+  const decision = decideMembership({profileVerified: true, recordedJob: evidence.recordedJob, currentJob: evidence.recordedJob, consistent: evidence.consistent, candidates: evidence.candidates});
+  if (decision.state !== 'joined') return {state: 'not-eligible', reason: decision.reason};
+  const t = target(decision.target);
+  if (t.latest >= segment) return {state: 'not-eligible', reason: 'out-of-order'};
+  if (t.latestOpen) return {state: 'not-eligible', reason: 'target-open'};
+  if (t.intervening) return {state: 'not-eligible', reason: 'intervening-trip'};
+  const join = {target: decision.target, fingerprint: decision.fingerprint};
+  if (published) return {state: 'reconciliation-required', ...join};
+  return facts.attested ? {state: 'joined', ...join} : {state: 'needs-attestation', ...join};
+}

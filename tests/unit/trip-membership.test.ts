@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {compatibleContinuation, continuationFingerprint, continuationIdentityFingerprint} from '../../packages/telemetry-core/src/trips/continuation';
-import {decideMembership, decideRetroactive, retroactiveGate, type MembershipCandidate, type MembershipDecision, type MembershipEvidence, type RetroactiveDecision, type RetroactiveFacts,
-  type RetroactiveSeparate} from '../../packages/telemetry-core/src/trips/membership';
+import {decideMembership, decideRepairJoin, decideRetroactive, retroactiveGate, type MembershipCandidate, type MembershipDecision, type MembershipEvidence, type RepairJoinDecision,
+  type RepairJoinFacts, type RepairTargetFacts, type RetroactiveDecision, type RetroactiveFacts, type RetroactiveSeparate} from '../../packages/telemetry-core/src/trips/membership';
 import {INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB} from '../shared/trip-continuation-incident';
 
 // Expected decisions are written by hand from the ET-112 agreed continuation rules (docs/trips.md).
@@ -90,4 +90,56 @@ describe('REG-005/REG-008 retroactive resolution of a closed pending segment', (
     expect(decideRetroactive({...clear, ownRootBound: true}, {recordedJob: INCIDENT_JOB, consistent: true, candidates: [match('A')]}, () => { throw new Error('not read'); }, 7n))
       .toEqual(separate('published'));
   });
+});
+
+describe('REG-005/REG-008 owner-attested repair join of a closed proof-less segment', () => {
+  const attested: RepairJoinFacts = {decision: null, attested: true, ownRootBound: false};
+  const target = (values: Record<string, Partial<RepairTargetFacts>>) => (ref: string): RepairTargetFacts => ({latest: 5n, latestOpen: false, intervening: false, ...values[ref]});
+  const decide = (facts: Partial<RepairJoinFacts> = {}, evidence: Partial<{recordedJob: typeof INCIDENT_JOB; consistent: boolean; candidates: MembershipCandidate<string>[]}> = {},
+    targets: Record<string, Partial<RepairTargetFacts>> = {}) =>
+    decideRepairJoin({...attested, ...facts}, {recordedJob: INCIDENT_JOB, consistent: true, candidates: [match('A')], ...evidence}, target(targets), 7n);
+  const notEligible = (reason: Extract<RepairJoinDecision<string>, {state: 'not-eligible'}>['reason']): RepairJoinDecision<string> => ({state: 'not-eligible', reason});
+  it('joins the one compatible candidate of an attested segment without a decision row', () => {
+    expect(decide()).toEqual({state: 'joined', target: 'A', fingerprint: F});
+  });
+  it('joins an attested separate/process-ended segment', () => {
+    expect(decide({decision: {state: 'separate', reason: 'process-ended'}})).toEqual({state: 'joined', target: 'A', fingerprint: F});
+  });
+  it('lists an unattested segment as a candidate that needs the owner evidence', () => {
+    expect(decide({attested: false})).toEqual({state: 'needs-attestation', target: 'A', fingerprint: F});
+  });
+  it('lists a bound segment as reconciliation-required, attested or not, and never joins it', () => {
+    expect(decide({ownRootBound: true})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
+    expect(decide({ownRootBound: true, attested: false})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
+  });
+  it('lists a separate/published segment and a bound segment with another decision as reconciliation-required, attested or not', () => {
+    for (const attested of [true, false]) {
+      expect(decide({attested, decision: {state: 'separate', reason: 'published'}})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
+      expect(decide({attested, ownRootBound: true, decision: {state: 'root', reason: 'no-candidate'}})).toEqual({state: 'reconciliation-required', target: 'A', fingerprint: F});
+    }
+  });
+  it('lets a pending segment wait before any candidate is read', () => {
+    expect(decideRepairJoin({...attested, decision: {state: 'pending', reason: 'profile-unverified'}}, {recordedJob: INCIDENT_JOB, consistent: true, candidates: [match('A')]},
+      () => { throw new Error('not read'); }, 7n)).toEqual({state: 'wait', reason: 'pending'});
+  });
+  it.each([
+    ['another separate reason', {decision: {state: 'separate', reason: 'profile-boundary'}}, {}, {}, notEligible('decided')],
+    ['a separate/published segment without a candidate', {decision: {state: 'separate', reason: 'published'}}, {candidates: []}, {}, notEligible('no-candidate')],
+    ['a root decision', {decision: {state: 'root', reason: 'no-candidate'}}, {}, {}, notEligible('decided')],
+    ['two candidates', {}, {candidates: [match('A'), match('B')]}, {}, notEligible('ambiguous-candidates')],
+    ['no candidate', {}, {candidates: []}, {}, notEligible('no-candidate')],
+    ['an incompatible candidate', {}, {candidates: [match('A', false)]}, {}, notEligible('no-candidate')],
+    ['inconsistent learned offer fields', {}, {consistent: false}, {}, notEligible('job-evidence-conflict')],
+    ['a recorded job without a deadline', {}, {recordedJob: INCIDENT_JOB_WITHOUT_DEADLINE}, {}, notEligible('deadline-unavailable')],
+    ['a recorded job with the u32 maximum deadline', {}, {recordedJob: INCIDENT_JOB_U32_MAX_DEADLINE}, {}, notEligible('deadline-unavailable')],
+    ['a recorded job without cargo', {}, {recordedJob: missingCargo}, {}, notEligible('recorded-job-incomplete')],
+    ['a target that continued at the segment', {}, {}, {A: {latest: 7n}}, notEligible('out-of-order')],
+    ['a target that continued after the segment', {}, {}, {A: {latest: 9n}}, notEligible('out-of-order')],
+    ['a target whose latest member is open', {}, {}, {A: {latestOpen: true}}, notEligible('target-open')],
+    ['another trip between the target and the segment', {}, {}, {A: {intervening: true}}, notEligible('intervening-trip')],
+    ['an out-of-order bound segment', {ownRootBound: true}, {}, {A: {latest: 9n}}, notEligible('out-of-order')]
+  ] as [string, Partial<RepairJoinFacts>, Parameters<typeof decide>[1], Record<string, Partial<RepairTargetFacts>>, RepairJoinDecision<string>][])(
+    'does not join %s', (_name, facts, evidence, targets, expected) => {
+      expect(decide(facts, evidence, targets)).toEqual(expected);
+    });
 });
