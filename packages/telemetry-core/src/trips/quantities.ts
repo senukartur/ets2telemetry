@@ -2,7 +2,9 @@
 // ledger anchor and the next stored sample, plus the retained run path for a save rollback. Storage records the result
 // in logical_progress (schema 10: logical_trips.accounting_engine, logical_progress.quantity_flags); reconstruction folds
 // stored samples through the same function with memoryPath(). A break never zeroes a quantity: the subtotal carries and
-// a flag bit makes it partial. Only an unproven rollback or truck order makes a quantity unavailable; see docs/storage.md, Schema version 10.
+// a flag bit makes it partial. Only an unproven rollback or truck order makes a quantity unavailable. The rules
+// are stated in this file; the owner decisions E1-E7 they cite are in DECISION-LOG.md (ET-112), and docs/storage.md,
+// Schema version 10, describes the stored columns.
 import {FUEL_NOISE_LITERS} from '../derived';
 import {READING_HOLE_SECONDS} from './accounting';
 import {gameDistanceStep} from './game-distance';
@@ -70,7 +72,7 @@ export interface QuantityAdvance<R extends QuantityRun = QuantityRun> {
 
 const MINUTES = /^(0|[1-9][0-9]{0,19})$/;
 const finite = (value: number | null): value is number => value !== null && Number.isFinite(value);
-/** Rule 1 input: a complete anchor has a truck, odometer, fuel, speed, game minutes and position (D16). */
+/** The hold rule's input: a complete anchor has a truck, odometer, fuel, speed, game minutes and position. */
 export function completeAnchor(anchor: QuantityAnchor): boolean {
   const p = anchor.position;
   return !!anchor.truck && finite(anchor.odometerM) && anchor.odometerM >= 0 && finite(anchor.fuelL) && anchor.fuelL >= 0 && finite(anchor.speedMps)
@@ -90,7 +92,7 @@ export function advanceQuantities<R extends QuantityRun>(previous: QuantityPoint
     run = 'new'; savePoint = false;
     const retained = path.runs(scope).slice(0, QUANTITY_RUN_LIMIT).find(r => r.end.anchor.truck === anchor.truck && r.startOdometerM !== null
       && r.startOdometerM <= x && x <= r.end.anchor.odometerM! && r.end.distanceM !== null);
-    // E7: no retained run holds the loaded point, so neither quantity can be supported for the rest of the trip.
+    // ET-112 E7: no retained run holds the loaded point, so neither quantity can be supported for the rest of the trip.
     if (!retained) { distance = null; fuel = null; flags |= UNPROVEN_FLAGS; unproven = true; return; }
     cut = {run: retained, odometerM: x};
     const points = path.points(retained, x).slice(0, QUANTITY_POINT_LIMIT);
@@ -110,7 +112,7 @@ export function advanceQuantities<R extends QuantityRun>(previous: QuantityPoint
   };
   if (step.kind !== 'running') {
     if (anchor.truck !== e.truck) {
-      // E3: a different truck is a member gap only when the game clock moved on; otherwise the order is unknown.
+      // ET-112 E3: a different truck is a member gap only when the game clock moved on; otherwise the order is unknown.
       run = 'new'; savePoint = false;
       if (BigInt(anchor.gameMinutes!) > BigInt(e.gameMinutes!)) flags |= F.distanceTruck | F.fuelTruck;
       else { distance = null; fuel = null; flags |= UNPROVEN_FLAGS; unproven = true; }
@@ -125,7 +127,7 @@ export function advanceQuantities<R extends QuantityRun>(previous: QuantityPoint
     if (x !== e.odometerM) { run = 'new'; flags |= F.distanceTransfer; }
     if (Math.abs(fuelDelta) <= FUEL_NOISE_LITERS) consume(); else flags |= F.fuelTransfer;
   } else if (step.seconds >= READING_HOLE_SECONDS) {
-    // E4 and REG-008: distance bridges a hole only inside one recorder connection.
+    // ET-112 E4 and REG-008: distance bridges a hole only inside one recorder connection.
     const moved = gameDistanceStep(e, anchor, step.seconds);
     if (step.linked && moved.kind === 'continuous') { credit(moved.meters); flags |= F.distanceBridged; } else { run = 'new'; flags |= F.distanceHole; }
     flags |= F.fuelHole;
@@ -150,7 +152,7 @@ export function composeOffset(base: QuantityPoint, local: QuantityPoint): Quanti
 }
 
 export type QuantityStatus = 'complete' | 'partial' | 'unavailable';
-/** D8: from the value and the flags only; quality bits never make a quantity partial. */
+/** From the value and the flags only: null is unavailable, a break bit is partial, and quality bits never make a quantity partial. */
 export function quantityStatus(value: number | null, flags: number, quantity: 'distance' | 'fuel'): QuantityStatus {
   if (value === null) return 'unavailable';
   return flags & (quantity === 'distance' ? DISTANCE_BREAK_FLAGS : FUEL_BREAK_FLAGS) ? 'partial' : 'complete';

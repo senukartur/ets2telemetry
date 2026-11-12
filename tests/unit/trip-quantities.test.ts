@@ -47,7 +47,7 @@ describe('REG-008/009 engine 1 distance and fuel corpus', () => {
     const values = Object.values(F);
     expect(values.sort((a, b) => a - b)).toEqual(Array.from({length: 16}, (_, bit) => 2 ** bit));
   });
-  it('persists the bit layout of the plan by name', () => {
+  it('persists the frozen engine 1 bit layout by name', () => {
     expect(F).toStrictEqual({distanceTruck: 0x0001, distanceJump: 0x0002, distanceTransfer: 0x0004, distanceHole: 0x0008, distanceGap: 0x0010, distanceUnproven: 0x0020,
       distanceBridged: 0x0040, distanceRestored: 0x0080, fuelTruck: 0x0100, fuelHole: 0x0200, fuelTransfer: 0x0400, fuelBoundary: 0x0800, fuelUnproven: 0x1000,
       fuelRefuelExcluded: 0x2000, base: 0x4000, linked: 0x8000});
@@ -151,7 +151,7 @@ describe('REG-008 engine 1 rules', () => {
     expect(advances[4].savePoint).toBe(false);
     expectQuantities(point, {distanceM: 60, distance: 'complete', fuelUsedL: 0.03, fuel: 'partial', flags: ['fuelBoundary'], cut: false});
   });
-  it('D5: an in-member load searches only its own member, a member junction the whole trip', () => {
+  it('an in-member load searches only its own member; a member junction searches the whole trip', () => {
     const driven = [s(0), s(1), s(2), s(3), ...[0, 1, 2].map(k => s(k, {member: 'B', odometerM: 1100 + 20 * k, fuelL: 399.96 - 0.01 * k, x: 100 + 20 * k, linked: k > 0}))];
     const inMember = fold([...driven, s(3, {member: 'B', odometerM: 1040, fuelL: 399.98, x: 40, gameClock: CLOCK_B, linked: false})]);
     expect(inMember.advances.at(-1)!.unproven).toBe(true);
