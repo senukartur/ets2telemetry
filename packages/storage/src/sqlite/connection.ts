@@ -96,9 +96,10 @@ function inspect(file: string, purpose: Purpose, supported: number): Inspection 
     if (applicationId !== 0 && applicationId !== APPLICATION_ID) fail('DATABASE_UNRECOGNIZED');
     if (applicationId === APPLICATION_ID && userVersion > supported) fail('SCHEMA_NEWER');
   }
-  let db: Database.Database | undefined;
+  let reader: ReadOnlyDatabase | undefined;
   try {
-    db = new Database(file, {readonly: true, fileMustExist: true, timeout: BUSY_TIMEOUT_MS});
+    reader = openReadOnly(file);
+    const db = reader.db;
     const applicationId = Number(db.pragma('application_id', {simple: true})), userVersion = Number(db.pragma('user_version', {simple: true}));
     const tables = Number(db.prepare("SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'").pluck().get());
     // New means an empty SQLite file: no application id, no user tables and no user version, as the locked re-check requires.
@@ -114,13 +115,28 @@ function inspect(file: string, purpose: Purpose, supported: number): Inspection 
     if (classified.sqliteCode?.startsWith('SQLITE_NOTADB') || classified.sqliteCode === 'SQLITE_ERROR') fail('DATABASE_UNRECOGNIZED', {sqliteCode: classified.sqliteCode});
     throw new StorageFailure(classified);
   } finally {
-    db?.close();
-    // Only transient files this read-only check created; the database and an existing WAL are never touched.
+    reader?.close();
+  }
+}
+
+/** A read-only connection whose close also removes the transient sidecar files its open created. */
+export interface ReadOnlyDatabase {db: Database.Database; close(): void}
+/**
+ * Opens an existing database file read-only with the writer's busy timeout, so a file held by a writer's exclusive lock
+ * fails with SQLITE_BUSY. SQLite may create a `-shm` (and an empty `-wal`) beside a WAL file; close removes only those this
+ * open created. The database and an existing WAL are never touched. The inspection and the history repair use it.
+ */
+export function openReadOnly(file: string): ReadOnlyDatabase {
+  const present = SIDECARS.filter(suffix => existsSync(file + suffix));
+  const cleanup = () => {
     for (const suffix of ['-shm', '-wal']) {
       if (present.includes(suffix)) continue;
       try { if (suffix === '-shm' || statSync(file + suffix).size === 0) rmSync(file + suffix, {force: true}); } catch { /* absent */ }
     }
-  }
+  };
+  let db: Database.Database;
+  try { db = new Database(file, {readonly: true, fileMustExist: true, timeout: BUSY_TIMEOUT_MS}); } catch (error) { cleanup(); throw error; }
+  return {db, close: () => { try { db.close(); } finally { cleanup(); } }};
 }
 
 /**

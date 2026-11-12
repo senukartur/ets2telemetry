@@ -18,10 +18,15 @@ export interface BackupHooks {
   /** Runs after the verified backup copy is renamed to .sqlite and before its manifest is renamed. */
   afterBackupRename?: (backupPath: string) => void;
 }
+/**
+ * Why a verified backup was taken: before a schema migration (`telemetry-` files, swept and pruned by the open) or before a
+ * history repair (`repair-` files, ET-112g, never swept or pruned).
+ */
+export type BackupReason = 'pre-migration' | 'pre-repair';
 /** Written last, after the verified backup file is in place; a backup without it is never trusted or deleted. */
 export interface BackupManifest {
   format: 'ets2telemetry-backup-1'; databaseUuid: string; fromVersion: number; fileName: string; fileSha256: string; size: number;
-  rowCounts: Record<string, number>; logicalDigest: string; createdUtcMs: number; appVersion: string; reason: 'pre-migration';
+  rowCounts: Record<string, number>; logicalDigest: string; createdUtcMs: number; appVersion: string; reason: BackupReason;
 }
 const FREE_SPACE_FACTOR = 1.1;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -138,17 +143,28 @@ async function copyDatabase(source: Database.Database, target: string): Promise<
  * digest, syncs and renames it, then writes the manifest last. Any failure removes the partial copy and is
  * BACKUP_FAILED; the caller then migrates nothing.
  */
-export async function backupBeforeMigration(db: Database.Database, context: {file: string; backupsDirectory: string; databaseUuid: string; fromVersion: number; now: () => number; appVersion: string; hooks?: BackupHooks}): Promise<{fileName: string; sha256: string}> {
+export async function backupBeforeMigration(db: Database.Database, context: BackupContext): Promise<{fileName: string; sha256: string}> {
+  return verifiedBackup(db, context, 'pre-migration');
+}
+export interface BackupContext {file: string; backupsDirectory: string; databaseUuid: string; fromVersion: number; now: () => number; appVersion: string; hooks?: BackupHooks}
+
+/**
+ * Takes a verified backup of `db` for `reason`, as backupBeforeMigration describes: `telemetry-<uuid8>-v<n>-<timestamp>.sqlite`
+ * before a migration, which reuses an intact backup of the same content, or `repair-<uuid8>-v<n>-<timestamp>.sqlite` before
+ * a history repair, which is always a new file.
+ */
+export async function verifiedBackup(db: Database.Database, context: BackupContext, reason: BackupReason): Promise<{fileName: string; sha256: string}> {
   const {backupsDirectory: directory} = context;
   const createdUtcMs = context.now();
-  const fileName = `telemetry-${context.databaseUuid.slice(0, 8)}-v${context.fromVersion}-${new Date(createdUtcMs).toISOString().replace(/[-:.]/g, '')}.sqlite`;
+  const prefix = reason === 'pre-migration' ? 'telemetry' : 'repair';
+  const fileName = `${prefix}-${context.databaseUuid.slice(0, 8)}-v${context.fromVersion}-${new Date(createdUtcMs).toISOString().replace(/[-:.]/g, '')}.sqlite`;
   const finalPath = path.join(directory, fileName), partial = `${finalPath}.partial`, manifestPath = finalPath.replace(/\.sqlite$/, '.json');
   try { mkdirSync(directory, {recursive: true}); if (!statSync(directory).isDirectory()) throw new Error('not a directory'); } catch (error) {
     fail('BACKUP_FAILED', {cause: classifyError(error, 'DATA_PATH_INVALID').code === 'PERMISSION_DENIED' ? 'PERMISSION_DENIED' : 'DATA_PATH_INVALID'});
   }
   const source = contentDigest(db);
   // A migration that fails the same way on every open must not leave a new full-size copy each time.
-  const existing = reusableBackup(directory, context.databaseUuid, context.fromVersion, source);
+  const existing = reason === 'pre-migration' ? reusableBackup(directory, context.databaseUuid, context.fromVersion, source) : undefined;
   if (existing) return existing;
   const needed = (sizeOf(context.file) + sizeOf(`${context.file}-wal`)) * FREE_SPACE_FACTOR;
   let free: number;
@@ -162,7 +178,7 @@ export async function backupBeforeMigration(db: Database.Database, context: {fil
     fsyncFile(partial);
     const sha256 = fileSha256(partial), size = statSync(partial).size;
     const manifest: BackupManifest = {format: 'ets2telemetry-backup-1', databaseUuid: context.databaseUuid, fromVersion: context.fromVersion, fileName, fileSha256: sha256, size,
-      rowCounts: source.rowCounts, logicalDigest: source.logicalDigest, createdUtcMs, appVersion: context.appVersion, reason: 'pre-migration'};
+      rowCounts: source.rowCounts, logicalDigest: source.logicalDigest, createdUtcMs, appVersion: context.appVersion, reason};
     writeFileSync(`${manifestPath}.partial`, JSON.stringify(manifest, null, 2) + '\n', {flag: 'wx'});
     fsyncFile(`${manifestPath}.partial`);
     renameSync(partial, finalPath);
@@ -191,11 +207,14 @@ function reusableBackup(directory: string, databaseUuid: string, fromVersion: nu
   return undefined;
 }
 
-/** Parses a manifest strictly; anything else is not a backup of this application. */
-export function readManifest(manifestPath: string): BackupManifest | undefined {
+/**
+ * Parses a manifest strictly; anything else is not a backup of this application. Only the `accepted` reasons are backups
+ * here: the open's sweep, pruning and restore keep the default, so a pre-repair backup is never swept, pruned or reused.
+ */
+export function readManifest(manifestPath: string, accepted: readonly BackupReason[] = ['pre-migration']): BackupManifest | undefined {
   try {
     const m = JSON.parse(readFileSync(manifestPath, 'utf8')) as Partial<BackupManifest>;
-    const valid = m.format === 'ets2telemetry-backup-1' && m.reason === 'pre-migration' && typeof m.databaseUuid === 'string' && UUID.test(m.databaseUuid) &&
+    const valid = m.format === 'ets2telemetry-backup-1' && accepted.includes(m.reason as BackupReason) && typeof m.databaseUuid === 'string' && UUID.test(m.databaseUuid) &&
       typeof m.fileName === 'string' && m.fileName === `${path.basename(manifestPath, '.json')}.sqlite` && /^[0-9a-f]{64}$/.test(String(m.fileSha256)) &&
       Number.isSafeInteger(m.size) && Number.isSafeInteger(m.fromVersion) && Number.isSafeInteger(m.createdUtcMs) && /^[0-9a-f]{64}$/.test(String(m.logicalDigest)) &&
       typeof m.rowCounts === 'object' && m.rowCounts !== null && typeof m.appVersion === 'string';
@@ -258,4 +277,35 @@ export async function restoreCopy(manifestPath: string, target: string, purpose:
     removeQuietly(partial, `${partial}-journal`, `${partial}-wal`, `${partial}-shm`);
     fail('BACKUP_FAILED', {cause: classifyError(error, 'DATABASE_CORRUPT').code});
   } finally { source?.close(); }
+}
+
+/** What copyVerified copied: the source's identity and the content the copy was verified against. */
+export interface VerifiedCopy {databaseUuid: string; purpose: Purpose; schemaVersion: number; rowCounts: Record<string, number>; logicalDigest: string; fileSha256: string; size: number}
+/**
+ * ET-112g history repair: copies the open read-only `source` connection of `sourceFile` into the new file `target`. A
+ * backup manifest beside the source (`<name>.json`, pre-migration or pre-repair) is checked first: the source must have its
+ * size and SHA-256. The copy goes through the backup API, so committed WAL content is included, is converted to
+ * rollback-journal mode, verified against the source's digest, synced and renamed into place. The target and its
+ * sidecar or partial files must not exist; any failure removes the partial copy and is BACKUP_FAILED.
+ */
+export async function copyVerified(source: Database.Database, sourceFile: string, target: string): Promise<VerifiedCopy> {
+  if (!path.isAbsolute(sourceFile) || !path.isAbsolute(target) || path.resolve(sourceFile).toLowerCase() === path.resolve(target).toLowerCase()) fail('DATA_PATH_INVALID');
+  if (['', '-wal', '-shm', '-journal', '.partial'].some(suffix => existsSync(target + suffix))) fail('DATA_PATH_INVALID');
+  const manifestPath = sourceFile.replace(/\.sqlite$/i, '.json'), manifest = manifestPath !== sourceFile ? readManifest(manifestPath, ['pre-migration', 'pre-repair']) : undefined;
+  if (manifest && (manifest.fileName !== path.basename(sourceFile) || sizeOf(sourceFile) !== manifest.size || fileSha256(sourceFile) !== manifest.fileSha256)) fail('BACKUP_FAILED', {cause: 'DATABASE_CORRUPT'});
+  const digest = contentDigest(source), info = source.prepare('SELECT database_uuid, purpose FROM database_info WHERE id = 1').get() as {database_uuid: string; purpose: Purpose} | undefined;
+  if (digest.applicationId !== APPLICATION_ID || !info) fail('DATABASE_UNRECOGNIZED');
+  try { mkdirSync(path.dirname(target), {recursive: true}); } catch { fail('DATA_PATH_INVALID'); }
+  const partial = `${target}.partial`;
+  try {
+    await copyDatabase(source, partial);
+    verifyCopy(partial, digest, info.database_uuid);
+    fsyncFile(partial);
+    const fileSha = fileSha256(partial), size = statSync(partial).size;
+    renameSync(partial, target);
+    return {databaseUuid: info.database_uuid, purpose: info.purpose, schemaVersion: digest.userVersion, rowCounts: digest.rowCounts, logicalDigest: digest.logicalDigest, fileSha256: fileSha, size};
+  } catch (error) {
+    removeQuietly(partial, `${partial}-journal`, `${partial}-wal`, `${partial}-shm`);
+    fail('BACKUP_FAILED', {cause: classifyError(error, 'DATABASE_CORRUPT').code});
+  }
 }
