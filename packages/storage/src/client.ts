@@ -9,7 +9,7 @@ import type {HardModeObservation} from '../../contracts/src/hard-mode';
 import type {Worker} from 'node:worker_threads';
 import type {
   AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, DeleteTripOptions, EventRow, JournalEventPage, JournalResult, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
-  OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList,
+  OpenSummary, ResolveMembershipsInput, ResolveMembershipsResult, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageErrorCode, StorageInfo, TripEffect, TripList,
   TripPage, TripRecord, Uint64
 } from './api';
 import {storageError} from './errors';
@@ -133,6 +133,14 @@ export class StorageClient {
     return this.#request({name: 'openAttachedTrip', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq, job: input.job, effects: input.effects,
       ...(input.profile?{profile:input.profile}:{}),...(input.sourceClockId?{sourceClockId:input.sourceClockId}:{}),...(input.monotonicNs?{monotonicNs:input.monotonicNs}:{}),
       ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{}),...(input.endpoint!==undefined?{endpoint:structuredClone(input.endpoint)}:{})} : input});
+  }
+  /**
+   * ET-112b2b: resolves closed pending membership decisions with a later proof. Exactly the five input fields are copied;
+   * a value that is not an object is forwarded as given, so the worker's request parser refuses it with INVALID_INPUT.
+   */
+  resolvePendingMemberships(input: ResolveMembershipsInput): Promise<Result<ResolveMembershipsResult>> {
+    return this.#request({name: 'resolvePendingMemberships', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq,
+      profile: input.profile, sourceClockId: input.sourceClockId, monotonicNs: input.monotonicNs} : input});
   }
   committedThrough(pluginSessionId: string): Promise<Result<Uint64>> { return this.#request({name: 'committedThrough', pluginSessionId}); }
   getSession(pluginSessionId: string): Promise<Result<SessionRecord>> { return this.#request({name: 'getSession', pluginSessionId}); }

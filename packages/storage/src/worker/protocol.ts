@@ -10,10 +10,10 @@ import {
 } from '../../../contracts/src/journal';
 import type {
   AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, DeleteTripOptions, EventRow, JournalAnswerError, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage, JournalTripsQuery,
-  OpenSummary, Purpose, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo, TripEffect, TripList, TripPage,
+  OpenSummary, Purpose, ResolveMembershipsInput, ResolveMembershipsResult, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageError, StorageInfo, TripEffect, TripList, TripPage,
   TripRecord, Uint64
 } from '../api';
-import {JOURNAL_ANSWER_INVALID} from '../api';
+import {JOURNAL_ANSWER_INVALID, MAX_RESOLVE_MEMBERSHIPS} from '../api';
 import {ERROR_MESSAGES} from '../errors';
 import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, isUploadPreparation,
   type UploadProjectionBegin, type UploadProjectionPreparation, type UploadProjectionPage, type UploadProjectionPageQuery} from '../upload-projection';
@@ -36,6 +36,8 @@ export interface StorageCommands extends UploadSyncCommands {
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */
   openAttachedTrip: {args: {input: AttachInput}; value: AttachResult};
+  /** ET-112b2b: closed pending membership decisions resolved by a later in-process proof; never acknowledged. */
+  resolvePendingMemberships: {args: {input: ResolveMembershipsInput}; value: ResolveMembershipsResult};
   observeHardMode: {args: {game: 'ets2' | 'ats'; observation: HardModeObservation; fresh: boolean}; value: undefined};
   committedThrough: {args: {pluginSessionId: string}; value: Uint64};
   getSession: {args: {pluginSessionId: string}; value: SessionRecord};
@@ -72,7 +74,7 @@ export interface StorageResponse {type: 'storage.response'; id: number; result: 
 export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: number; result: {ok: false; error: JournalAnswerError}; journalAnswerInvalid: true};
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
-  ...UPLOAD_SYNC_NAMES, 'recordTrailerBaseline', 'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'committedThrough', 'getSession', 'getEvent',
+  ...UPLOAD_SYNC_NAMES, 'recordTrailerBaseline', 'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'resolvePendingMemberships', 'committedThrough', 'getSession', 'getEvent',
   'listEvents', 'getTrip', 'deleteTrip', 'listTrips', 'listSamples', 'storageInfo', 'beginUploadProjection', 'advanceUploadProjection', 'getUploadProjectionPreparation', 'releaseUploadProjection', 'readUploadProjectionPage', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
@@ -99,6 +101,8 @@ const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field ==
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
 const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects', 'profile', 'sourceClockId', 'monotonicNs','profileChange','observeTripUuid','endpoint'];
+/** ET-112b2b: exactly these input fields of resolvePendingMemberships cross the boundary. */
+const RESOLVE_INPUT_KEYS: readonly string[] = ['monotonicNs', 'nextEventSeq', 'pluginSessionId', 'profile', 'sourceClockId'];
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 export type JournalCommandName = 'journalTrips' | 'journalTrip' | 'journalEvents' | 'journalIntervals';
 const JOURNAL_COMMAND_KEYS: Readonly<Record<JournalCommandName, readonly string[]>> = {
@@ -169,6 +173,8 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   if (name === 'appendSamples' && !optionalArgs(command.options, SAMPLE_OPTIONS_ARGS)) return {ok: false, id};
   // ET-016 PR-7: only the four listed input fields cross the boundary; the storage core checks their values.
   if (name === 'openAttachedTrip' && (!isRecord(command.input) || !Object.keys(command.input).every(key => ATTACH_INPUT_KEYS.includes(key)))) return {ok: false, id};
+  if (name === 'resolvePendingMemberships' && (Object.keys(command).sort().join(',') !== 'input,name' || !isRecord(command.input)
+    || Object.keys(command.input).sort().join(',') !== RESOLVE_INPUT_KEYS.join(','))) return {ok: false, id};
   if (isJournalCommand(name) && !journalArgs(name, command)) return {ok: false, id};
   return {ok: true, id, command: command as StorageCommand};
 }
@@ -199,6 +205,9 @@ function validValue(command: StorageCommand, value: unknown): boolean {
   case 'committedThrough': return isUint64(value);
   // ET-016 PR-7: the recorder adopts a late-attach trip only on one of these two statuses (T3).
   case 'openAttachedTrip': return isRecord(value) && Object.keys(value).length === 1 && (value.status === 'committed' || value.status === 'duplicate');
+  // ET-112b2b: the recorder re-sends while decisions remain, so the counts are checked exactly.
+  case 'resolvePendingMemberships': return isRecord(value) && Object.keys(value).sort().join(',') === 'remaining,resolved,status' && (value.status === 'none' || value.status === 'resolved')
+    && isCount(value.resolved) && value.resolved <= MAX_RESOLVE_MEMBERSHIPS && isCount(value.remaining) && (value.status === 'resolved') === (value.resolved > 0);
   case 'open': return isRecord(value) && typeof value.schemaVersion === 'number' && typeof value.created === 'boolean' && isText(value.databaseUuid) && isText(value.purpose);
   case 'upsertSession': return isRecord(value) && typeof value.created === 'boolean' && isUint64(value.committedThroughEventSeq);
   case 'recordTrailerBaseline': case 'close': case 'recordCompleteness': case 'observeHardMode': case 'deleteTrip': return value === undefined;

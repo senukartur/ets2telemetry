@@ -105,7 +105,12 @@ export type TripEffect =
   | {kind: 'trip.update'; tripUuid: string; set: {recordingCompleteness?: RecordingCompleteness; gameModeAmbiguous?: boolean;
     observedDistanceM?: Available<number>; fuelUsedL?: Available<number>; truckConfiguration?: EventReference; trailerConfigurations?: EventReference[]}}
   | {kind: 'trip.close'; tripUuid: string; outcome: Exclude<TripOutcome, 'open'>; closeReason: CloseReason; outcomeEvent?: EventReference;
-    recordingCompleteness: RecordingCompleteness; endedUtcMs: number}
+    recordingCompleteness: RecordingCompleteness; endedUtcMs: number;
+    /**
+     * The reducer's close of a trip whose verified profile scope changed at a reading: outcome 'none' and closeReason
+     * 'different-job' only. Schema 9 records the close carrier as the session's profile boundary in the same transaction.
+     */
+    profileChange?: true}
   | {kind: 'event.attribute'; tripUuid: string | null; attribution: Attribution}
   | {kind: 'completeness.add'; interval: CompletenessInterval};
 /**
@@ -165,6 +170,19 @@ export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job
  * again.
  */
 export interface AttachResult {status: 'committed' | 'duplicate'}
+
+/** The most closed pending membership decisions that one resolvePendingMemberships command resolves. */
+export const MAX_RESOLVE_MEMBERSHIPS = 8;
+/**
+ * resolvePendingMemberships (ET-112b2b, schema 9): a later admitted in-process profile proof of a plugin session, captured
+ * at `monotonicNs` in `sourceClockId`. `nextEventSeq` is the session's committed coverage + 1. Exactly these five fields.
+ */
+export interface ResolveMembershipsInput {pluginSessionId: string; nextEventSeq: Uint64; profile: ProfileObservation; sourceClockId: string; monotonicNs: Uint64}
+/**
+ * `resolved`: this many closed pending decisions became final (joined, root or separate). `none`: nothing was pending,
+ * including a replay and any database below schema 9. `remaining` counts the session's closed pending decisions left.
+ */
+export interface ResolveMembershipsResult {status: 'none' | 'resolved'; resolved: number; remaining: number}
 
 export type CommitStatus = 'committed' | 'duplicate' | 'conflict' | 'covered';
 /**

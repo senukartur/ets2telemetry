@@ -104,3 +104,60 @@ it('passes verified contractMinor when freezing upload materializations',async()
   await scheduler.stop();
 });
 
+it('REG-005/010/011 keeps one stable published result across delivered receipts, periodic recounts and a new trip (ET-110)',async()=>{
+  vi.useFakeTimers();const f=fixture(),published:import('../../packages/contracts/src/dashboard-upload').DashboardUploadStatus[]=[],trips=Array.from({length:5},()=>randomUUID());let commits=0,claims=0;
+  // Five retained trips: two delivered before activation, one more for each of three durable receipts.
+  const claim=vi.fn((input:{attemptId:string})=>claims++<3?result({status:'claimed',attemptId:input.attemptId,eventId:randomUUID(),registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}):result({status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null}));
+  const commit=vi.fn(()=>{commits++;return result({status:'delivered',eventId:randomUUID(),receiptId:randomUUID()});});
+  const sources=vi.fn((input:{phase:'sources'|'receipts';after:string|null})=>{f.calls.push('pageUploadSources');return result({phase:input.phase,after:input.after,next:null,examined:5,sources:input.phase==='sources'?trips.map((tripUuid,index)=>({tripUuid,state:index<2+commits?'delivered' as const:'queued' as const,latestRevision:1,lastReceiptUtcMs:null})):[],receipts:input.phase==='receipts'?[{eventId:randomUUID(),firstReceivedUtcMs:1000+commits}]:[]});});
+  const db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='commitUploadReceipt'?commit:key==='pageUploadSources'?sources:Reflect.get(target,key);}});
+  const scheduler=new UploadScheduler(db,f.http,origin,'test',status=>published.push(status),controlled);
+  try{
+    await scheduler.activate(configuration,token,limits);expect(published[0].progress).toMatchObject({enumeration:'calculating',distinctSources:null,deliveredSources:null});
+    // Three 5 s refresh cycles and more, after the three receipts that each restart the count.
+    await vi.advanceTimersByTimeAsync(5000);const passes=sources.mock.calls.filter(([input])=>input.phase==='sources').length;await vi.advanceTimersByTimeAsync(20000);
+    expect(commit).toHaveBeenCalledTimes(3);expect(sources.mock.calls.filter(([input])=>input.phase==='sources').length).toBeGreaterThanOrEqual(passes+3);
+    const first=published.findIndex(status=>status.progress.enumeration==='complete');expect(first).toBeGreaterThan(0);
+    for(const status of published.slice(0,first))expect(status.progress).toMatchObject({distinctSources:null,deliveredSources:null});
+    const counted=published.length,after=published.slice(first,counted);expect(after.length).toBeGreaterThan(10);
+    for(const status of after)expect(status.progress).toMatchObject({enumeration:'complete',distinctSources:5});
+    const delivered=after.map(status=>status.progress.deliveredSources!);for(let n=1;n<delivered.length;n++)expect(delivered[n]).toBeGreaterThanOrEqual(delivered[n-1]);
+    expect(scheduler.status.progress).toMatchObject({enumeration:'complete',distinctSources:5,deliveredSources:5,lastDurableUploadUtcMs:1003});
+    // A sixth trip recorded after the complete count: the next completed recount replaces 5 with 6 in one step, never through null or 'changing'.
+    trips.push(randomUUID());await vi.advanceTimersByTimeAsync(10000);
+    const recounted=published.slice(counted),grown=recounted.findIndex(status=>status.progress.distinctSources===6);expect(grown).toBeGreaterThanOrEqual(0);
+    for(const status of recounted)expect(status.progress).toMatchObject({enumeration:'complete',distinctSources:expect.any(Number),deliveredSources:5});
+    for(const status of recounted.slice(0,grown))expect(status.progress.distinctSources).toBe(5);
+    for(const status of recounted.slice(grown))expect(status.progress.distinctSources).toBe(6);
+    expect(scheduler.status.progress).toMatchObject({enumeration:'complete',distinctSources:6,deliveredSources:5,lastDurableUploadUtcMs:1003});
+  }finally{await scheduler.stop();}
+});
+it('REG-005/010/011 completes multi-page counts while a delivered receipt lands between every page (ET-110)',async()=>{
+  vi.useFakeTimers();const f=fixture(),published:{status:import('../../packages/contracts/src/dashboard-upload').DashboardUploadStatus;commits:number}[]=[],trips=Array.from({length:260},()=>randomUUID()),claimsTotal=10;let commits=0,claims=0,exhausted=false,release:(()=>void)|null=null;
+  // Within the burst of 10 the rate does not delay sending; this gate does: every source or receipt page request releases
+  // the one waiting HTTP reply, so a durable receipt commits during every page of every pass until the claims run out.
+  const claim=vi.fn((input:{attemptId:string})=>!exhausted&&claims++<claimsTotal?result({status:'claimed',attemptId:input.attemptId,eventId:randomUUID(),registrationId:registration.registrationId,registration,payload:Buffer.from('{}')}):result({status:'empty',attemptId:null,eventId:null,registrationId:null,registration:null,payload:null}));
+  f.http.request=vi.fn(()=>new Promise<UploadHttpResult>(resolve=>{release=()=>resolve({ok:true,statusCode:202,body:Buffer.from('{}'),retryAfter:null});}));
+  const commit=vi.fn(()=>{commits++;return result({status:'delivered',eventId:randomUUID(),receiptId:randomUUID()});});
+  const sources=vi.fn((input:{phase:'sources'|'receipts';after:string|null})=>{
+    const start=Number(input.after??0),next=input.phase==='sources'&&start+100<trips.length?String(start+100):null;
+    const page=result({phase:input.phase,after:input.after,next,examined:100,sources:input.phase==='sources'?trips.slice(start,start+100).map((tripUuid,index)=>({tripUuid,state:start+index<commits?'delivered' as const:'queued' as const,latestRevision:1,lastReceiptUtcMs:null})):[],receipts:input.phase==='receipts'&&commits>0?[{eventId:randomUUID(),firstReceivedUtcMs:1000+commits}]:[]});
+    const reply=release;release=null;reply?.();return page;});
+  const db=new Proxy(f.db,{get(target,key){return key==='claimUploadAttempt'?claim:key==='commitUploadReceipt'?commit:key==='pageUploadSources'?sources:Reflect.get(target,key);}});
+  const scheduler=new UploadScheduler(db,f.http,origin,'test',status=>published.push({status,commits}),controlled);
+  try{
+    await scheduler.activate(configuration,token,limits);expect(published[0].status.progress).toMatchObject({distinctSources:null,deliveredSources:null});
+    await vi.advanceTimersByTimeAsync(3000);
+    const first=published.findIndex(entry=>entry.status.progress.enumeration==='complete');expect(first).toBeGreaterThan(0);
+    // The first count is published while receipts still arrive, not only once sending stops.
+    expect(published[first].commits).toBeLessThan(claimsTotal);
+    for(const {status} of published.slice(0,first))expect(status.progress).toMatchObject({distinctSources:null,deliveredSources:null});
+    const after=published.slice(first).map(entry=>entry.status.progress);
+    for(const progress of after)expect(progress).toMatchObject({enumeration:'complete',distinctSources:260,deliveredSources:expect.any(Number)});
+    const delivered=after.map(progress=>progress.deliveredSources!);for(let n=1;n<delivered.length;n++)expect(delivered[n]).toBeGreaterThanOrEqual(delivered[n-1]);
+    // Later passes complete too: the delivered count and the last durable upload advance through several published results.
+    expect(new Set(delivered).size).toBeGreaterThanOrEqual(3);expect(new Set(after.map(progress=>progress.lastDurableUploadUtcMs)).size).toBeGreaterThanOrEqual(3);
+    expect(commits).toBe(claimsTotal);await vi.advanceTimersByTimeAsync(1000);
+    expect(scheduler.status.progress).toMatchObject({enumeration:'complete',distinctSources:260,deliveredSources:claimsTotal,lastDurableUploadUtcMs:1000+claimsTotal});
+  }finally{exhausted=true;const reply=release as (()=>void)|null;release=null;reply?.();await scheduler.stop();}
+});

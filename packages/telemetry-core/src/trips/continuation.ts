@@ -33,6 +33,15 @@ export function continuationFingerprint(job: JobConfiguration): string | null {
   }
   return `job-v1:${canonicalJson(values)}`;
 }
+/** The SDK defines no deadline sentinel; the u32 maximum cannot distinguish one job from another. */
+export const U32_DEADLINE_SENTINEL = '4294967295';
+/**
+ * The fingerprint of automatic continuation identity: continuationFingerprint, but null when the deadline is the u32
+ * maximum. Same-job checks within one recording keep using continuationFingerprint and compatibleContinuation.
+ */
+export function continuationIdentityFingerprint(job: JobConfiguration): string | null {
+  return job.deliveryDeadline?.available && job.deliveryDeadline.value === U32_DEADLINE_SENTINEL ? null : continuationFingerprint(job);
+}
 export function compatibleContinuation(a: JobConfiguration, b: JobConfiguration): boolean {
   const key = continuationFingerprint(a);
   return key !== null && key === continuationFingerprint(b) && EXTRA_FIELDS.every(field => {

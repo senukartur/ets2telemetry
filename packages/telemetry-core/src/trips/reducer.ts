@@ -812,7 +812,7 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, cu
     if(oldScope!==undefined && oldScope!==profileScope && slot.trip!==null){
       const previous=slot.trip,totals=accountingUpdate(previous.tripUuid,previous.accounting);if(totals)slot.pending.push(totals);
       const ended=Math.max(previous.startedUtcMs,next.utcMs ?? session.lastUtcMs ?? previous.startedUtcMs);
-      slot.pending.push({kind:'trip.close',tripUuid:previous.tripUuid,outcome:'none',closeReason:'different-job',recordingCompleteness:'partial',endedUtcMs:ended});
+      slot.pending.push({kind:'trip.close',tripUuid:previous.tripUuid,outcome:'none',closeReason:'different-job',recordingCompleteness:'partial',endedUtcMs:ended,profileChange:true});
       slot.lastClosed=closedFrom(previous,{outcome:'none',closeReason:'different-job',endedUtcMs:ended,endedMonotonicNs:null,completeness:'partial'});
       slot.trip=null;slot.continuation=null;session.profileChangePending=true;session.untrackedJob=previous.jobKey===null?null:{key:previous.jobKey,source:'recovery'};
     }

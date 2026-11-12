@@ -17,9 +17,12 @@ import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it,vi} fro
 import {readFileSync,type BigIntStats} from 'node:fs';
 import path from 'node:path';
 import type {SampleInput, Storage} from '../../packages/storage/src';
-import {attachTripUuidFor,tripUuidFor, type ProfileObservation} from '../../packages/telemetry-core/src';
+import {attachTripUuidFor,tripUuidFor, type EventMessage, type ProfileObservation} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail, validateJournalEventPage,validateJournalIntervalPage} from '../../packages/contracts/src/journal';
-import {ETS2_A, ETS2_B, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
+import {ETS2_A, ETS2_B, GAME_CLOCK_1, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
+import {FINAL_PROCESS_PROFILE_DELAY_MS, INCIDENT_EXPECTED, INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB,
+  INCIDENT_OTHER_JOB_WITHOUT_DEADLINE, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentDelivered, incidentTripUuid, type IncidentSegment} from '../shared/trip-continuation-incident';
+import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
 import {MIGRATIONS,openStorage} from '../../packages/storage/src';
 import {ok,failed,digestOf,readOnly,STORAGE_FIXTURES,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
 import {ClientSocket,guarded,runRecording,terminateWorkers} from './recording-helpers';
@@ -284,7 +287,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const detail=ok(await client.journalTrip(original));expect(detail.trip.outcome).toBe('delivered');expect(ok(await client.listTrips()).trips).toHaveLength(3);
       if(scenario==='before-first-start')expect(detail.trip).toMatchObject({isHardMode:true,hardModeDetails:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(ok(await client.listSamples({tripUuid:original},{afterId:oldSnapshot,includeExcluded:true}))).toHaveLength(prestart?3:2);
-      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:8},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
+      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:9},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
@@ -1551,7 +1554,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.close());
     const worker=storageWorker(),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
     const summary=ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
-    const database={purpose:'synthetic',schemaVersion:8} as const;
+    const database={purpose:'synthetic',schemaVersion:9} as const;
     const service=new JournalService({history:{state:'open',failureCode:null,client,database,databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
     const selected=ok(await client.listSamples({tripUuid:uuid}));expect(selected.map(row=>row.id)).toEqual(['1','2','4','5']);
     for(const limit of [300,3600]){
@@ -1648,11 +1651,204 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
   },60_000);
 });
 
+describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>{
+  const scope='a'.repeat(64),otherScope='c'.repeat(64);
+  const extra=['10000000-0000-4000-8000-000000112004','10000000-0000-4000-8000-000000112005'] as const;
+  const atNs=(atMs:number)=>(1_000_000_000_000n+BigInt(atMs)*1_000_000n).toString();
+  const absent={available:false,reason:'not-observed'} as const;
+  interface SegmentOptions {job?:JobConfiguration;scope?:string;readingJob?:(reading:number)=>JobConfiguration;end?:IncidentSegment['end']|'open';afterReading?:(reading:number)=>void}
+  /** One process of the corpus through the storage API: job.configured opens eventSeq 1, readings follow at 1 Hz, then the segment ends. */
+  interface Driven {uuid:string;close?:{message:EventMessage;effects:import('../../packages/storage/src').TripEffect[]};script:Script}
+  function drive(storage:Storage,segment:IncidentSegment,options:SegmentOptions={}):Driven{
+    const script=new Script(segment.session,'ets2',{utcMs:segment.startUtcMs}),values=options.job??INCIDENT_JOB,process=script.welcome().source.processInstanceId;
+    const profile:ProfileObservation={...proof(script),scope:options.scope??scope,afterMonotonicNs:atNs(segment.profileFromMs)};
+    ok(storage.upsertSession({message:script.welcome()}));
+    // The opening event occurs 999 ms into the process; it carries proof only when the proof already exists then.
+    const configured=script.event(r.jobConfigured(values)),uuid=tripUuidFor(script.session,configured.data.eventSeq);
+    ok(storage.commitEvent({message:configured,...(segment.profileFromMs<=999?{profile}:{}),effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:mode,
+      jobConfiguration:'this-event',startedUtcMs:segment.startUtcMs+1_000,recordingCompleteness:'complete'},{kind:'event.attribute',tripUuid:uuid,attribution:'trip'}]}));
+    for(const [index,reading] of segment.readings.entries()){
+      const row:SampleInput={tripUuid:uuid,utcMs:segment.startUtcMs+reading.atMs,sourceClockId:script.clockId,monotonicNs:atNs(reading.atMs),
+        odometer:{available:true,value:reading.odometerM},fuel:{available:true,value:reading.fuelL},speed:{available:true,value:reading.speedMps},
+        gameTime:{minutes:{available:true,value:reading.gameMinutes},clockId:GAME_CLOCK_1},position:{available:true,value:{x:reading.x,y:0,z:0}},
+        averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,
+        recording:{...(reading.atMs>=segment.profileFromMs?{profile}:{}),job:options.readingJob?.(index)??values,truck:'verified-truck',processInstanceId:process,
+          ...(index>0?{previous:{tripUuid:uuid,sourceClockId:script.clockId,monotonicNs:atNs(segment.readings[index-1].atMs)}}:{})}};
+      ok(storage.appendSamples(script.session,[row],{uniqueSeconds:true}));options.afterReading?.(index);
+    }
+    const end=options.end??segment.end,last=segment.readings.at(-1)!.atMs;
+    if(end==='open')return {uuid,script};
+    const delivered=end==='delivered',message=script.event(delivered?incidentDelivered():r.timersRestart(),{advanceMs:last});
+    const effects:import('../../packages/storage/src').TripEffect[]=[{kind:'trip.close',tripUuid:uuid,outcome:delivered?'delivered':'none',closeReason:delivered?'outcome':'restart',
+      ...(delivered?{outcomeEvent:'this-event' as const}:{}),recordingCompleteness:'partial',endedUtcMs:segment.startUtcMs+last+1_000}];
+    ok(storage.commitEvent({message,effects}));
+    return {uuid,close:{message,effects},script};
+  }
+  async function reopen(storage:Storage,body?:(db:Database.Database)=>void):Promise<Storage>{
+    ok(storage.close());
+    if(body){const db=new Database(ws.database);try{body(db);}finally{db.close();}}
+    return ws.open();
+  }
+  /** The hand-written incident expectation: one delivered root with three sources, one delivery and its exact values. */
+  function expectIncident(storage:Storage){
+    const detail=validateJournalTripDetail(ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid)));
+    expect(detail.trip).toMatchObject({tripUuid:INCIDENT_EXPECTED.rootTripUuid,outcome:INCIDENT_EXPECTED.outcome});
+    expect(detail.exportBounds.sources?.map(source=>source.pluginSessionId)).toEqual(INCIDENT_EXPECTED.sources);
+    expect(detail.outcomeDetails?.record).toMatchObject({type:'job.delivered',revenue:{available:true,value:INCIDENT_EXPECTED.revenue},
+      distance:{available:true,value:INCIDENT_EXPECTED.deliveredDistanceM,unit:'m'}});
+    const events=validateJournalEventPage(ok(storage.journalEvents(INCIDENT_EXPECTED.rootTripUuid,{limit:500}))).events;
+    expect(events.filter(event=>event.type==='job.delivered')).toHaveLength(INCIDENT_EXPECTED.deliveredEvents);
+  }
+  const trip=(storage:Storage,uuid:string)=>ok(storage.journalTrips()).trips.find(row=>row.tripUuid===uuid);
+  /** Drives the corpus from segment `from`; `before` replaces the corpus' own service restart before each segment. */
+  async function incident(storage:Storage,from=0,before?:(current:Storage)=>Promise<Storage>,options:(index:number,current:Storage)=>SegmentOptions=()=>({})){
+    let last:Driven|undefined;
+    for(const [index,segment] of INCIDENT_SEGMENTS.entries()){
+      if(index<from)continue;
+      storage=before?await before(storage):segment.serviceRestartBefore?await reopen(storage):storage;
+      last=drive(storage,segment,options(index,storage));
+    }
+    return {storage,last:last!};
+  }
+
+  it('M1 joins the three incident segments into one delivered trip across a service restart',async()=>{
+    expect(FINAL_PROCESS_PROFILE_DELAY_MS).toBe(5_114);
+    const {storage}=await incident(await ws.open());
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
+    expect(ok(storage.listTrips()).trips).toHaveLength(INCIDENT_EXPECTED.rawTrips);
+  });
+  it.each(['recorded-incomplete','left-unresolved'] as const)('M2 continues among matching candidates while another job of the profile is unresolved: %s',async variant=>{
+    let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);
+    // A recorded job without deadline evidence never retires; the second variant isolates the candidate lookup itself.
+    const other=drive(storage,{...INCIDENT_SEGMENTS[0],session:extra[0]},{job:variant==='recorded-incomplete'?INCIDENT_OTHER_JOB_WITHOUT_DEADLINE:INCIDENT_OTHER_JOB,
+      scope:variant==='left-unresolved'?otherScope:scope}).uuid;
+    if(variant==='left-unresolved')storage=await reopen(storage,db=>db.prepare('UPDATE logical_trips SET profile_scope=? WHERE trip_uuid=?').run(scope,other));
+    expect(trip(storage,other)).toMatchObject({outcome:'open'});
+    ({storage}=await incident(storage,1));
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,other].sort());
+    expect(trip(storage,other)).toMatchObject({outcome:'open'});
+  });
+  it.each(['missing-cargo','u32-max'] as const)('M2 makes an incomplete recorded job of the profile its own root without retiring the candidate: %s',async variant=>{
+    let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);
+    const incomplete=variant==='u32-max'?INCIDENT_JOB_U32_MAX_DEADLINE:{...INCIDENT_JOB,cargoId:{available:false as const,reason:'not-observed' as const}};
+    // The same verified profile records J without complete identity evidence; it can neither join nor replace A.
+    const own=tripUuidFor(extra[0],'1'),last=INCIDENT_SEGMENTS[0].readings.length-1;
+    drive(storage,{...INCIDENT_SEGMENTS[0],session:extra[0]},{job:incomplete,afterReading:reading=>{if(reading!==last)return;
+      expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,own].sort());
+      expect(trip(storage,INCIDENT_EXPECTED.rootTripUuid)).toMatchObject({outcome:'open',closeReason:null});
+      expect(validateJournalTripDetail(ok(storage.journalTrip(own))).exportBounds.sources?.map(source=>source.pluginSessionId)).toEqual([extra[0]]);}});
+    // A persisted root keeps its unresolved presentation after the game exit, and A is still the only candidate of J.
+    expect(trip(storage,own)).toMatchObject({outcome:'open',closeReason:null});
+    ({storage}=await incident(storage,1));
+    expectIncident(storage);
+    expect(trip(storage,own)).toMatchObject({outcome:'open',closeReason:null});
+    expect(ok(storage.journalTrips()).trips).toHaveLength(2);
+  });
+  it.each(['missing','u32-max'] as const)('M3 keeps the candidate when a proof-bearing reading has no current deadline: %s',async variant=>{
+    const incomplete=variant==='missing'?INCIDENT_JOB_WITHOUT_DEADLINE:INCIDENT_JOB_U32_MAX_DEADLINE;
+    let checked=false;const {storage}=await incident(await ws.open(),0,undefined,(index,current)=>index<2?{}:{
+      // Reading 2 is the first one after the delayed proof; reading 3 carries the complete job again.
+      readingJob:reading=>reading===2?incomplete:INCIDENT_JOB,
+      afterReading:reading=>{if(reading!==2)return;checked=true;
+        expect(trip(current,INCIDENT_EXPECTED.rootTripUuid)).toMatchObject({outcome:'open',closeReason:null});
+        expect(ok(current.journalTrips()).trips).toHaveLength(2);}
+    });
+    expect(checked).toBe(true);expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
+  });
+  it('M9 keeps an identical new job after the delivery separate',async()=>{
+    const {storage}=await incident(await ws.open());
+    const next=drive(storage,{...INCIDENT_SEGMENTS[2],session:extra[0]},{end:'open'}).uuid;
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,next].sort());
+    expect(trip(storage,next)).toMatchObject({outcome:'open'});
+    expect(validateJournalTripDetail(ok(storage.journalTrip(next))).exportBounds.sources?.map(source=>source.pluginSessionId)).toEqual([extra[0]]);
+  });
+  it('M10 joins neither of two matching candidates and interrupts both',async()=>{
+    let storage=await ws.open();const first=drive(storage,INCIDENT_SEGMENTS[0]).uuid;
+    const second=drive(storage,{...INCIDENT_SEGMENTS[1],session:extra[0]},{scope:otherScope}).uuid;
+    storage=await reopen(storage,db=>db.prepare('UPDATE logical_trips SET profile_scope=? WHERE trip_uuid=?').run(scope,second));
+    const last=drive(storage,{...INCIDENT_SEGMENTS[2],session:extra[1]},{end:'open'}).uuid;
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([first,second,last].sort());
+    for(const uuid of [first,second])expect(trip(storage,uuid)).toMatchObject({outcome:'none',closeReason:'different-job'});
+    expect(trip(storage,last)).toMatchObject({outcome:'open'});
+  });
+  it('M11 interrupts the unresolved incident job when a verified different job starts',async()=>{
+    const storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);drive(storage,INCIDENT_SEGMENTS[1]);
+    const other=drive(storage,{...INCIDENT_SEGMENTS[2],session:extra[0]},{job:INCIDENT_OTHER_JOB,end:'open'}).uuid;
+    expect(trip(storage,INCIDENT_EXPECTED.rootTripUuid)).toMatchObject({outcome:'none',closeReason:'different-job'});
+    expect(trip(storage,other)).toMatchObject({outcome:'open'});
+    expect(ok(storage.journalTrips()).trips).toHaveLength(2);
+  });
+  it('M12 counts a duplicate and a redelivered delivery once after a service restart',async()=>{
+    const driven=await incident(await ws.open()),delivery=driven.last.close!,storage=await reopen(driven.storage);
+    expect(ok(storage.commitEvent(delivery))).toMatchObject({status:'duplicate'});
+    expect(ok(storage.commitEvent({...delivery,message:driven.last.script.redeliver(delivery.message)}))).toMatchObject({status:'duplicate'});
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips).toHaveLength(1);
+  });
+  /**
+   * ET-112b2b: the last process reads without proof through its delivery (its proof arrives only after the last reading),
+   * so its segment closes pending; the session's later in-process proof then resolves it.
+   */
+  async function delayedIncident(){
+    let storage=await ws.open();drive(storage,INCIDENT_SEGMENTS[0]);drive(storage,INCIDENT_SEGMENTS[1]);storage=await reopen(storage);
+    const last=drive(storage,{...INCIDENT_SEGMENTS[2],profileFromMs:99_999});
+    const input={pluginSessionId:INCIDENT_SESSIONS[2],nextEventSeq:'3',profile:{...proof(last.script),scope,afterMonotonicNs:atNs(8_000)},sourceClockId:last.script.clockId,monotonicNs:atNs(8_000)};
+    return {storage,last,input};
+  }
+  /** Upload readiness of a raw trip's root, through the bounded projection preparation. */
+  function readiness(storage:Storage,uuid:string){
+    const pinId=`70000000-0000-4000-8000-${String(++pins).padStart(12,'0')}`;let state=ok(storage.beginUploadProjection({pinId,tripUuid:uuid}));
+    for(let turn=0;state.state==='preparing'&&turn<1000;turn++)state=ok(storage.advanceUploadProjection(pinId));
+    return state.projection?.rootReadiness;
+  }
+  let pins=0;
+  it('M4 continues the trip from a profile proof that arrives after the delivery: one delivered trip, its revenue once',async()=>{
+    const {storage,input}=await delayedIncident(),lastUuid=incidentTripUuid(2);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid).sort()).toEqual([INCIDENT_EXPECTED.rootTripUuid,lastUuid].sort());
+    expect(trip(storage,lastUuid)).toMatchObject({outcome:'delivered'});
+    // The closed pending segment is held from upload until it resolves.
+    expect(readiness(storage,lastUuid)).toBe('identity-pending');
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
+    expect(ok(storage.listTrips()).trips).toHaveLength(INCIDENT_EXPECTED.rawTrips);
+    const detail=validateJournalTripDetail(ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid)));
+    expect(detail.outcomeDetails?.record).toMatchObject({revenue:{available:true,value:{raw:'9978',sdkType:'s64'}},distance:{available:true,value:187342.01049804688,unit:'m'}});
+    // The last segment's quantities were recorded outside the trip's accounting chain: the trip is partial, without totals.
+    expect(detail.trip).toMatchObject({recordingCompleteness:'partial',observedDistanceM:{available:false,reason:'not-observed'},fuelUsedL:{available:false,reason:'not-observed'}});
+    expect(readiness(storage,INCIDENT_EXPECTED.rootTripUuid)).toBe('ready');
+    // The group's Hard Mode counts are the sums over its three raw members.
+    const counts=(details:unknown)=>{const d=details as {passingChecks:number;failingChecks:number;unknownChecks:number};return [d.passingChecks,d.failingChecks,d.unknownChecks];};
+    const sum=[0,1,2].map(index=>counts(ok(storage.getTrip(incidentTripUuid(index)))!.hardModeDetails)).reduce((a,b)=>a.map((value,index)=>value+b[index]));
+    expect(sum.every(Number.isSafeInteger)).toBe(true);expect(counts(detail.trip.hardModeDetails)).toEqual(sum);
+  });
+  it('M12 replays the resolve and the delivery without a second continuation or delivery',async()=>{
+    const {storage,last,input}=await delayedIncident(),delivery=last.close!;
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'resolved',resolved:1,remaining:0});
+    const journal=ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid));
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status:'none',resolved:0,remaining:0});
+    expect(ok(storage.commitEvent(delivery))).toMatchObject({status:'duplicate'});
+    expect(ok(storage.commitEvent({...delivery,message:last.script.redeliver(delivery.message)}))).toMatchObject({status:'duplicate'});
+    expect(ok(storage.journalTrip(INCIDENT_EXPECTED.rootTripUuid))).toEqual(journal);
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips).toHaveLength(1);
+  });
+  it('M14 keeps one trip across a next-day resume and an app restart before every segment',async()=>{
+    const {storage}=await incident(await ws.open(),0,current=>{ws.advance(86_400_000);return reopen(current);});
+    expectIncident(storage);
+    expect(ok(storage.journalTrips()).trips.map(row=>row.tripUuid)).toEqual([INCIDENT_EXPECTED.rootTripUuid]);
+  });
+});
+
 describe('REG-013 logical singleton migration',()=>{
   it.each([1,2,3])('preserves IDs and raw facts from frozen schema v%i without inferring membership',async version=>{
     const file=ws.copyFixture(`schema-v${version}-representative.sqlite`);
     const before=readOnly(file,db=>db.prepare('SELECT * FROM trips ORDER BY id').all()) as Record<string,unknown>[];
-    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(8);
+    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(9);
     const list=ok(storage.journalTrips()).trips;
     expect(list.map(t=>t.tripUuid).sort()).toEqual(before.map(t=>t.trip_uuid).sort());
     for(const trip of before)expect(ok(storage.journalTrip(String(trip.trip_uuid))).trip.recordingCompleteness).toBe(trip.recording_completeness);

@@ -93,7 +93,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
     const liveRegion = await page.locator('.yu-account [role="status"]').elementHandle();
     for (const status of [base, candidate, connected, base]) {
       await publish(status);
-      await expect(page.getByTestId('account.phase')).toHaveText(status.state === 'disconnected' ? 'Not connected' : status.state === 'confirmation-required' ? 'Awaiting confirmation' : 'Connected');
+      await expect(page.getByTestId('account.phase')).toHaveText(status.state === 'disconnected' ? 'Not connected' : status.state === 'confirmation-required' ? 'Awaiting confirmation' : 'Connected to the Dashboard');
       assert.equal(await page.locator('.yu-account [role="status"]').count(), 1);
       assert.equal(await page.evaluate(node => node.isConnected && node === globalThis.document.querySelector('.yu-account [role="status"]'), liveRegion), true, 'UPLOAD_STATUS_REGION_REPLACED');
     }
@@ -134,7 +134,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
     await input.fill(sentinel); await input.press('Enter'); await page.getByTestId('account.cancel').waitFor(); await settle(candidate);
     await expect(page.locator('#upload-confirm-heading')).toBeFocused();
     assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).confirm, 0);
-    assert.equal(await page.getByTestId('account.counts').count(), 0);
+    assert.equal(await page.getByTestId('account.firstSync').count(), 0);
     await page.keyboard.press('Tab'); await expect(page.getByTestId('account.confirm')).toBeFocused();
     await page.keyboard.press('Tab'); await expect(page.getByTestId('account.cancel')).toBeFocused();
     await page.getByTestId('account.confirm').click();
@@ -144,10 +144,22 @@ export async function runDashboardUploadUiFixture(config, progress) {
     await page.getByTestId('shell.status.sync').click(); await page.getByTestId('account.disconnect').waitFor(); record.flags.chipNavigation = true;
     assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).cancel, 2); record.flags.confirmNavigation = true;
     stage = 'disconnect';
+    // ET-110: Disconnect first asks inline; Escape and Cancel close the question without a call and return focus.
+    assert.equal(await page.getByTestId('account.form').count(), 0);
+    const question = page.locator('#upload-disconnect-question'), disconnectCount = async () => (await application.evaluate(() => globalThis.uploadUiFixture.counts)).disconnect;
     await page.getByTestId('account.disconnect').focus(); await page.keyboard.press('Enter');
+    await page.getByTestId('account.disconnect.prompt').waitFor(); await expect(question).toBeFocused();
+    await page.keyboard.press('Escape'); await page.getByTestId('account.disconnect.prompt').waitFor({state: 'detached'});
+    await expect(page.getByTestId('account.disconnect')).toBeFocused(); assert.equal(await disconnectCount(), 0);
+    await page.keyboard.press('Enter'); await expect(question).toBeFocused();
+    await page.keyboard.press('Tab'); await expect(page.getByTestId('account.disconnect.confirm')).toBeFocused();
+    await page.keyboard.press('Tab'); await expect(page.getByTestId('account.disconnect.cancel')).toBeFocused();
+    await page.keyboard.press('Enter'); await page.getByTestId('account.disconnect.prompt').waitFor({state: 'detached'});
+    await expect(page.getByTestId('account.disconnect')).toBeFocused(); assert.equal(await disconnectCount(), 0);
+    await page.keyboard.press('Enter'); await page.getByTestId('account.disconnect.confirm').click();
     await page.getByTestId('account.form').waitFor(); await expect(input).toBeFocused();
-    assert.equal((await application.evaluate(() => globalThis.uploadUiFixture.counts)).disconnect, 1);
-    assert.equal(await input.inputValue(), ''); assert.equal(await page.getByTestId('account.counts').count(), 0);
+    assert.equal(await disconnectCount(), 1);
+    assert.equal(await input.inputValue(), ''); assert.equal(await page.getByTestId('account.firstSync').count(), 0);
     stage = 'confirm-notification-before-reply-focus';
     for (const result of [connected, {...connected, state: 'paused', error: 'NETWORK'}]) {
       await publish(candidate); await expect(page.locator('#upload-confirm-heading')).toBeFocused();
@@ -158,7 +170,9 @@ export async function runDashboardUploadUiFixture(config, progress) {
       await expect(resultHeading).toBeFocused(); await expect(page.getByTestId('account.disconnect')).toBeDisabled();
       assert.equal(await page.getByTestId('account.form').count(), 0);
       await page.getByTestId('fixture.confirmation.gate').evaluate(node => node.click());
-      await page.getByTestId('account.form').waitFor(); await expect(resultHeading).toBeFocused();
+      // A working connection offers no token entry once the reply settles; focus stays on the result.
+      await expect(page.getByTestId('account.disconnect')).toBeEnabled(); await expect(resultHeading).toBeFocused();
+      assert.equal(await page.getByTestId('account.form').count(), 0);
     }
     await publish(base); await page.getByTestId('account.form').waitFor();
     stage = 'security';
@@ -183,6 +197,11 @@ export async function runDashboardUploadUiFixture(config, progress) {
           else if (screen === 'confirmation') await page.getByTestId('account.confirmation').waitFor();
           else if (screen === 'no-token') await page.getByTestId('account.form').waitFor();
           else await page.getByTestId('account.firstSync').waitFor();
+          // ET-110: a recount in progress ('changing') keeps the last known totals and bar while offline.
+          if (screen === 'offline') {
+            await expect(page.getByTestId('account.sync.detail')).toContainText(language === 'en' ? 'Sent 2 of 10.' : 'Отправлено 2 из 10.');
+            assert.equal(await page.locator('.yu-account progress').getAttribute('value'), '20');
+          }
           stage = `${screen}-${language}-${size.width}-token-clear`;
           const token = page.getByTestId('account.token.input');
           if (await token.count()) {assert.equal((await token.inputValue()) === '', true, 'TOKEN_NOT_CLEARED'); assert.equal(await token.getAttribute('type'), 'password');}
@@ -206,13 +225,22 @@ export async function runDashboardUploadUiFixture(config, progress) {
           {...base, state: 'connecting', error: 'TIMEOUT', owner, candidateId: candidate.candidateId},
           {...base, state: 'disconnected', error: 'CANCELLED'}
         ]) {
-          await publish(status); await expect(page.getByTestId('account.phase')).toHaveText(status.state === 'connecting' ? (language === 'en' ? 'Connecting…' : 'Подключение…') : status.state === 'paused' ? (language === 'en' ? 'Upload paused' : 'Отправка приостановлена') : (language === 'en' ? 'Not connected' : 'Не подключено'));
-          if (status.error) await page.getByTestId('account.error').waitFor();
-          if (status.progress.pressure) await expect(page.getByTestId('account.status')).toContainText(language === 'en' ? 'Queue capacity reached' : 'Очередь заполнена');
+          const auth = status.error === 'AUTHENTICATION';
+          await publish(status); await expect(page.getByTestId('account.phase')).toHaveText(status.state === 'connecting' ? (language === 'en' ? 'Connecting…' : 'Подключение…')
+            : auth ? (language === 'en' ? 'The token no longer works' : 'Токен больше не действует') : status.state === 'paused' ? (language === 'en' ? 'Connected to the Dashboard' : 'Подключено к Dashboard')
+            : (language === 'en' ? 'Not connected' : 'Не подключено'));
+          // A connection shows its authentication failure as the state with the replacement field, never a notice.
+          if (auth) {await page.getByTestId('account.status').getByTestId('account.form').waitFor(); assert.equal(await page.getByTestId('account.error').count(), 0);}
+          else if (status.error) await page.getByTestId('account.error').waitFor();
+          if (status.progress.pressure) await expect(page.getByTestId('account.firstSync')).toContainText(language === 'en' ? 'The upload queue is full' : 'Очередь отправки заполнена');
         }
         const longOwner = {...owner, accountId: 'a'.repeat(128), companyId: 'c'.repeat(128), identityEpoch: 'e'.repeat(128)};
         for (const status of [{...candidate, owner: longOwner}, {...connected, owner: longOwner}]) {
-          await publish(status); await expect(page.getByTestId('account.owner')).toContainText(longOwner.identityEpoch);
+          await publish(status);
+          // The identifiers of a connection are inside the collapsed details; open them to measure the long values.
+          if (!status.candidateId && !(await page.getByTestId('account.details').evaluate(node => node.open))) await page.getByTestId('account.details').locator('summary').click();
+          if (!status.candidateId) await expect(page.getByTestId('account.details')).toHaveAttribute('open', '');
+          await expect(page.getByTestId('account.owner')).toBeVisible(); await expect(page.getByTestId('account.owner')).toContainText(longOwner.identityEpoch);
           for (const zoom of [1, 1.5, 2]) {
             await application.evaluate(({BrowserWindow}, zoom) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(zoom), zoom);
             assert.equal(await page.getByTestId('fixture.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UPLOAD_ZOOM_OVERFLOW_${language}_${size.width}_${zoom}`);
@@ -223,7 +251,24 @@ export async function runDashboardUploadUiFixture(config, progress) {
           await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
         }
       }
+      // ET-110: the sync button chip is exactly as tall as a production badge chip (24 px) in both themes and at zoom.
+      await page.setViewportSize({width: 1280, height: 800}); await page.getByTestId('fixture.account').click();
+      for (const status of [connected, {...connected, progress: {...connected.progress, identityPendingSources: 0, heldSources: 0}}, {...connected, state: 'paused', error: 'AUTHENTICATION'}]) {
+        await publish(status);
+        for (const colorScheme of ['dark', 'light']) {
+          stage = `chip-height-${language}-${colorScheme}`;
+          await page.emulateMedia({colorScheme}); await page.waitForFunction(dark => globalThis.matchMedia('(prefers-color-scheme: dark)').matches === dark, colorScheme === 'dark', {timeout: 5000});
+          for (const zoom of [1, 1.5, 2]) {
+            await application.evaluate(({BrowserWindow}, zoom) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(zoom), zoom);
+            const heights = await page.evaluate(() => ['shell.status.sync', 'fixture.chip'].map(id => globalThis.document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().height));
+            assert.ok(Math.abs(heights[0] - 24) < 0.05 && Math.abs(heights[0] - heights[1]) < 0.05, `UPLOAD_SYNC_CHIP_HEIGHT_${language}_${colorScheme}_${zoom}_${heights.join('_')}`);
+          }
+          await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
+        }
+      }
+      await page.emulateMedia({colorScheme: null});
     }
+    stage = 'stable-progress';
     await page.getByTestId('fixture.account').click(); await publish(connected); await page.getByTestId('account.firstSync').waitFor();
     assert.equal(await page.locator('progress').getAttribute('value'), '20');
     const progressPalette = await page.locator('progress').evaluate(node => {
@@ -235,12 +280,22 @@ export async function runDashboardUploadUiFixture(config, progress) {
       return {customAppearance: style.appearance === 'none', fillMatchesToken: style.color === fill, trackMatchesToken: style.backgroundColor === track};
     });
     assert.deepEqual(progressPalette, {customAppearance: true, fillMatchesToken: true, trackMatchesToken: true});
-    await page.getByTestId('account.token.input').focus();
-    await publish({...connected, progress: {...connected.progress, enumeration: 'changing'}}); await page.waitForFunction(() => !globalThis.document.querySelector('progress')?.hasAttribute('value')); record.flags.progress = true;
-    await expect(page.getByTestId('account.token.input')).toBeFocused();
-    for (const connection of ['connected', 'paused']) {
+    // ET-110: a recount ('changing') keeps the value and the result; only a first count without totals is indeterminate.
+    // Progress notifications never move focus from the details disclosure.
+    const summary = page.getByTestId('account.details').locator('summary'), title = await page.getByTestId('account.sync.title').textContent();
+    await summary.focus(); await expect(summary).toBeFocused();
+    await publish({...connected, progress: {...connected.progress, enumeration: 'changing'}}); await publish({...connected, progress: {...connected.progress, enumeration: 'scanning'}});
+    assert.equal(await page.locator('progress').getAttribute('value'), '20'); assert.equal(await page.getByTestId('account.sync.title').textContent(), title);
+    await publish({...connected, progress: {...connected.progress, identityPendingSources: 0, heldSources: 0, enumeration: 'calculating', distinctSources: null, deliveredSources: null}});
+    await page.waitForFunction(() => {const bar = globalThis.document.querySelector('.yu-account progress'); return !!bar && !bar.hasAttribute('value');}); record.flags.progress = true;
+    await expect(summary).toBeFocused();
+    assert.equal(await page.getByTestId('account.token.input').count(), 0);
+    for (const recoverable of [connected, {...connected, state: 'paused', error: 'NETWORK'}]) {
+      await publish(recoverable); await page.getByTestId('account.firstSync').waitFor(); assert.equal(await page.getByTestId('account.token.input').count(), 0);
+    }
+    for (const connection of ['AUTHENTICATION', 'CREDENTIAL_UNAVAILABLE']) {
       stage = `cancel-held-replacement-${connection}`;
-      await publish({...connected, state: connection}); await page.getByTestId('account.form').waitFor();
+      await publish({...connected, state: 'paused', error: connection}); await page.getByTestId('account.status').getByTestId('account.form').waitFor();
       const before = await application.evaluate(() => ({...globalThis.uploadUiFixture.counts}));
       await page.getByTestId('fixture.verification.gate').evaluate(node => node.click());
       await page.getByTestId('account.token.input').fill(sentinel); await page.getByTestId('account.token.input').press('Enter');
@@ -259,7 +314,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
       assert.equal(await page.getByTestId('account.confirmation').count(), 0);
       assert.equal(await page.getByTestId('account.token.input').inputValue(), '');
     }
-    await publish(connected); await page.getByTestId('account.form').waitFor();
+    await publish({...connected, state: 'paused', error: 'AUTHENTICATION'}); await page.getByTestId('account.status').getByTestId('account.form').waitFor();
     stage = 'replacement-token';
     const previousCounts = await application.evaluate(() => ({...globalThis.uploadUiFixture.counts}));
     await page.getByTestId('account.token.input').fill(sentinel); await page.getByTestId('account.token.input').press('Enter');

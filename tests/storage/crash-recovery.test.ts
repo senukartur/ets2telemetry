@@ -7,7 +7,10 @@ import {once} from 'node:events';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {ServerMessage} from '../../packages/contracts/src/protocol-v1';
-import {openStorage, type TripEffect} from '../../packages/storage/src/index';
+import {openStorage, type ResolveMembershipsInput, type TripEffect} from '../../packages/storage/src/index';
+import {tripUuidFor, type ProfileObservation} from '../../packages/telemetry-core/src';
+import {INCIDENT_JOB} from '../shared/trip-continuation-incident';
+import {ETS2_A, ETS2_B, r, Script} from '../shared/trip-messages';
 import {ok, P1, readOnly, v1, withEventSeq, workspace} from './helpers';
 
 const CHILD = path.resolve('tests/storage/fixtures/crash-child.cjs');
@@ -18,6 +21,8 @@ beforeEach(async () => { ws = await workspace(); });
 afterEach(async () => { await ws.dispose(); });
 
 interface Item {kind: 'event' | 'gap'; last: string; message: ServerMessage; effects: TripEffect[]}
+/** ET-112b2b: a resolvePendingMemberships call in the child's stream. */
+interface ResolveItem {kind: 'resolve'; input: ResolveMembershipsInput}
 const tripUuid = (cycle: number) => `70000000-0000-4000-8000-${String(cycle + 1).padStart(12, '0')}`;
 const attribute = (cycle: number | null): TripEffect => cycle === null ? {kind: 'event.attribute', tripUuid: null, attribution: 'free-driving'} : {kind: 'event.attribute', tripUuid: tripUuid(cycle), attribution: 'trip'};
 /**
@@ -45,10 +50,13 @@ function stream(cycles: number): Item[] {
   return items;
 }
 
-/** Runs the child until it ends itself, or until `terminateAfterAck` acks were read, then terminates it. */
-async function runChild(mode: 'before-commit' | 'after-commit' | 'worker', items: Item[], killAt: number, terminateAfterAck?: number) {
+/**
+ * Runs the child until it ends itself, or until `terminateAfterAck` acks were read, then terminates it. The child opens
+ * the session of `welcome` before its stream.
+ */
+async function runChild(mode: 'before-commit' | 'after-commit' | 'worker', items: (Item | ResolveItem)[], killAt: number, terminateAfterAck?: number, welcome: ServerMessage = v1('welcome')) {
   const config = path.join(ws.directory, `crash-${mode}.json`);
-  writeFileSync(config, JSON.stringify({open: {path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test'}, welcome: v1('welcome'), stream: items, killAt}));
+  writeFileSync(config, JSON.stringify({open: {path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: '0.1.0-test'}, welcome, stream: items, killAt}));
   const child = spawn(process.execPath, [CHILD, mode, config], {env: {...process.env, ELECTRON_RUN_AS_NODE: '1'}, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true});
   // 'close' comes after the process exited and its stdout and stderr ended, so the last ack line and any late error output
   // are always read; 'exit' can arrive while piped output is still unread.
@@ -183,5 +191,62 @@ describe('REG-006 killed service process', () => {
     for (const ack of acks) expect(through).toBeGreaterThanOrEqual(ack.through);
     expect(through).toBeGreaterThanOrEqual(acks.at(-1)!.last);
     await redeliver(items, stored);
+  });
+});
+
+describe('ET-112b2b killed process inside a delayed-proof membership resolution', () => {
+  const mode = {mode: 'unknown', method: 'none', confidence: 'none'} as const;
+  const proofOf = (script: Script): ProfileObservation => ({version: 1, scope: 'a'.repeat(64), binding: 'b'.repeat(64), game: 'ets2', pluginSessionId: script.session,
+    processInstanceId: script.welcome().source.processInstanceId, sourceClockId: script.clockId, afterMonotonicNs: '0', loadGeneration: 1});
+  const open = (script: Script) => {
+    const message = script.event(r.jobConfigured(INCIDENT_JOB)), uuid = tripUuidFor(script.session, message.data.eventSeq);
+    return {message, uuid, effects: [{kind: 'trip.open', tripUuid: uuid, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: 1000}] as TripEffect[]};
+  };
+  /**
+   * In this process: session A records the job with its proof, and its game exit closes the trip by restart. The child's
+   * stream: session B opens the same job without proof, delivers it, then resolves it with B's later proof.
+   */
+  async function prepare(): Promise<(Item | ResolveItem)[]> {
+    const a = new Script(ETS2_A), b = new Script(ETS2_B, 'ets2', {utcMs: 1_791_680_000_000}), storage = ok(await openStorage(parentOptions())), first = open(a);
+    ok(storage.upsertSession({message: a.welcome()}));
+    ok(storage.commitEvent({message: first.message, profile: proofOf(a), effects: first.effects}));
+    ok(storage.commitEvent({message: a.event(r.timersRestart()), effects: [{kind: 'trip.close', tripUuid: first.uuid, outcome: 'none', closeReason: 'restart',
+      recordingCompleteness: 'partial', endedUtcMs: 2000}]}));
+    storage.close();
+    const second = open(b), delivered = b.event(r.delivered());
+    return [{kind: 'event', last: '1', message: second.message, effects: second.effects},
+      {kind: 'event', last: '2', message: delivered, effects: [{kind: 'trip.close', tripUuid: second.uuid, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event',
+        recordingCompleteness: 'partial', endedUtcMs: 3000}]},
+      {kind: 'resolve', input: {pluginSessionId: ETS2_B, nextEventSeq: '3', profile: proofOf(b), sourceClockId: b.clockId, monotonicNs: b.snapshot().capture.monotonicNs}}];
+  }
+  const decision = () => readOnly(ws.database, db => db.prepare('SELECT state, reason, target_logical_ref AS target FROM logical_membership_decisions WHERE trip_ref = 2').get());
+  const members = () => readOnly(ws.database, db => db.prepare('SELECT trip_ref, logical_ref FROM logical_memberships ORDER BY trip_ref').all());
+  const joined = {state: 'joined', reason: 'matched', target: 1};
+
+  it('terminated inside the resolve transaction leaves the segment pending, and the resolve after the restart joins it once', async () => {
+    const items = await prepare();
+    const {code, acks, done} = await runChild('before-commit', items, 2, undefined, new Script(ETS2_B).welcome());
+    expect([code === 0, done, acks.map(ack => ack.last)]).toEqual([false, false, [1n, 2n]]);
+    expect(decision()).toEqual({state: 'pending', reason: 'profile-unverified', target: null});
+    expect(members()).toEqual([{trip_ref: 1, logical_ref: 1}, {trip_ref: 2, logical_ref: 2}]);
+    const storage = ok(await openStorage(parentOptions())), input = (items[2] as ResolveItem).input;
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    expect(ok(storage.resolvePendingMemberships(input))).toEqual({status: 'none', resolved: 0, remaining: 0});
+    expect(ok(storage.journalTrips()).trips.map(trip => [trip.tripUuid, trip.outcome])).toEqual([[tripUuidFor(ETS2_A, '1'), 'delivered']]);
+    storage.close();
+    expect(decision()).toEqual(joined);
+  });
+
+  it('terminated through the worker after the resolve committed keeps the join, and a resend after the restart is none', async () => {
+    const items = await prepare();
+    const {code, acks} = await runChild('after-commit', items, 2, undefined, new Script(ETS2_B).welcome());
+    expect([code === 0, acks.map(ack => ack.last)]).toEqual([false, [1n, 2n]]);
+    expect(decision()).toEqual(joined);
+    expect(members()).toEqual([{trip_ref: 1, logical_ref: 1}, {trip_ref: 2, logical_ref: 1}]);
+    const storage = ok(await openStorage(parentOptions()));
+    expect(ok(storage.resolvePendingMemberships((items[2] as ResolveItem).input))).toEqual({status: 'none', resolved: 0, remaining: 0});
+    expect(ok(storage.journalTrips()).trips.map(trip => [trip.tripUuid, trip.outcome])).toEqual([[tripUuidFor(ETS2_A, '1'), 'delivered']]);
+    storage.close();
+    expect(decision()).toEqual(joined);
   });
 });

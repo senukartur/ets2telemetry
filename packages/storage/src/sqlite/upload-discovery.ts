@@ -1,5 +1,6 @@
 import {ruleLossBounds,ruleNativeBounds} from './trailer-baselines';
 import {validCoverage} from './logical-coverage';
+import {decisionState,identityPending} from './identity-pending';
 import type Database from 'better-sqlite3';
 import {fail} from '../errors';
 export type Row=Record<string,unknown>;
@@ -47,7 +48,8 @@ export function resolveBinding(db:Database.Database,root:unknown):Row|undefined 
   if(bound){identityState(db,root,'resolved');return bound;}
   const entry=candidate(db,root);if(!entry)return undefined;
   const owner=reservation(db,entry);
-  const pending=t.proof_json===null&&t.retired===0n&&t.outcome==='open';
+  // The bound check above returned already; a schema-9 pending decision holds the root like an unproven open trip.
+  const pending=identityPending(t,decisionState(db,root),false);
   const state=owner.hold_reason!==null?'held':owner.registration_ref===null?'unbound':pending?'pending':'resolved';
   identityState(db,root,state);
   if(state!=='resolved')return undefined;

@@ -372,11 +372,13 @@ describe('immutable private upload projections through the SQLite worker', () =>
     const b=new Script(ETS2_B),other=await open(client,b);expect(ok(await prepare(client,other)).rootTripUuid).toBe(other);
     await client.close();
   });
-  it('keeps unproven closed self-roots ready without claiming proof, and checkpoint starts unobserved', async () => {
+  it('keeps unproven closed self-roots ready after their session ends', async () => {
     const client=await start(),s=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(s.welcome())}));
     const uuid=attachTripUuidFor(s.session,'1');ok(await client.openAttachedTrip({pluginSessionId:s.session,nextEventSeq:'1',job:job(),effects:[{kind:'trip.open',tripUuid:uuid,game:'ets2',gameMode:mode,
       jobConfiguration:'this-event',recordingCompleteness:'partial',startedUtcMs:1000}]}));
     expect(ok(await prepare(client,uuid)).readiness).toBe('identity-pending');await close(client,s,uuid,'delivered');
+    // ET-112b2b (D9): the closed unproven segment stays identity-pending until a new session of its game ends its process.
+    ok(await client.upsertSession({message:gameShaped(new Script(ETS2_B).welcome())}));
     const pin=ok(await prepare(client,uuid)),result=mapUploadProjection(pin,await pages(client,pin));expect(pin.readiness).toBe('ready');
     expect(result.status).toBe('projected');if(result.status==='projected'){expect(result.summary.snapshot.start).toEqual({utcMs:1000,basis:'checkpoint',eventSeq:null});expect(result.summary.snapshot.evidence.startObserved).toBe(false);}
     await client.close();
@@ -518,6 +520,8 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     sinkOk(await sink.checkpoint(mid));sinkOk(sink.observe(mid,{receivedUtcMs:3000}));
     await feed(r.timersRestart(),'paused');const resent=await feed(r.jobConfigured(),'paused'),root=tripUuidFor(s.session,resent.data.eventSeq);
     await feed(r.started());await feed(r.fined());await feed(r.delivered());
+    // D9: the unproven delivered root stays pending until the next session of the game finalizes it, then it is ready.
+    ok(await client.upsertSession({message:gameShaped(new Script(ETS2_B).welcome())}));
     expect(root).not.toBe(original);const {pin,snapshot}=await projected(client,root);
     expect(pin.totals.members).toBe(1);expect(pin.facts.moneyIncomplete).toBe(false);
     const detail=ok(await client.journalIntervals(root,{limit:100}));expect(JSON.stringify(detail)).toContain('not-merged');
