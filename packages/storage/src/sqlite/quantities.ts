@@ -371,7 +371,8 @@ export type QuantityUpgrade = {status: 'upgraded'} | {status: 'not-eligible'; re
  * engine-1 rows whose members are all closed, with at most `limit` recorded samples, is replayed with engine 1. Its
  * money latch is cleared, then every member's recorded samples run in join order through the live step with their stored
  * truck and link inputs, the head carried in memory; each row has `sample_ref` NULL and starts its run at the sample's
- * own row, and new break bits are annotated as live recording does. The engine becomes 1; the caller revises the group.
+ * own row, and new break bits are annotated as live recording does, except those a member's own engine-1 chain already
+ * annotated at that sample (as spliceMember skips them). The engine becomes 1; the caller revises the group.
  * A group whose samples never reach a complete reading keeps engine 0 and its raw totals: nothing is written. The
  * engine-0 rows stay, so the reconstruction (the same sequence) equals the new head.
  */
@@ -387,9 +388,17 @@ export function upgradeQuantities(db: Database.Database, logical: bigint, limit:
   run(db, 'UPDATE logical_trips SET reconciliation_unknown=0 WHERE id=?', logical);
   let carried: Carried = {headId: null, a: undefined};
   for (const member of members) {
+    // A member recorded in its own engine-1 group before it joined: its own chain annotated each new break bit already.
+    let previousFlags = 0;
     for (const row of recordedSamples(db, member.id as bigint)) {
+      let annotated = 0;
+      if (row.quantity_flags !== null) {
+        const flags = Number(row.quantity_flags);
+        annotated = flags & ~previousFlags & BREAKS;
+        previousFlags = flags;
+      }
       const b = stored(db, row.sample_ref, truckOf(db, row.truck_ref));
-      carried = advanceLedger(db, logical, member, b, row.truck_ref, () => linkedRow(row), {own: row.id, annotated: 0}, member.updated_utc_ms, carried).carried;
+      carried = advanceLedger(db, logical, member, b, row.truck_ref, () => linkedRow(row), {own: row.id, annotated}, member.updated_utc_ms, carried).carried;
     }
   }
   // Nothing was written before the first complete reading, so only the cleared latch is put back.

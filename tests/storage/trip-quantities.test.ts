@@ -586,4 +586,34 @@ describe('ET-112g2 a legacy engine-0 group recalculated with engine 1', () => {
     expectJournal(storage, m.uuid, expected);
     expectLedger(ledger(storage, m.uuid), expected);
   });
+  // B records with engine 1 in its own group until its proof joins it to A's engine-0 group, where nothing is spliced.
+  // A: 1000 to 1060 m on 0.03 L, stopping at its save point. B starts there (the junction continues), drives 20 m on
+  // 10 ml, then after an 8 s hole without the recorder link at 1240 m (both quantities break, hole bits) drives 20 m on
+  // 10 ml more with its joining reading: 80 + 20 = 100 m and 0.04 + 0.01 = 0.05 L, both partial.
+  it('annotates a joined engine-1 member\'s own break once when its engine-0 group is recalculated', async () => {
+    let storage = await ws.open({accountingEngine: 0});
+    const {root, members} = record(storage, [s(0), s(1), s(2), s(3, {speedMps: 0})]);
+    closeMember(storage, members[0]);
+    ok(storage.close());
+    storage = await ws.open();
+    const later = openMember(storage, 'B', 'pre-join', []);
+    const readings = [s(0, {member: 'B', odometerM: 1060, fuelL: 399.97, x: 60, speedMps: 0, linked: false}), s(1, {member: 'B', odometerM: 1080, fuelL: 399.96, x: 80}),
+      s(9, {member: 'B', odometerM: 1240, fuelL: 399.95, x: 240, linked: false}), s(10, {member: 'B', odometerM: 1260, fuelL: 399.94, x: 260})];
+    readings.forEach((reading, index) => {
+      ok(storage.appendSamples(later.script.session, [sampleOf(later, reading, index === readings.length - 1)], {uniqueSeconds: true}));
+      later.previous = reading;
+    });
+    closeMember(storage, later);
+    const engineOne = (annotation: Record<string, unknown>) => annotation.engine === 1;
+    const hole = {annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, distanceFlags: F.distanceHole, fuelFlags: F.fuelHole};
+    const before = ledger(storage, root);
+    expect(before.engine).toBe(0n);
+    // B's own chain annotated its hole when it was recorded (engine 0 annotates its own version 1 breaks).
+    expect(before.annotations.filter(engineOne)).toEqual([hole]);
+    upgrade(root);
+    storage = await ws.open();
+    const after = ledger(storage, root);
+    expectLedger(after, {distanceM: 100, distance: 'partial', fuelUsedL: 0.05, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false});
+    expect(after.annotations.filter(engineOne)).toEqual([hole]);
+  });
 });
