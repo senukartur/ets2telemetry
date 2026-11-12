@@ -9,6 +9,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, Storage, type ResolveMembershipsInput} from '../../packages/storage/src';
 import {StorageClient} from '../../packages/storage/src/client';
 import {openConnection} from '../../packages/storage/src/sqlite/connection';
+import {discoverRevision} from '../../packages/storage/src/sqlite/upload-discovery';
 import type {UploadEnvelope} from '../../packages/storage/src/upload-envelope';
 import {tripUuidFor} from '../../packages/telemetry-core/src';
 import {ETS2_A, ETS2_B, r, Script} from '../shared/trip-messages';
@@ -138,7 +139,7 @@ describe('REG-005/008/012 upload identity of a closed pending segment', () => {
 
 // ET-112f: a segment whose profile proof follows its delivery joins the published root retroactively. The root publishes its
 // next revision under its original source key; the segment never gets a source key of its own.
-describe('REG-004/005/008/012 publication of a segment joined after its delivery', () => {
+describe('REG-005/008/012 publication of a segment joined after its delivery', () => {
   const status = (storage: Storage, registrationId: string) => ok(storage.getUploadStoreStatus({registrationId}));
   const revenue = {available: true, value: {raw: '15000', sdkType: 's64'}};
   it('F1 publishes the root once more under its original key and replays nothing', async () => {
@@ -167,7 +168,9 @@ describe('REG-004/005/008/012 publication of a segment joined after its delivery
       snapshot: {outcome: 'delivered', outcomeEventSeq: '2', revenue}});
     expect(payload(db, first)).toEqual(bytes);
     expect(receipts(db).find(row => (row as {event_ref: string}).event_ref === first)).toEqual(receipt[0]);
-    expect(bindings(db)).toMatchObject([{root_ref: 1n, trip_uuid: root, plugin_session_uuid: ETS2_A, http_revision: 2n, terminal: 1n}]);
+    // A two-member group whose joined member has no binding of its own stays unheld.
+    expect(db.prepare('SELECT member_count FROM logical_trips WHERE id = 1').pluck().get()).toBe(2n);
+    expect(bindings(db)).toMatchObject([{root_ref: 1n, trip_uuid: root, plugin_session_uuid: ETS2_A, http_revision: 2n, terminal: 1n, held: 0n, hold_reason: null}]);
     const sent = envelopes(db);
     expect(sent).toHaveLength(2);
     expect(sent.filter(envelope => envelope.type === 'trip.completed' && envelope.snapshot.revenue.available)).toHaveLength(1);
@@ -212,8 +215,9 @@ describe('REG-004/005/008/012 publication of a segment joined after its delivery
 
 // ET-112f F3, test-only state: live recording never joins a segment that already has its own source binding (separate/published,
 // M17 above), so the SQL below writes the membership statements of a retroactive join; a history repair could leave this state.
-describe('REG-005/008/010/012 a root whose group holds a separately published member', () => {
-  it.each([true, false])('holds the root without a second credit or new bytes (root bound %s)', async rootBound => {
+describe('REG-005/008/012 a root whose group holds a separately published member', () => {
+  /** Root T in session A (published as revision 1 when bound), and segment U of session B published on its own as revision 1. */
+  async function separatelyPublished(rootBound: boolean) {
     const {storage, db, registrationId} = await history(), a = new Script(ETS2_A), b = new Script(ETS2_B);
     const root = rootBound ? restarted(storage, a) : opening(storage, a, false);
     const first = rootBound ? await publish(storage, root, registrationId, '1', 1000) : undefined;
@@ -223,17 +227,29 @@ describe('REG-005/008/010/012 a root whose group holds a separately published me
     const second = await publish(storage, segment, registrationId, '1', 3000);
     expect(wire(db, second)).toMatchObject({revision: 1, type: 'trip.completed', source: {tripId: segment, pluginSessionId: ETS2_B},
       snapshot: {outcome: 'delivered', revenue: {available: true, value: {raw: '15000', sdkType: 's64'}}}});
-    const published = [...(first ? [first] : []), second], bytes = published.map(id => payload(db, id)), receipted = receipts(db);
+    const published = [...(first ? [first] : []), second];
+    return {storage, db, registrationId, root, segment, published, bytes: published.map(id => payload(db, id)), receipted: receipts(db)};
+  }
+  /** The test-only merge: U becomes the second member of T's group, as a retroactive join would write it. */
+  function merge(db: Database.Database, rootBound: boolean): void {
     db.prepare('UPDATE logical_memberships SET logical_ref = 1, previous_logical_ref = 2, joined_after_revision = (SELECT coalesce(max(id), 0) FROM logical_revisions) WHERE trip_ref = 2').run();
     db.prepare('UPDATE logical_trips SET retired = 1 WHERE id = 2').run();
     db.prepare(`UPDATE logical_trips SET latest_trip_ref = 2, member_count = 2${rootBound ? ', retired = 1' : ''} WHERE id = 1`).run();
-    expect(begin(storage, root, registrationId)).toMatchObject({status: 'held', reason: 'reconciliation-required'});
+  }
+  /** Root 1 is held: its binding when bound, otherwise its reservation, which then gets no binding. */
+  function expectRootHeld(storage: Storage, db: Database.Database, registrationId: string, rootBound: boolean): void {
     if (rootBound) expect(db.prepare('SELECT held, hold_reason FROM upload_source_bindings WHERE root_ref = 1').get()).toEqual({held: 1n, hold_reason: 'reconciliation-required'});
     else {
       expect(db.prepare('SELECT hold_reason, identity_state FROM upload_reservations WHERE candidate_ref = 1').get()).toEqual({hold_reason: 'reconciliation-required', identity_state: 'held'});
       expect(db.prepare('SELECT count(*) FROM upload_source_bindings WHERE root_ref = 1').pluck().get()).toBe(0n);
     }
     expect(ok(storage.getUploadStoreStatus({registrationId})).heldSources).toBe(1);
+  }
+  it.each([true, false])('holds the root without a second credit or new bytes (root bound %s)', async rootBound => {
+    const {storage, db, registrationId, root, segment, published, bytes, receipted} = await separatelyPublished(rootBound);
+    merge(db, rootBound);
+    expect(begin(storage, root, registrationId)).toMatchObject({status: 'held', reason: 'reconciliation-required'});
+    expectRootHeld(storage, db, registrationId, rootBound);
     // Work for the member's raw UUID resolves to the held root as well; the member's own binding is held only when the
     // member itself is next resolved (its redirect in resolveBinding), which no step here does.
     expect(begin(storage, segment, registrationId)).toMatchObject({status: 'held', reason: 'reconciliation-required'});
@@ -241,6 +257,26 @@ describe('REG-005/008/010/012 a root whose group holds a separately published me
     expect(envelopes(db)).toHaveLength(published.length);
     expect(published.map(id => payload(db, id))).toEqual(bytes);
     expect(receipts(db)).toEqual(receipted);
+  });
+  it('refuses to freeze root work completed before its joined member got a source binding of its own', async () => {
+    const {storage, db, registrationId} = await history(), a = new Script(ETS2_A), b = new Script(ETS2_B), root = restarted(storage, a);
+    const first = await publish(storage, root, registrationId, '1', 1000), bytes = payload(db, first), segment = deliveredPending(storage, b);
+    expect(ok(storage.resolvePendingMemberships(resolveInput(b)))).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    const workId = await uploadTestWork(storage, {tripUuid: root, registrationId});
+    // Test-only: a binding of the joined member's own, made after the root's work was folded (unpublished, HTTP revision 0).
+    db.prepare(`INSERT INTO upload_source_bindings(root_ref, registration_ref, run_ref, mode, game, plugin_session_uuid, trip_uuid) VALUES (2, ?, ?, 'live', 'ets2', ?, ?)`)
+      .run(registrationId, db.prepare('SELECT active_run FROM upload_connection WHERE id = 1').pluck().get(), ETS2_B, segment);
+    expect(ok(storage.freezeUploadMaterialization({workId, producerVersion: 'test', createdUtcMs: 5000, contractMinor: 1}))).toMatchObject({status: 'held', reason: 'reconciliation-required'});
+    expectRootHeld(storage, db, registrationId, true);
+    expect(envelopes(db)).toHaveLength(1);
+    expect(payload(db, first)).toEqual(bytes);
+  });
+  it.each([true, false])('holds the root on its next discovered revision, before any upload work (root bound %s)', async rootBound => {
+    const {storage, db, registrationId} = await separatelyPublished(rootBound);
+    merge(db, rootBound);
+    const revision = db.prepare('SELECT revision_ref FROM upload_change_heads WHERE root_ref = 1').pluck().get();
+    db.transaction(() => discoverRevision(db, 1n, revision))();
+    expectRootHeld(storage, db, registrationId, rootBound);
   });
 });
 
