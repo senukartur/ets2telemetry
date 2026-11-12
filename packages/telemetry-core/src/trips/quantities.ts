@@ -2,7 +2,7 @@
 // ledger anchor and the next stored sample, plus the retained run path for a save rollback. Storage records the result
 // in logical_progress (schema 10: logical_trips.accounting_engine, logical_progress.quantity_flags); reconstruction folds
 // stored samples through the same function with memoryPath(). A break never zeroes a quantity: the subtotal carries and
-// a flag bit makes it partial. Only an unproven rollback or truck order makes a quantity unavailable; see docs/trips.md.
+// a flag bit makes it partial. Only an unproven rollback or truck order makes a quantity unavailable; see docs/storage.md, Schema version 10.
 import {FUEL_NOISE_LITERS} from '../derived';
 import {READING_HOLE_SECONDS} from './accounting';
 import {gameDistanceStep} from './game-distance';
