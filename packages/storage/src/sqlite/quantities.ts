@@ -10,7 +10,7 @@ import {advanceQuantities, completeAnchor, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAG
 import {JOURNAL_DISTANCE_BREAKS, JOURNAL_DISTANCE_QUALITY, JOURNAL_FUEL_BREAKS, JOURNAL_FUEL_QUALITY, type JournalAccounting, type JournalQuantityStatus} from '../../../contracts/src/journal';
 import {MAX_RESOLVE_MEMBERSHIPS, MAX_SAMPLE_BATCH, type SampleInput} from '../api';
 import {registeredAccountingEngine} from './connection';
-import {cleanLoadWindow, COVERAGE_LOSS, type LogicalCoverage} from './logical-coverage';
+import {cleanLoadWindow, COVERAGE_LOSS, pausedReconnect, type LogicalCoverage} from './logical-coverage';
 
 type Row = Record<string, unknown>;
 const F = QUANTITY_FLAGS, CUMULATIVE = 0x3fff, BREAKS = DISTANCE_BREAK_FLAGS | FUEL_BREAK_FLAGS, GAP = F.distanceGap | F.fuelBoundary;
@@ -261,12 +261,13 @@ export function spliceMember(db: Database.Database, target: bigint, member: Row,
 
 /**
  * Engine 1 (docs/trips.md): the junction of a pending member decides its resume. The same save point with an admitted
- * proof and a clean load window resumes the coverage; any other junction records an unknown loss. Undefined when this
- * coverage is not pending for the member or `savePoint` is not a junction's.
+ * proof and either a clean load window or a paused reconnect within the plugin session (pausedReconnect) resumes the
+ * coverage; any other junction records an unknown loss. Undefined when this coverage is not pending for the member or
+ * `savePoint` is not a junction's.
  */
 export function junctionCoverage(db: Database.Database, row: Row, coverage: LogicalCoverage | undefined, savePoint: boolean | null, proof: boolean): LogicalCoverage | undefined {
   if (savePoint === null || coverage?.phase !== 'pending' || coverage.member !== String(row.id) || coverage.window?.session !== String(row.plugin_session_ref)) return undefined;
-  return savePoint && proof && cleanLoadWindow(db, row) ? {...coverage, phase: 'resumed', window: null, sampleResumePending: false}
+  return savePoint && proof && (cleanLoadWindow(db, row) || pausedReconnect(db, row) !== null) ? {...coverage, phase: 'resumed', window: null, sampleResumePending: false}
     : {...coverage, sampleResumePending: false, losses: coverage.losses | COVERAGE_LOSS.unknown};
 }
 

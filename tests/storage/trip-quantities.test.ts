@@ -2,16 +2,19 @@
 // of tests/shared/quantity-scenarios.ts recorded through the storage API, live and equal to the read-only reconstruction,
 // across live joins at the opening event, joins after pre-join samples (the splice) and retroactive joins. Origin:
 // synthetic; every expected value is written by hand in the corpus or below. ET-112g2 adds a legacy engine-0 group
-// recalculated with engine 1 (upgradeQuantities) whose rollback must read engine-1 rows only.
+// recalculated with engine 1 (upgradeQuantities) whose rollback must read engine-1 rows only. ET-112j (REG-002) adds the
+// paused within-session reconnect, whose junction at the same save point keeps the recording coverage.
 import {randomUUID} from 'node:crypto';
 import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {MAX_SAMPLE_BATCH, type SampleInput, type Storage} from '../../packages/storage/src';
+import {MAX_SAMPLE_BATCH, type SampleInput, type Storage, type TripEffect} from '../../packages/storage/src';
+import {pausedReconnect} from '../../packages/storage/src/sqlite/logical-coverage';
 import {revise} from '../../packages/storage/src/sqlite/logical-trips';
 import {reconstructQuantities, SPLICE_SAMPLE_LIMIT, upgradeQuantities} from '../../packages/storage/src/sqlite/quantities';
 import {mapUploadProjection, UPLOAD_PAGE_KINDS, type UploadProjectionPage} from '../../packages/storage/src/upload-projection';
-import {QUANTITY_FLAGS, tripUuidFor, type ProfileObservation, type QuantityPoint} from '../../packages/telemetry-core/src';
+import {attachTripUuidFor, QUANTITY_FLAGS, tripUuidFor, type ProfileObservation, type QuantityPoint} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail} from '../../packages/contracts/src/journal';
+import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import {CLOCK_A, CLOCK_B, INCIDENT_QUANTITIES, incidentReadings, QUANTITY_SCENARIOS, s, type QuantityEvent, type QuantityExpectation, type QuantityFlagName,
   type QuantityReading} from '../shared/quantity-scenarios';
 import {ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, r, Script} from '../shared/trip-messages';
@@ -615,5 +618,158 @@ describe('ET-112g2 a legacy engine-0 group recalculated with engine 1', () => {
     const after = ledger(storage, root);
     expectLedger(after, {distanceM: 100, distance: 'partial', fuelUsedL: 0.05, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false});
     expect(after.annotations.filter(engineOne)).toEqual([hole]);
+  });
+});
+
+describe('REG-002/003 ET-112j paused within-session reconnect', () => {
+  /**
+   * One plugin session: A opens after a start and drives 1000 to 1060 m on 0.03 L, stopping there. The game pauses and
+   * re-sends the same job, the truck and the trailer, and a timer reset closes A without an outcome. The consumer
+   * reconnects, and the checkpoint's late-attach recording B opens at nextEventSeq N with the reducer's late-attach and
+   * not-merged continuation intervals; the event at N starts the simulation. B's first reading is the junction at A's
+   * save point, then B drives 20 m on 10 ml and is delivered. Each option flips one condition of the paused reconnect.
+   */
+  interface Reconnect {
+    /** `attach`: proof at the attach and every B reading; `pre-join`: proof from B's second reading; `retro`: none, resolved after delivery. */
+    join: 'attach' | 'pre-join' | 'retro';
+    /**
+     * The window after A's readings: as described; `gap` loses the truck re-send with a session-level event-loss interval
+     * and keeps A open for the timer reset, so only the lost event differs; `no-pause` has a fine instead of the pause;
+     * `started` and `fined` add that event after the job re-send; `closed-early` moves the timer reset that closes A
+     * before the pause; `gap-row` stores a gap marker without effects over the truck re-send, whose event still arrives.
+     */
+    window: 'clean' | 'gap' | 'no-pause' | 'started' | 'fined' | 'closed-early' | 'gap-row';
+    /** A's close reason at the timer reset. */
+    closeReason: 'discontinuity' | 'gap';
+    /** The event at N. */
+    atNext: 'started' | 'fined';
+    junction: Partial<QuantityReading>; following: Partial<QuantityReading>;
+    /** The checkpoint job has another deadline: another job key, so the reducer adds no continuation interval. */
+    deadline: boolean;
+    junctionProof: boolean;
+    /** The game restarted: B attaches in a new plugin session with the restart close and continuation. */
+    newSession: boolean;
+    accountingEngine?: 0;
+  }
+  const base: Reconnect = {join: 'attach', window: 'clean', closeReason: 'discontinuity', atNext: 'started', junction: {}, following: {}, deadline: false, junctionProof: true, newSession: false};
+  const paused = {simulation: 'paused'} as const;
+  async function reconnect(options: Partial<Reconnect> = {}) {
+    const v = {...base, ...options};
+    pausedOpen = true;
+    const storage = await ws.open(v.accountingEngine === undefined ? {} : {accountingEngine: v.accountingEngine}), a = openMember(storage, 'A', 'root', []);
+    for (const reading of [s(0), s(1), s(2), s(3, {speedMps: 0})]) { ok(storage.appendSamples(a.script.session, [sampleOf(a, reading, true)], {uniqueSeconds: true})); a.previous = reading; }
+    const event = (record: EventRecord, advanceMs = 1_000) =>
+      ok(storage.commitEvent({message: a.script.event(record, v.window === 'no-pause' ? {advanceMs} : {...paused, advanceMs})}));
+    const close = {kind: 'trip.close', tripUuid: a.uuid, outcome: 'none', closeReason: v.closeReason, recordingCompleteness: 'partial', endedUtcMs: 2000} as const;
+    // The first event follows A's last reading at 13 s on the shared capture clock.
+    if (v.window === 'closed-early') ok(storage.commitEvent({message: a.script.event(r.timersRestart(), {advanceMs: 12_000}), effects: [close]}));
+    event(v.window === 'no-pause' ? r.fined() : r.paused(), v.window === 'closed-early' ? 1_000 : 12_000);
+    event(r.jobConfigured());
+    if (v.window === 'started') ok(storage.commitEvent({message: a.script.event(r.started())}));
+    if (v.window === 'fined') event(r.fined());
+    if (v.window === 'gap') {
+      const gap = a.script.gap(1), {firstEventSeq, lastEventSeq} = gap.data;
+      ok(storage.commitGap({message: gap, effects: [{kind: 'completeness.add', interval: {tripUuid: null, kind: 'event-loss', firstEventSeq, lastEventSeq,
+        detail: {cause: 'gap', causes: {...gap.data.causes}, firstEventSeq, lastEventSeq, redelivered: false}}}]}));
+    } else if (v.window === 'gap-row') {
+      const truck = a.script.event(r.truckConfigured(), {...paused, advanceMs: 1_000}), seq = BigInt(truck.data.eventSeq);
+      ok(storage.commitGap({message: a.script.gapRange(seq, seq, {queueCount: '1'})}));
+      ok(storage.commitEvent({message: truck}));
+    } else event(r.truckConfigured());
+    event(r.trailerConfigured());
+    let script = a.script;
+    const effects: TripEffect[] = [];
+    if (v.newSession) {
+      script = new Script(ETS2_B);
+      ok(storage.upsertSession({message: script.welcome()}));
+      effects.push({...close, closeReason: 'restart'});
+    } else if (v.window !== 'closed-early') ok(storage.commitEvent({message: a.script.event(r.timersRestart(), paused), effects: [close]}));
+    const next = script.next.toString(), uuid = attachTripUuidFor(script.session, next), at = {source: 'checkpoint', nextEventSeq: next};
+    const checkpointJob = v.deadline ? job({deliveryDeadline: {available: true, value: '13060', unit: 'min'}}) : job();
+    effects.push({kind: 'trip.open', tripUuid: uuid, game: 'ets2', gameMode: mode, jobConfiguration: 'this-event', recordingCompleteness: 'partial', startedUtcMs: 2000},
+      {kind: 'completeness.add', interval: {tripUuid: uuid, kind: 'not-connected', detail: {cause: 'late-attach', ...at}}});
+    if (!v.deadline) effects.push({kind: 'completeness.add', interval: {tripUuid: uuid, kind: 'discontinuity',
+      detail: {cause: v.newSession ? 'restart' : 'discontinuity', continuationOf: a.uuid, decision: 'not-merged', ...at}}});
+    expect(ok(storage.openAttachedTrip({pluginSessionId: script.session, nextEventSeq: next, job: checkpointJob, effects,
+      ...(v.join === 'attach' ? {profile: proof(script), sourceClockId: script.clockId, monotonicNs: ns(9)} : {})}))).toEqual({status: 'committed'});
+    ok(storage.commitEvent({message: script.event(v.atNext === 'started' ? r.started() : r.fined(), v.atNext === 'started' ? {} : paused)}));
+    const b: Member = {member: 'B', script, uuid, join: 'open', events: [], at: 0n};
+    [s(11, {member: 'B', odometerM: 1060, fuelL: 399.97, x: 60, speedMps: 0, linked: false, ...v.junction}), s(12, {member: 'B', odometerM: 1080, fuelL: 399.96, x: 80, ...v.following})]
+      .forEach((reading, index) => {
+        const sample = sampleOf(b, reading, v.join === 'attach' ? index > 0 || v.junctionProof : v.join === 'pre-join' && index > 0);
+        ok(storage.appendSamples(script.session, [{...sample, recording: {...sample.recording!, job: checkpointJob}}], {uniqueSeconds: true}));
+        b.previous = reading;
+      });
+    deliver(storage, b);
+    if (v.join === 'retro') expect(resolveAt(storage, b, 100)).toEqual({status: 'resolved', resolved: 1, remaining: 0});
+    // B joined A's group: one Journal trip.
+    expect(ok(storage.journalTrips()).trips.map(trip => trip.tripUuid)).toEqual([a.uuid]);
+    return {storage, root: a.uuid, attached: uuid, next, completeness: ok(storage.journalTrip(a.uuid)).trip.recordingCompleteness};
+  }
+  /** Closes `storage` and evaluates pausedReconnect for the attached recording, with and without the start at N. */
+  function probe(storage: Storage, attached: string) {
+    ok(storage.close());
+    const db = new Database(ws.database, {readonly: true});
+    try {
+      db.defaultSafeIntegers(true);
+      const row = db.prepare('SELECT * FROM trips WHERE trip_uuid=?').get(attached) as Record<string, unknown>;
+      return [pausedReconnect(db, row), pausedReconnect(db, row, false)];
+    } finally { db.close(); }
+  }
+  // A's 60 m and 0.03 L continue at the save point, then B adds 20 m and 10 ml.
+  const same: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'complete', flags: [], cut: false};
+  // B's junction 1 m ahead of the save point: a forward gap; A's totals carry and B adds its 20 m and 10 ml.
+  const gapped: QuantityExpectation = {distanceM: 80, distance: 'partial', fuelUsedL: 0.04, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+  // B's junction 25 ml of fuel away: no fuel is credited across it, and fuel carries with the boundary bit.
+  const boundary: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'partial', flags: ['fuelBoundary'], cut: false};
+  it.each([
+    ['a join at the attach', {}],
+    ['a pre-join splice whose proof follows the junction reading', {join: 'pre-join'}]
+  ] as const)('keeps the coverage complete: %s', async (_name, options) => {
+    const {storage, root, attached, next, completeness} = await reconnect(options);
+    expect(completeness).toBe('complete');
+    expectJournal(storage, root, same);
+    expectLedger(ledger(storage, root), same);
+    // The control of the isolated conditions below: both checks find the reconnect.
+    expect(probe(await ws.open(), attached)).toEqual([{continuationOf: root, nextEventSeq: next}, {continuationOf: root, nextEventSeq: next}]);
+  });
+  it.each([
+    ['an event lost in the window', {window: 'gap'}, same],
+    ['no pause in the window', {window: 'no-pause'}, same],
+    ['a simulation start inside the window', {window: 'started'}, same],
+    ['another event type inside the window', {window: 'fined'}, same],
+    ['an event at nextEventSeq that is not a start', {atNext: 'fined'}, same],
+    ['a junction 1 m ahead of the save point', {junction: {odometerM: 1061, x: 61}, following: {odometerM: 1081, x: 81}}, gapped],
+    ['a junction 25 ml of fuel away', {junction: {fuelL: 399.945}, following: {fuelL: 399.935}}, boundary],
+    ['the same continuation job with another deadline', {deadline: true}, same],
+    ['a junction reading without proof', {junctionProof: false}, same],
+    ['a retroactive join after the delivery (E6)', {join: 'retro'}, same],
+    ['an attach in a new plugin session after a game restart', {newSession: true}, same]
+  ] as const)('records the loss as before: %s', async (_name, options, expected) => {
+    const {storage, root, completeness} = await reconnect(options);
+    expect(completeness).toBe('partial');
+    expectJournal(storage, root, expected);
+    expectLedger(ledger(storage, root), expected);
+  });
+  // Each case differs from the clean control above in one fact that pausedReconnect checks and adds no loss interval,
+  // so the partial coverage comes from that check alone: both forms of the check reject the reconnect.
+  it.each([
+    ['A closed for a gap rather than as a discontinuity', {closeReason: 'gap'}],
+    ['A closed by the timer reset before the pause', {window: 'closed-early'}],
+    ['a fine inside the window, which adds no loss interval', {window: 'fined'}],
+    ['a stored gap marker over the window without a loss interval, its event stored later', {window: 'gap-row'}]
+  ] as const)('records the loss when one reconnect condition fails: %s', async (_name, options) => {
+    const {storage, root, attached, completeness} = await reconnect(options);
+    expect(completeness).toBe('partial');
+    expectJournal(storage, root, same);
+    expectLedger(ledger(storage, root), same);
+    const db = new Database(ws.database, {readonly: true});
+    try {
+      expect(db.prepare("SELECT count(*) FROM completeness_intervals WHERE kind IN ('event-loss','sample-loss','restore-loss')").pluck().get()).toBe(0);
+    } finally { db.close(); }
+    expect(probe(await ws.open(), attached)).toEqual([null, null]);
+  });
+  it('records the loss as before in an engine-0 group', async () => {
+    expect((await reconnect({accountingEngine: 0})).completeness).toBe('partial');
   });
 });

@@ -660,6 +660,19 @@ describe('late-attach trips (J9, J22, ET-016 PR-7)', () => {
       [attachStep, [close(trip, 'none', 'restart', 'partial', at(7)), open(next, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(next, '1'),
         cause(next, 'discontinuity', {cause: 'restart', continuationOf: trip, decision: 'not-merged', source: 'checkpoint', nextEventSeq: '1'})]]]);
   });
+  it('ET-112j: a timer reset inside a pause closes the trip; the paused reconnect attaches the same job as a not-merged continuation at nextEventSeq [synthetic-inference]', () => {
+    const s = new Script(ETS2_A), {rows, trip} = acceptedJob(s), next = attachUuid(ETS2_A, '13');
+    const state = play([...rows, [s.event(r.paused(), paused)],
+      // The same-key re-send of the open job, then the truck and trailer re-sends, change nothing.
+      [s.event(r.jobConfigured(), paused)], [s.event(r.truckConfigured(), paused)], [s.event(r.trailerConfigured(), paused)],
+      // The trip was not opened at a load, so the timer reset closes it without an outcome (T7).
+      [s.event(r.timersRestart(), paused), [close(trip, 'none', 'discontinuity', 'partial', at(12))]],
+      [{kind: 'disconnected'}], [sessionInput(s.welcome(), '12')], [{kind: 'checkpoint', message: s.checkpoint(job(), 0, {simulation: 'paused'})}],
+      [attachStep, [open(next, BASE_UTC, {gameMode: CHECKPOINT_MODE, recordingCompleteness: 'partial'}), lateAttach(next, '13'),
+        cause(next, 'discontinuity', {cause: 'discontinuity', continuationOf: trip, decision: 'not-merged', source: 'checkpoint', nextEventSeq: '13'})]],
+      [s.event(r.started())], [s.event(r.fined()), [attr(next, 'trip')]]]);
+    expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', current: {tripUuid: next, recordingCompleteness: 'partial'}});
+  });
   it('has no truck or trailer reference until they are configured again; a paused checkpoint keeps the load window (J22, TD-007, T12) [synthetic-inference]', () => {
     const s = new Script(ETS2_A), a = attachUuid(ETS2_A, '3');
     // The session already knows its truck (1) and trailer (2), but the late-attach trip references neither.
