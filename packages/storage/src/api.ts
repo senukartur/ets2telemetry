@@ -3,6 +3,7 @@ import type {ProfileObservation} from '../../telemetry-core/src/trips/continuati
 // Typed storage commands, results, errors and trip effects. Node-safe: no native SQLite, Electron or filesystem
 // access, so the Node-safe test suite and a future worker client can import it. See docs/storage.md.
 import type {Available, GameMode, JobConfiguration, Uint64} from '../../contracts/src/protocol-v1';
+import type {JournalQuantityStatus} from '../../contracts/src/journal';
 
 export type {Uint64};
 /** Private full checkpoint evidence; no public preload or native protocol change. */
@@ -187,11 +188,14 @@ export interface ResolveMembershipsResult {status: 'none' | 'resolved'; resolved
 /**
  * History repair (ET-112g): the user-visible values of one logical root, read from its Journal detail. `sources` counts its
  * raw recordings; `deliveredDistanceM` and `revenue` come from its delivery record; `upload` is its source binding and
- * reservation hold state.
+ * reservation hold state. `accounting`, present only for an engine-1 root, is the status of its distance and fuel.
  */
 export interface RepairSummary {
   outcome: TripOutcome; recordingCompleteness: RecordingCompleteness; sources: number;
   distanceM: Available<number>; fuelUsedL: Available<number>;
+  accounting?: {distance: JournalQuantityStatus; fuel: JournalQuantityStatus};
+  /** The Journal's money totals are marked incomplete (an unresolved rollback, or a cut on the engine-1 path). */
+  moneyIncomplete: boolean;
   deliveredDistanceM: Available<number> | null; revenue: Available<{raw: string; sdkType: string}> | null;
   hardMode: {passingChecks: number; failingChecks: number; unknownChecks: number; qualified: boolean} | null;
   upload: {bound: boolean; held: boolean; holdReason: string | null; identity: string | null};
@@ -203,6 +207,24 @@ export interface RepairJoinAction {
   fingerprint: string;
   before: {segment: RepairSummary; target: RepairSummary};
   after: RepairSummary;
+}
+/**
+ * ET-112g2: one engine-1 recalculation of a legacy engine-0 root's distance and fuel from its recorded samples, planned
+ * after the joins. `logicalTripUuid` is the root's public trip UUID; the fingerprint covers the same rows as a join's.
+ */
+export interface RepairQuantitiesAction {
+  kind: 'quantities'; logicalTripUuid: string; fingerprint: string;
+  before: RepairSummary; after: RepairSummary;
+}
+export type RepairAction = RepairJoinAction | RepairQuantitiesAction;
+/**
+ * A legacy engine-0 root the dry run does not recalculate: `excluded` by `--exclude`, an `open-member`, more recorded
+ * samples than one upgrade replays (`too-large`), no complete reading (`no-truck-evidence`), a recalculation that
+ * would leave the shown distance, fuel and money completeness `unchanged`, or engine-1 rows already in the group
+ * (`not-engine-0`). An `--exclude` UUID that names no legacy engine-0 root is listed as `unknown-exclude`.
+ */
+export interface RepairQuantityListing {
+  logicalTripUuid: string; reason: 'excluded' | 'open-member' | 'too-large' | 'no-truck-evidence' | 'unchanged' | 'not-engine-0' | 'unknown-exclude';
 }
 /**
  * A segment the dry run reports without an action: `needs-attestation` (a candidate that needs the owner's evidence),
@@ -217,23 +239,27 @@ export const REPAIR_PLAN_FORMAT = 'ets2telemetry-history-repair-1';
 /** The dry run's plan file. `confirmation` is the first 8 hex digits of the SHA-256 of the canonical `actions`. */
 export interface RepairPlan {
   format: typeof REPAIR_PLAN_FORMAT; databaseUuid: string; schemaVersion: number; createdUtcMs: number; appVersion: string;
-  attested: string[]; actions: RepairJoinAction[]; listings: RepairListing[]; confirmation: string;
+  attested: string[]; excluded: string[]; actions: RepairAction[]; listings: RepairListing[]; quantityListings: RepairQuantityListing[]; confirmation: string;
 }
 /**
  * The outcome of one planned action in its own transaction: `applied`; `already-applied` (the segment is already a member
- * of the target, nothing written); `stale` (a fingerprinted row changed since the dry run); `differs` (the result is not
- * the planned after-values, rolled back); `refused` (the rules no longer allow the join, such as a bound segment).
+ * of the target, or the root already on engine 1; nothing written); `stale` (a fingerprinted row changed since the dry
+ * run); `differs` (the result is not the planned after-values, rolled back); `refused` (the rules no longer allow the
+ * action, such as a bound segment or a root that gained an open member).
  */
 export type RepairActionStatus = 'applied' | 'already-applied' | 'stale' | 'differs' | 'refused';
 export interface RepairActionResult {status: RepairActionStatus; after: RepairSummary | null}
-/** The candidates and the joins the dry run applied to its scratch copy, in order. */
-export interface RepairScan {actions: RepairJoinAction[]; listings: RepairListing[]}
-/** In-process test hooks of the history repair; `beforeCommit` runs inside each action's transaction after its join. */
-export interface RepairOptions {testHooks?: {beforeCommit?: () => void}}
-/** The result file written beside the pre-repair backup. */
+/** The candidates, the joins and the recalculations the dry run applied to its scratch copy, in order. */
+export interface RepairScan {actions: RepairAction[]; listings: RepairListing[]; quantityListings: RepairQuantityListing[]}
+/**
+ * In-process test hooks and bounds of the history repair: `beforeCommit` runs inside each action's transaction after its
+ * change; `quantitySampleLimit` replaces the upgrade's sample bound (UPGRADE_SAMPLE_LIMIT).
+ */
+export interface RepairOptions {testHooks?: {beforeCommit?: () => void}; quantitySampleLimit?: number}
+/** The result file written beside the pre-repair backup: a join by its trips, a recalculation by its root. */
 export interface RepairResult {
   format: 'ets2telemetry-history-repair-result-1'; databaseUuid: string; backupFileName: string; confirmation: string; completedUtcMs: number;
-  actions: {segmentTripUuid: string; targetTripUuid: string; status: RepairActionStatus}[];
+  actions: ({segmentTripUuid: string; targetTripUuid: string; status: RepairActionStatus} | {logicalTripUuid: string; status: RepairActionStatus})[];
 }
 /** A history repair refusal that is not a storage failure; `message` is fixed text. */
 export interface RepairRefusal {

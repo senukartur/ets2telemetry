@@ -1,5 +1,6 @@
 // ET-112g (REG-014): the history repair tool's arguments, confirmation code and text report. Node-safe: the storage
-// orchestration itself is covered by tests/storage/history-repair.test.ts. Every expected value is written by hand.
+// orchestration itself is covered by tests/storage/history-repair.test.ts. Every expected value is written by hand. ET-112g2
+// adds --exclude, the recalculation actions and their report.
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {describe, expect, it} from 'vitest';
@@ -19,7 +20,9 @@ describe('REG-014 history repair arguments', () => {
   it('parses each command with explicit absolute paths', () => {
     expect(parseArguments(['copy', '--from', at('a.sqlite'), '--to', at('b.sqlite')], CHECKOUT)).toEqual({command: 'copy', from: at('a.sqlite'), to: at('b.sqlite')});
     expect(parseArguments(['dry-run', '--database', at('a.sqlite'), '--attest', S, '--out', at('plan.json'), '--attest', S, '--attest', T], CHECKOUT))
-      .toEqual({command: 'dry-run', database: at('a.sqlite'), out: at('plan.json'), attest: [S, T]});
+      .toEqual({command: 'dry-run', database: at('a.sqlite'), out: at('plan.json'), attest: [S, T], exclude: []});
+    expect(parseArguments(['dry-run', '--database', at('a.sqlite'), '--out', at('plan.json'), '--exclude', T, '--exclude', T, '--exclude', S], CHECKOUT))
+      .toEqual({command: 'dry-run', database: at('a.sqlite'), out: at('plan.json'), attest: [], exclude: [T, S]});
     expect(parseArguments(['apply', '--database', at('a.sqlite'), '--plan', at('plan.json'), '--confirm', '0123abcd', '--working-history', '--backups', at('kept')], CHECKOUT))
       .toEqual({command: 'apply', database: at('a.sqlite'), plan: at('plan.json'), confirm: '0123abcd', workingHistory: true, backups: at('kept')});
     expect(parseArguments(['apply', '--database', at('a.sqlite'), '--plan', at('plan.json'), '--confirm', '0123abcd'], CHECKOUT)).toMatchObject({workingHistory: false});
@@ -68,6 +71,10 @@ describe('REG-014 history repair arguments', () => {
     refused(['dry-run', '--database', 'a.sqlite', '--out', 'plan.json', '--attest', '10000000'], /full lowercase trip UUID/);
     refused(['dry-run', '--database', 'a.sqlite', '--out', 'plan.json', '--attest', 'ABCDEF00-0000-4000-8000-00000000000A'], /full lowercase trip UUID/);
   });
+  it('refuses an --exclude value that is not a full lowercase trip UUID, and --exclude outside dry-run', () => {
+    refused(['dry-run', '--database', 'a.sqlite', '--out', 'plan.json', '--exclude', 'a9946860'], /--exclude needs a full lowercase trip UUID/);
+    refused(['apply', '--database', 'a.sqlite', '--plan', 'plan.json', '--confirm', '0123abcd', '--exclude', T], /^Usage:/);
+  });
   it('refuses an unknown command, an option of another command, a repeated path and a missing value', () => {
     refused(['restore', '--from', 'a.sqlite'], /^Usage:/);
     refused(['copy', '--from', 'a.sqlite', '--to', 'b.sqlite', '--attest', S], /^Usage:/);
@@ -79,7 +86,7 @@ describe('REG-014 history repair arguments', () => {
 
 const summary = (overrides: Partial<RepairSummary> = {}): RepairSummary => ({outcome: 'delivered', recordingCompleteness: 'partial', sources: 3,
   distanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}, deliveredDistanceM: {available: true, value: 187342.01049804688},
-  revenue: {available: true, value: {raw: '9978', sdkType: 's64'}}, hardMode: {passingChecks: 178, failingChecks: 0, unknownChecks: 74, qualified: true},
+  revenue: {available: true, value: {raw: '9978', sdkType: 's64'}}, moneyIncomplete: false, hardMode: {passingChecks: 178, failingChecks: 0, unknownChecks: 74, qualified: true},
   upload: {bound: false, held: false, holdReason: null, identity: 'resolved'}, ...overrides});
 
 describe('REG-014 history repair plan', () => {
@@ -98,7 +105,7 @@ describe('REG-014 history repair plan', () => {
           hardMode: {passingChecks: 178, failingChecks: 0, unknownChecks: 0, qualified: false}, upload: {bound: true, held: false, holdReason: null, identity: 'resolved'}})},
       after: summary({upload: {bound: true, held: true, holdReason: 'reconciliation-required', identity: 'resolved'}})}];
     return {format: 'ets2telemetry-history-repair-1', databaseUuid: 'f0000000-0000-4000-8000-000000000009', schemaVersion: 10, createdUtcMs: 1, appVersion: 'test', attested: [S],
-      actions, listings: [{segmentTripUuid: '10000000-0000-4000-8000-000000000006', targetTripUuid: '10000000-0000-4000-8000-000000000004', state: 'needs-attestation', reason: null},
+      excluded: [], quantityListings: [], actions, listings: [{segmentTripUuid: '10000000-0000-4000-8000-000000000006', targetTripUuid: '10000000-0000-4000-8000-000000000004', state: 'needs-attestation', reason: null},
         {segmentTripUuid: '10000000-0000-4000-8000-000000000007', targetTripUuid: null, state: 'not-eligible', reason: 'intervening-trip'}],
       confirmation: repairConfirmationCode(actions)};
   };
@@ -135,6 +142,62 @@ describe('REG-014 history repair plan', () => {
       completedUtcMs: 2, actions: [{segmentTripUuid: S, targetTripUuid: T, status: 'already-applied'}]})).toEqual([
       'Database f0000000-0000-4000-8000-000000000009, pre-repair backup repair-f0000000-v10-20261112T120000000Z.sqlite',
       `  ${S} -> ${T}: already-applied`
+    ]);
+  });
+  // ET-112g2: the recalculations, the roots left on engine 0, a flagged downgrade, a cleared money latch and an unknown --exclude.
+  const Q = '10000000-0000-4000-8000-000000000008', E = '10000000-0000-4000-8000-000000000009', O = '10000000-0000-4000-8000-00000000000a';
+  const X = '10000000-0000-4000-8000-0000000000ee';
+  const recalculated = (): RepairPlan => {
+    const actions: RepairPlan['actions'] = [
+      {kind: 'quantities', logicalTripUuid: T, fingerprint: F, before: summary(), after: summary({distanceM: {available: true, value: 180}, fuelUsedL: {available: true, value: 0.09},
+        accounting: {distance: 'complete', fuel: 'complete'}})},
+      {kind: 'quantities', logicalTripUuid: Q, fingerprint: F, before: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.03}, moneyIncomplete: true}),
+        after: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.02}, accounting: {distance: 'complete', fuel: 'partial'}})}];
+    return {...plan(), attested: [], excluded: [E], actions, listings: [], quantityListings: [{logicalTripUuid: E, reason: 'excluded'}, {logicalTripUuid: O, reason: 'open-member'},
+      {logicalTripUuid: X, reason: 'unknown-exclude'}],
+      confirmation: repairConfirmationCode(actions)};
+  };
+  it('accepts a plan with recalculations and refuses one without its quantity listings or with a recalculation that names no trip', () => {
+    const p = recalculated(), text = JSON.stringify(p);
+    expect(parseRepairPlan(text)).toEqual(p);
+    expect(() => checkConfirmation(text, p.confirmation)).not.toThrow();
+    expect(parseRepairPlan(JSON.stringify({...p, quantityListings: undefined}))).toBeUndefined();
+    expect(parseRepairPlan(JSON.stringify({...p, actions: [{...p.actions[0], logicalTripUuid: 'a9946860'}]}))).toBeUndefined();
+  });
+  it('reports each recalculation with its before and after values, flags a downgrade and lists the roots left on engine 0', () => {
+    const p = recalculated(), delivery = 'game distance 187342.01049804688 m, revenue 9978 (s64)', rest = `${delivery}, Hard Mode 178/0/74 qualified, upload unbound, identity resolved`;
+    expect(planLines(p)).toEqual([
+      'Database f0000000-0000-4000-8000-000000000009, schema 10',
+      'Joins to apply: 0',
+      'Distance and fuel recalculations to apply (skip one with --exclude <trip uuid>): 2',
+      `  ${T}`,
+      `    before: delivered, recording partial, 3 recordings, distance not-observed, fuel not-observed, ${rest}`,
+      `    after:  delivered, recording partial, 3 recordings, distance 180 m (complete), fuel 0.09 L (complete), ${rest}`,
+      `  ${Q}`,
+      `    before: delivered, recording partial, 3 recordings, distance 60 m, fuel 0.03 L, ${delivery}, money totals incomplete, Hard Mode 178/0/74 qualified, upload unbound, identity resolved`,
+      `    after:  delivered, recording partial, 3 recordings, distance 60 m (complete), fuel 0.02 L (partial), ${rest}`,
+      '    DOWNGRADE: fuel becomes partial',
+      'Legacy trips whose distance and fuel stay as recorded: 3',
+      `  ${E} (excluded)`,
+      `  ${O} (a recording is still open)`,
+      `  ${X} (--exclude names no legacy trip)`,
+      `Confirmation code: ${p.confirmation}`
+    ]);
+    expect(resultLines({format: 'ets2telemetry-history-repair-result-1', databaseUuid: p.databaseUuid, backupFileName: 'repair-f0000000-v10-20261112T120000000Z.sqlite', confirmation: p.confirmation,
+      completedUtcMs: 2, actions: [{segmentTripUuid: S, targetTripUuid: T, status: 'applied'}, {logicalTripUuid: T, status: 'stale'}]})).toEqual([
+      'Database f0000000-0000-4000-8000-000000000009, pre-repair backup repair-f0000000-v10-20261112T120000000Z.sqlite',
+      `  ${S} -> ${T}: applied`,
+      `  ${T} distance and fuel: stale`
+    ]);
+  });
+  it('flags money totals that a recalculation turns incomplete as a downgrade', () => {
+    const actions: RepairPlan['actions'] = [{kind: 'quantities', logicalTripUuid: T, fingerprint: F, before: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.03}}),
+      after: summary({distanceM: {available: true, value: 60}, fuelUsedL: {available: true, value: 0.03}, accounting: {distance: 'complete', fuel: 'complete'}, moneyIncomplete: true})}];
+    const lines = planLines({...plan(), attested: [], actions, listings: [], confirmation: repairConfirmationCode(actions)});
+    expect(lines.slice(lines.indexOf(`  ${T}`) + 2, lines.indexOf(`  ${T}`) + 4)).toEqual([
+      '    after:  delivered, recording partial, 3 recordings, distance 60 m (complete), fuel 0.03 L (complete), game distance 187342.01049804688 m, revenue 9978 (s64), '
+        + 'money totals incomplete, Hard Mode 178/0/74 qualified, upload unbound, identity resolved',
+      '    DOWNGRADE: money totals become incomplete'
     ]);
   });
 });

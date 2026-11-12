@@ -31,7 +31,7 @@ async function main(): Promise<void> {
     return;
   }
   if (args.command === 'dry-run') {
-    const result = await dryRunHistoryRepair({database: args.database, out: args.out, attest: args.attest, appVersion: APP_VERSION});
+    const result = await dryRunHistoryRepair({database: args.database, out: args.out, attest: args.attest, exclude: args.exclude, appVersion: APP_VERSION});
     if (!result.ok) failure(result);
     for (const line of planLines(result.value)) console.log(line);
     console.log(`Plan written to ${args.out}. The input database was not changed.`);

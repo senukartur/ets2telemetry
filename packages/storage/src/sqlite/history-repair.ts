@@ -1,18 +1,19 @@
 // History repair (ET-112g, docs/storage.md "History repair"): the owner-attested join of a closed, proof-less singleton
-// segment into the root of its earlier recordings. The candidate scan, the facts and fingerprint of one join, the root
-// summary and the join action, each in one write transaction on the verified writer connection. The orchestration in
+// segment into the root of its earlier recordings, and (g2) the engine-1 recalculation of a legacy root's distance and
+// fuel. The scans, the facts and fingerprint of one action, the root summary and the actions, each in one write
+// transaction on the verified writer connection. The orchestration in
 // ../history-repair.ts runs it on a scratch copy (dry run) or, after a verified backup, on the database itself.
 import {createHash} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {decideRepairJoin, type RepairJoinDecision} from '../../../telemetry-core/src/trips/membership';
-import type {RepairActionResult, RepairJoinAction, RepairListing, RepairOptions, RepairScan, RepairSummary} from '../api';
+import type {RepairAction, RepairActionResult, RepairJoinAction, RepairListing, RepairOptions, RepairQuantitiesAction, RepairQuantityListing, RepairScan, RepairSummary} from '../api';
 import {fail} from '../errors';
 import {canonicalJson} from '../history-repair-plan';
 import type {StorageConnection} from './connection';
 import {rootBound} from './identity-pending';
 import {journalTrip} from './journal';
-import {closedCandidates, decisionsEnabled, encodeRow, joinClosedMember, type LogicalRow} from './logical-trips';
-import {startReplayBudget} from './quantities';
+import {closedCandidates, decisionsEnabled, encodeRow, joinClosedMember, revise, type LogicalRow} from './logical-trips';
+import {quantitiesEnabled, startReplayBudget, upgradeQuantities, type QuantityUpgrade} from './quantities';
 
 const SCAN_PAGE = 100;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -61,9 +62,13 @@ export function repairSummary(conn: StorageConnection, tripUuid: string): Repair
   const root = get(db, 'SELECT m.logical_ref AS root FROM trips t JOIN logical_memberships m ON m.trip_ref = t.id WHERE t.trip_uuid = ?', tripUuid)?.root;
   const binding = get(db, 'SELECT held, hold_reason FROM upload_source_bindings WHERE root_ref = ?', root);
   const reservation = get(db, 'SELECT r.hold_reason, r.identity_state FROM upload_reservations r JOIN upload_candidates c ON c.ordinal = r.candidate_ref WHERE c.trip_ref = ?', root);
+  const accounting = detail.trip.accounting;
   return {
     outcome: detail.trip.outcome, recordingCompleteness: detail.trip.recordingCompleteness, sources: detail.exportBounds.sourceTotal ?? 1,
     distanceM: available(detail.trip.observedDistanceM), fuelUsedL: available(detail.trip.fuelUsedL),
+    // Absent rather than undefined for an engine-0 root, so the plan file's JSON compares equal after a round trip.
+    ...(accounting ? {accounting: {distance: accounting.distance.status, fuel: accounting.fuel.status}} : {}),
+    moneyIncomplete: detail.money.incomplete,
     deliveredDistanceM: delivered ? available(delivered.distance) : null,
     revenue: delivered ? (delivered.revenue.available ? {available: true, value: {raw: delivered.revenue.value.raw, sdkType: delivered.revenue.value.sdkType}} : {available: false, reason: delivered.revenue.reason}) : null,
     hardMode: audit?.version === 2 ? {passingChecks: audit.passingChecks, failingChecks: audit.failingChecks, unknownChecks: audit.unknownChecks, qualified: detail.trip.isHardMode} : null,
@@ -109,9 +114,54 @@ function joinTransaction(conn: StorageConnection, segmentUuid: string, targetUui
   return result;
 }
 
-/** Applies one planned join of a repair plan; see joinTransaction. */
-export function applyRepairAction(conn: StorageConnection, action: RepairJoinAction, options?: RepairOptions): RepairActionResult {
-  if (action?.kind !== 'join' || !UUID.test(action.segmentTripUuid) || !UUID.test(action.targetTripUuid) || !/^[0-9a-f]{64}$/.test(action.fingerprint)) fail('INVALID_INPUT');
+/**
+ * The same shown distance and fuel (the same state and reason, and values within a micrometre or a microlitre) and the
+ * same money completeness, which the recalculation's cleared latch can change.
+ */
+const sameQuantities = (a: RepairSummary, b: RepairSummary) => a.moneyIncomplete === b.moneyIncomplete && [[a.distanceM, b.distanceM], [a.fuelUsedL, b.fuelUsedL]].every(([x, y]) =>
+  x.available ? y.available && Math.abs(x.value - y.value) <= 1e-6 : !y.available && x.reason === y.reason);
+type QuantitiesResult = RepairActionResult & {fingerprint?: string; before?: RepairSummary; reason?: Extract<QuantityUpgrade, {status: 'not-eligible'}>['reason'] | 'unchanged'};
+/**
+ * ET-112g2: one engine-1 recalculation of the legacy root `logicalUuid` in one BEGIN IMMEDIATE transaction, which first
+ * starts the replay budget. In order: a root already on engine 1 (upgraded before, or native) is `already-applied` and
+ * never written; a fingerprint other than the planned one is `stale`; upgradeQuantities must still allow it (`refused`
+ * otherwise, such as a root that gained an open member); the replay and the root's revision; the after-summary must
+ * equal the planned one (`differs`, rolled back). Without `planned` (the dry run) a recalculation that leaves the shown
+ * distance, fuel and money completeness unchanged is rolled back as `unchanged`, so it publishes no needless correction.
+ */
+function quantitiesTransaction(conn: StorageConnection, logicalUuid: string, planned: {fingerprint: string; after: RepairSummary} | undefined, options?: RepairOptions): QuantitiesResult {
+  const db = conn.writer();
+  let result: QuantitiesResult = {status: 'stale', after: null};
+  try {
+    db.transaction(() => {
+      startReplayBudget(db);
+      const group = get(db, 'SELECT l.* FROM logical_trips l JOIN logical_memberships m ON m.trip_ref = l.id WHERE l.trip_uuid = ? AND m.logical_ref = l.id', logicalUuid);
+      if (!group || !quantitiesEnabled(db)) return;
+      if (group.accounting_engine === 1n) { result = {status: 'already-applied', after: null}; return; }
+      const id = group.id as bigint, fingerprint = repairFingerprint(db, id, id);
+      if (planned && fingerprint !== planned.fingerprint) return;
+      const before = repairSummary(conn, logicalUuid), upgrade = upgradeQuantities(db, id, options?.quantitySampleLimit);
+      if (upgrade.status !== 'upgraded') { result = {status: 'refused', after: null, reason: upgrade.reason}; throw ROLLBACK; }
+      revise(db, id);
+      options?.testHooks?.beforeCommit?.();
+      const after = repairSummary(conn, logicalUuid);
+      if (!planned && sameQuantities(before, after)) { result = {status: 'refused', after: null, reason: 'unchanged'}; throw ROLLBACK; }
+      if (planned && canonicalJson(after) !== canonicalJson(planned.after)) { result = {status: 'differs', after}; throw ROLLBACK; }
+      result = {status: 'applied', after, fingerprint, before};
+    }).immediate();
+  } catch (error) { if (error !== ROLLBACK) throw error; }
+  return result;
+}
+
+/** Applies one planned action of a repair plan; see joinTransaction and quantitiesTransaction. */
+export function applyRepairAction(conn: StorageConnection, action: RepairAction, options?: RepairOptions): RepairActionResult {
+  if (typeof action?.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(action.fingerprint)) fail('INVALID_INPUT');
+  if (action.kind === 'quantities') {
+    if (!UUID.test(action.logicalTripUuid)) fail('INVALID_INPUT');
+    const {status, after} = quantitiesTransaction(conn, action.logicalTripUuid, {fingerprint: action.fingerprint, after: action.after}, options);
+    return {status, after};
+  }
+  if (action.kind !== 'join' || !UUID.test(action.segmentTripUuid) || !UUID.test(action.targetTripUuid)) fail('INVALID_INPUT');
   const {status, after} = joinTransaction(conn, action.segmentTripUuid, action.targetTripUuid, {fingerprint: action.fingerprint, after: action.after}, options);
   return {status, after};
 }
@@ -119,12 +169,16 @@ export function applyRepairAction(conn: StorageConnection, action: RepairJoinAct
 /**
  * The dry run on a scratch copy: scans the closed, proof-less singleton segments in id order, 100 per page, and applies
  * every attested join the rules allow at once, each in its own transaction, so a later segment sees the earlier joins.
- * Unattested candidates, published segments, pending segments and attested segments that cannot join are listed. Never
- * call it on a database that is not a disposable copy.
+ * Unattested candidates, published segments, pending segments and attested segments that cannot join are listed. Then
+ * (g2) every legacy engine-0 root is recalculated in id order, 100 per page, each in its own transaction, except the
+ * roots `exclude` names by their trip UUID; the roots left on engine 0 are listed with their reason, and so is an
+ * `exclude` UUID that names no such root (`unknown-exclude`). Never call it on a
+ * database that is not a disposable copy.
  */
-export function planRepair(conn: StorageConnection, attest: readonly string[], options?: RepairOptions): RepairScan {
-  if (!Array.isArray(attest) || attest.some(uuid => typeof uuid !== 'string' || !UUID.test(uuid))) fail('INVALID_INPUT');
-  const db = conn.writer(), attested = new Set<string>(attest), seen = new Set<string>(), actions: RepairJoinAction[] = [], listings: RepairListing[] = [];
+export function planRepair(conn: StorageConnection, attest: readonly string[], options?: RepairOptions & {exclude?: readonly string[]}): RepairScan {
+  const uuids = (values: unknown) => Array.isArray(values) && values.every(uuid => typeof uuid === 'string' && UUID.test(uuid));
+  if (!uuids(attest) || !uuids(options?.exclude ?? [])) fail('INVALID_INPUT');
+  const db = conn.writer(), attested = new Set<string>(attest), seen = new Set<string>(), actions: RepairAction[] = [], listings: RepairListing[] = [];
   const uuidOf = (id: unknown) => String(get(db, 'SELECT trip_uuid FROM trips WHERE id = ?', id)!.trip_uuid);
   for (let after = 0n; ;) {
     const page = db.prepare(`SELECT t.* FROM trips t JOIN logical_memberships m ON m.trip_ref = t.id JOIN logical_trips l ON l.id = t.id
@@ -155,5 +209,28 @@ export function planRepair(conn: StorageConnection, attest: readonly string[], o
     else if (row.logical_ref !== row.id && row.previous_logical_ref === row.id) listings.push({segmentTripUuid: uuid, targetTripUuid: uuidOf(row.logical_ref), state: 'already-joined', reason: null});
     else listings.push({segmentTripUuid: uuid, targetTripUuid: null, state: 'not-eligible', reason: 'not-a-closed-singleton'});
   }
-  return {actions, listings};
+  return {actions, listings, quantityListings: planQuantities(conn, new Set(options?.exclude ?? []), actions, options)};
+}
+
+/** The g2 part of planRepair, after the joins: recalculates each legacy root and returns the roots it leaves on engine 0. */
+function planQuantities(conn: StorageConnection, excluded: ReadonlySet<string>, actions: RepairAction[], options?: RepairOptions): RepairQuantityListing[] {
+  const db = conn.writer(), listings: RepairQuantityListing[] = [], matched = new Set<string>();
+  const unknown = () => [...excluded].filter(uuid => !matched.has(uuid)).map((uuid): RepairQuantityListing => ({logicalTripUuid: uuid, reason: 'unknown-exclude'}));
+  if (!quantitiesEnabled(db)) return unknown();
+  for (let after = 0n; ;) {
+    const page = db.prepare(`SELECT l.id, l.trip_uuid FROM logical_trips l JOIN logical_memberships m ON m.trip_ref = l.id
+      WHERE l.id > ? AND m.logical_ref = l.id AND l.accounting_engine = 0 ORDER BY l.id LIMIT ?`).all(after, SCAN_PAGE) as LogicalRow[];
+    for (const row of page) {
+      const uuid = String(row.trip_uuid);
+      if (excluded.has(uuid)) { matched.add(uuid); listings.push({logicalTripUuid: uuid, reason: 'excluded'}); continue; }
+      const upgraded = quantitiesTransaction(conn, uuid, undefined, options);
+      if (upgraded.status === 'applied') {
+        const action: RepairQuantitiesAction = {kind: 'quantities', logicalTripUuid: uuid, fingerprint: upgraded.fingerprint!, before: upgraded.before!, after: upgraded.after!};
+        actions.push(action);
+      } else if (upgraded.reason) listings.push({logicalTripUuid: uuid, reason: upgraded.reason});
+    }
+    if (page.length < SCAN_PAGE) break;
+    after = page.at(-1)!.id as bigint;
+  }
+  return [...listings, ...unknown()];
 }

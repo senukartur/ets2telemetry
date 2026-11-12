@@ -24,11 +24,14 @@ export function parseRepairPlan(text: string): RepairPlan | undefined {
   let plan: unknown;
   try { plan = JSON.parse(text); } catch { return undefined; }
   if (!object(plan) || plan.format !== REPAIR_PLAN_FORMAT || typeof plan.databaseUuid !== 'string' || !UUID.test(plan.databaseUuid) || typeof plan.confirmation !== 'string'
-    || !/^[0-9a-f]{8}$/.test(plan.confirmation) || !Array.isArray(plan.actions) || !Array.isArray(plan.listings) || !Array.isArray(plan.attested)) return undefined;
-  const valid = plan.actions.every(action => object(action) && action.kind === 'join' && typeof action.segmentTripUuid === 'string' && UUID.test(action.segmentTripUuid)
-    && typeof action.targetTripUuid === 'string' && UUID.test(action.targetTripUuid) && typeof action.fingerprint === 'string' && /^[0-9a-f]{64}$/.test(action.fingerprint)
-    && object(action.after) && object(action.before));
-  const attested = plan.attested.every(uuid => typeof uuid === 'string' && UUID.test(uuid))
-    && plan.actions.every(action => (plan.attested as unknown[]).includes((action as {segmentTripUuid: unknown}).segmentTripUuid));
-  return valid && attested ? plan as unknown as RepairPlan : undefined;
+    || !/^[0-9a-f]{8}$/.test(plan.confirmation) || !Array.isArray(plan.actions) || !Array.isArray(plan.listings) || !Array.isArray(plan.attested)
+    || !Array.isArray(plan.excluded) || !Array.isArray(plan.quantityListings)) return undefined;
+  const uuid = (value: unknown) => typeof value === 'string' && UUID.test(value);
+  const attested = plan.attested as unknown[];
+  // A join needs its segment attested; a recalculation has no segment and needs no attestation.
+  const valid = attested.every(uuid) && plan.actions.every(action => object(action) && typeof action.fingerprint === 'string' && /^[0-9a-f]{64}$/.test(action.fingerprint)
+    && object(action.after) && object(action.before)
+    && (action.kind === 'join' ? uuid(action.segmentTripUuid) && uuid(action.targetTripUuid) && attested.includes(action.segmentTripUuid)
+      : action.kind === 'quantities' && uuid(action.logicalTripUuid)));
+  return valid ? plan as unknown as RepairPlan : undefined;
 }
