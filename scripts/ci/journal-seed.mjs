@@ -43,7 +43,9 @@ async function main() {
     if (!result.ok) throw new Error(`JOURNAL_SEED_FAILED ${what}: ${result.error.code}`);
     return result.value;
   };
-  const opened = await openStorage({path: database, purpose: 'synthetic', backupsDirectory: path.join(path.dirname(database), 'backups'), appVersion: '0.1.0'});
+  // The anchors set their totals through trip.update and the logical trip checks a save rollback, both legacy engine-0
+  // accounting, so this synthetic seed pins its groups to engine 0 (ET-112c).
+  const opened = await openStorage({path: database, purpose: 'synthetic', backupsDirectory: path.join(path.dirname(database), 'backups'), appVersion: '0.1.0', accountingEngine: 0});
   let storage = check(opened, 'open');
   try {
     // A new recording fixture crosses a real database close/reopen, then restores a supported distance prefix.
@@ -62,7 +64,7 @@ async function main() {
     const before=new Script('10000000-0000-4000-8000-000000006301'),logicalUuid=logicalOpen(before);
     check(storage.appendSamples(before.session,samples(before,logicalUuid,[1000000,1000050,1000100]),{uniqueSeconds:true}),'logical prefix');
     check(storage.commitEvent({message:before.event(r.timersRestart()),effects:[{kind:'trip.close',tripUuid:logicalUuid,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:BASE_UTC+3000}]}),'logical restart');
-    check(storage.close(),'logical close');storage=check(await openStorage({path:database,purpose:'synthetic',backupsDirectory:path.join(path.dirname(database),'backups'),appVersion:'0.1.0'}),'logical reopen');
+    check(storage.close(),'logical close');storage=check(await openStorage({path:database,purpose:'synthetic',backupsDirectory:path.join(path.dirname(database),'backups'),appVersion:'0.1.0',accountingEngine:0}),'logical reopen');
     const next=new Script('10000000-0000-4000-8000-000000006302'),suffix=logicalOpen(next);
     check(storage.appendSamples(next.session,samples(next,suffix,[1000060,1000100]),{uniqueSeconds:true}),'logical restored suffix');
     await seedJournalAnchors(storage);

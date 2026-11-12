@@ -13,6 +13,7 @@ import {jobValues} from './journal';
 import {advanceHardMode, hardModeLoss, emptyHardModeCounts, qualifiesHardMode} from '../../../telemetry-core/src/hard-mode';
 import {readHardModeDetails} from './hard-mode';
 import {rootBound} from './identity-pending';
+import {applyQuantities, chargeRetroactiveSplice, defaultEngine, junctionCoverage, projectQuantitySample, quantitiesEnabled, spliceMember} from './quantities';
 
 export type LogicalRow = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
@@ -52,6 +53,7 @@ function createGroup(db: Database.Database, row: LogicalRow): void {
   const created = db.prepare('INSERT OR IGNORE INTO logical_trips(id, trip_uuid, latest_trip_ref, game) VALUES (?, ?, ?, ?)').run(row.id, row.trip_uuid, row.id, row.game).changes;
   db.prepare('INSERT OR IGNORE INTO logical_memberships(trip_ref, logical_ref, decision_key) VALUES (?, ?, ?)').run(row.id, row.id, `open-v1:${String(row.trip_uuid)}`);
   if (created && decisionsEnabled(db)) pendingDecision(db, row);
+  if (created && quantitiesEnabled(db)) db.prepare('UPDATE logical_trips SET accounting_engine = ? WHERE id = ?').run(defaultEngine(db), row.id);
   if (created) revise(db, row.id as bigint, originalCoverage(db, row));
 }
 /** Private proof is source-qualified and bounded. Events older than this boundary cannot borrow it. */
@@ -137,6 +139,7 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   }
   db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), row.id);
   db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?,canonical_constraints=? WHERE id = ?').run(proof.scope,decision.fingerprint,JSON.stringify(decision.state === 'joined' ? combined : learned ?? recorded ?? known),id);
+  if (decision.state === 'joined') pendingCoverage = junctionCoverage(db, row, pendingCoverage, spliceMember(db, id, row), true) ?? pendingCoverage;
   if (pendingCoverage) revise(db, id, pendingCoverage);
   if (decisions) recordDecision(db, row.id, decision.state, decision.reason, decision.state === 'joined' ? id : null);
   return id;
@@ -205,6 +208,7 @@ export function resolveClosed(db: Database.Database, tripRef: bigint, proof: Pro
   // The terminal of S ends the continued trip as it would have live; another close leaves the target unresolved.
   if (row.outcome === 'delivered' || row.outcome === 'cancelled') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 0 WHERE id = ?').run(targetId);
   else if (row.close_reason === 'different-job') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 1 WHERE id = ?').run(targetId);
+  spliceMember(db, targetId, row, true);
   const prior = latestCoverage(db, targetId).value;
   revise(db, id);
   // S's quantities were recorded outside the target's accounting chain: the target stays partial with no endpoint.
@@ -223,7 +227,11 @@ export function resolvePendingInSession(db: Database.Database, sessionRef: bigin
   const args: unknown[] = before === undefined ? [sessionRef] : [sessionRef, before];
   const refs = db.prepare(`SELECT trip_ref FROM logical_membership_decisions ${where} ORDER BY trip_ref LIMIT ?`).pluck().all(...args, limit) as bigint[];
   let resolved = 0;
-  for (const ref of refs) if (resolveClosed(db, ref, proof) !== 'skipped') resolved++;
+  // Engine 1: the write transaction's replay budget defers the rest; they stay pending for a later transaction.
+  for (const ref of refs) {
+    if (!chargeRetroactiveSplice(db, ref)) break;
+    if (resolveClosed(db, ref, proof) !== 'skipped') resolved++;
+  }
   const remaining = Number(db.prepare(`SELECT count(*) FROM logical_membership_decisions ${where}`).pluck().get(...args));
   return {resolved, remaining};
 }
@@ -281,6 +289,7 @@ export function projectionRow(db: Database.Database, id: bigint, includeProgress
     row.outcome = 'open'; row.close_reason = null; row.ended_utc_ms = null; row.closed_by_session_ref = null; row.closed_by_event_seq = null;
   }
   if (group.progress_head !== null && includeProgress) applyProgress(db,row,group.progress_head);
+  else if(group.accounting_engine===1n){row.observed_distance_m=null;row.observed_distance_m_state='not-observed';row.fuel_used_l=null;row.fuel_used_l_state='not-observed';}
   else if(group.progress_head!==null || Number(group.member_count)>1){
     if(!row._rawDistance){row.observed_distance_m=null;row.observed_distance_m_state='not-observed';}
     if(!row._rawFuel){row.fuel_used_l=null;row.fuel_used_l_state='not-observed';}
@@ -340,6 +349,11 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   let truckRef:unknown=null;
   if(sample.recording.truck!==null){db.prepare('INSERT OR IGNORE INTO logical_trucks(identity_key) VALUES(?)').run(sample.recording.truck);truckRef=get(db,'SELECT id FROM logical_trucks WHERE identity_key=?',sample.recording.truck)!.id;}
   const group = get(db, 'SELECT * FROM logical_trips WHERE id = ?', id)!;
+  if (group.accounting_engine === 1n) {
+    const decided = junctionCoverage(db, row, latestCoverage(db, id).value, projectQuantitySample(db, id, row, sample, sampleId, truckRef, now), proof !== undefined);
+    if (decided) revise(db, id, decided);
+    return;
+  }
   const head = group.progress_head === null ? undefined : get(db, 'SELECT * FROM logical_progress WHERE id = ?', group.progress_head);
   const coverage = latestCoverage(db,id).value, predecessor = sample.recording.previous, endpoint = coverage?.endpoint;
   const captured = coverage?.phase !== 'pending' && endpoint?.trip === String(row.id) && predecessor?.tripUuid === sample.tripUuid
@@ -550,6 +564,7 @@ function retainedEndpoint(db: Database.Database, id: bigint, head: unknown, curr
 export function projectEndpoint(db: Database.Database, id: bigint, row: LogicalRow, source: {pluginSessionId: string}, clock: string, ns: string, input: CapturedEndpoint, profile: ProfileObservation): void {
   if (!validCapturedEndpoint(input)) fail('INVALID_INPUT');
   const group = get(db, 'SELECT * FROM logical_trips WHERE id=?', id)!, prior = latestCoverage(db,id), coverage = prior.value;
+  if (group.accounting_engine === 1n) return;
   if (!coverage || group.latest_trip_ref !== row.id) return;
   const anchor: ProgressAnchor = {pluginSessionId:source.pluginSessionId,sourceClockId:clock,monotonicNs:ns,truck:input.truck,odometerM:input.odometerM,
     fuelL:input.fuelL,speedMps:input.speedMps,gameClockId:input.gameClockId,gameMinutes:input.gameMinutes,position:input.position};
@@ -631,6 +646,8 @@ export function progressCheckpoint(db:Database.Database,row:LogicalRow):Progress
     odometerM:sample.odometer_m===null?null:Number(sample.odometer_m),fuelL:sample.fuel_l===null?null:Number(sample.fuel_l)},distanceM:available(row.distance_m),fuelUsedL:available(row.fuel_used_l)};
 }
 export function applyProgress(db:Database.Database,row:LogicalRow,head:unknown):LogicalRow {
+  const quantities = applyQuantities(db,row,head);
+  if (quantities) return quantities;
   const point = head === null ? null : get(db,'SELECT * FROM logical_progress WHERE id=?',head)!, sampled = point ? progressCheckpoint(db,point) : null;
   const c = validCoverage(row._coverage) ? row._coverage : undefined, endpoint = c?.phase !== 'pending' ? c?.endpoint : null;
   const boundary = endpoint && endpoint.trip === c?.member && (!point || String(point.trip_ref)!==endpoint.trip || sampled?.anchor.pluginSessionId===endpoint.anchor.pluginSessionId

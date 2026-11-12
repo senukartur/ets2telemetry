@@ -11,7 +11,7 @@ import {encodeUploadEnvelope,uploadDigest,type UploadEnvelope} from '../../packa
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS} from '../../packages/storage/src/upload-sync';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
 import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core/src';
-import {ETS2_A,job,r,Script,trailer} from '../shared/trip-messages';
+import {ETS2_A,ETS2_B,job,r,Script,trailer} from '../shared/trip-messages';
 import {failed,ok,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
 import {storageWorker,terminateWorkers} from './recording-helpers';
 let ws:Awaited<ReturnType<typeof workspace>>,opened:Storage[]=[];
@@ -313,7 +313,8 @@ it.each([false,true])('REG-005/008/011 classifies each material version independ
 });
 
 it('REG-004/005/010 allocates first terminal revision 1 and a later terminal correction without reopening',async()=>{
-  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
+  // The correction comes from a trip.update total, the raw-total selection of legacy engine 0 (ET-112c).
+  const conn=await openConnection(ws.options({purpose:'history',accountingEngine:0})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
   ok(storage.commitEvent({message:game(source.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'complete',endedUtcMs:2000}]}));
   let workId=await complete(storage,source),frozen=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:2000}));expect(frozen.status).toBe('frozen');ok(storage.releaseUploadMaterialization({workId}));
   const wire=(id:string|null)=>JSON.parse(Buffer.from(db.prepare('SELECT payload FROM upload_envelopes WHERE event_id=?').pluck().get(id) as Uint8Array).toString()) as UploadEnvelope;
@@ -412,7 +413,8 @@ it.each(['authentication','validation'] as const)('REG-005/010/011/012 records a
 
 
 it('TEL-034 does not starve a proven baseline-backed OPEN preparation or freeze on ordinary native/counter progress',async()=>{
-  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
+  // The counter progress is a trip.update total, the raw-total selection of legacy engine 0 (ET-112c).
+  const conn=await openConnection(ws.options({purpose:'history',accountingEngine:0})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
   // Seed cursor filler atomically; the progress commits between materialization advances remain independent.
   db.transaction(()=>{
     for(let i=0;i<180;i++)ok(storage.commitEvent({message:game(source.s.event(r.paused()))}));
@@ -523,4 +525,34 @@ it('preserves minor 0 payloads and emits minor 1 envelopes with hardModeResult w
     await ws0.dispose();
   }
 });
-
+// ET-112c: an engine-1 root's frozen upload keeps its bytes. The retroactive join of a later segment revises the root, so
+// it is the next material change, and the upload materialized after it carries the spliced head's accounting state. A
+// drives 40 m on 20 ml and stops; B's first reading is its junction, then B drives 20 m on 10 ml: 60 m either way.
+it.each([['a forward gap',1_000_100,true],['the same save point',1_000_040,false]] as const)('REG-005/010 engine 1 shows a retroactive splice at %s in the next upload',async(_name,odometer,unavailable)=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer(),b=new Script(ETS2_B),second=tripUuidFor(ETS2_B,'1');
+  const absent={available:false,reason:'not-observed'} as const;
+  const point=(s:Script,uuid:string,at:number,odo:number,fuel:number,speed:number,withProof:boolean):SampleInput=>({tripUuid:uuid,utcMs:1000+at*1000,sourceClockId:s.clockId,
+    monotonicNs:String(BigInt(at)*1_000_000_000n),gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},speed:{available:true,value:speed},
+    fuel:{available:true,value:fuel},averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:{available:true,value:{x:odo-1_000_000,y:0,z:0}},
+    odometer:{available:true,value:odo},recording:{...(withProof?{profile:proof(s)}:{}),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
+      ...(at>1?{previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:String(BigInt(at-1)*1_000_000_000n)}}:{})}});
+  const payload=(id:string|null)=>db.prepare('SELECT payload FROM upload_envelopes WHERE event_id=?').pluck().get(id) as Uint8Array;
+  const wire=(id:string|null)=>JSON.parse(Buffer.from(payload(id)).toString()) as UploadEnvelope;
+  ok(storage.appendSamples(source.s.session,[point(source.s,source.tripUuid,1,1_000_000,100,20,true),point(source.s,source.tripUuid,2,1_000_020,99.99,20,true),
+    point(source.s,source.tripUuid,3,1_000_040,99.98,0,true)],{uniqueSeconds:true}));
+  ok(storage.commitEvent({message:game(source.s.event(r.timersRestart())),effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'none',closeReason:'restart',recordingCompleteness:'partial',endedUtcMs:2000}]}));
+  let workId=await complete(storage,source);const before=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:2000}));expect(before.status).toBe('frozen');
+  ok(storage.releaseUploadMaterialization({workId}));const bytes=new Uint8Array(payload(before.eventId));
+  expect(wire(before.eventId).snapshot.evidence.reasons).not.toContain('accounting-unavailable');
+  ok(storage.upsertSession({message:game(b.welcome())}));
+  ok(storage.commitEvent({message:game(b.event(r.jobConfigured())),effects:[{kind:'trip.open',tripUuid:second,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:3000}]}));
+  ok(storage.appendSamples(b.session,[point(b,second,1,odometer,99.98,0,false),point(b,second,2,odometer+20,99.97,20,false)],{uniqueSeconds:true}));
+  ok(storage.commitEvent({message:game(b.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:second,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'partial',endedUtcMs:4000}]}));
+  expect(ok(storage.resolvePendingMemberships({pluginSessionId:b.session,nextEventSeq:b.next.toString(),profile:{...proof(b),afterMonotonicNs:'3000000000'},sourceClockId:b.clockId,
+    monotonicNs:'3000000000'}))).toEqual({status:'resolved',resolved:1,remaining:0});
+  workId=await complete(storage,source);const after=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:5000}));expect(after.status).toBe('frozen');
+  expect(new Uint8Array(payload(before.eventId))).toEqual(bytes);
+  const snapshot=wire(after.eventId).snapshot;
+  expect(snapshot.observedDistance).toEqual({available:true,value:60,unit:'m'});
+  expect(snapshot.evidence.reasons.includes('accounting-unavailable')).toBe(unavailable);
+});

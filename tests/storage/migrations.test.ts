@@ -7,7 +7,7 @@ import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS as CURRENT_MIGRATIONS, openStorage, type Migration} from '../../packages/storage/src/index';
 import {SCHEMA_V1} from '../../packages/storage/src/sqlite/schema-v1';
 import {SCHEMA_V2} from '../../packages/storage/src/sqlite/schema-v2';
-import {tripUuidFor} from '../../packages/telemetry-core/src';
+import {QUANTITY_FLAGS, tripUuidFor} from '../../packages/telemetry-core/src';
 import {job, r, Script} from '../shared/trip-messages';
 import {digestOf, expectMigratedFromVersion1, expectRepresentative, failed, files, ok, readOnly, readVersion1, REPRESENTATIVE, sha256, workspace} from './helpers';
 
@@ -387,7 +387,7 @@ describe('REG-013 schema 10 quantity engine',()=>{
     // A new database runs the same frozen statements, so its schema equals the migrated one.
     (await ws.open({migrations:CURRENT_MIGRATIONS})).close();expect(schemaOf(copy)).toEqual(schemaOf(ws.database));
   });
-  it('defaults the engine to 0 and the flags to NULL, and the current writer records only engine 0 rows',async()=>{
+  it('defaults the column engine to 0 and the flags to NULL, and the current writer creates engine 1 groups with a base row',async()=>{
     const storage=await ws.open({migrations:CURRENT_MIGRATIONS});
     const script=new Script('10000000-0000-4000-8000-000000010001'),absent={available:false,reason:'not-observed'} as const;
     ok(storage.upsertSession({message:script.welcome()}));
@@ -401,7 +401,7 @@ describe('REG-013 schema 10 quantity engine',()=>{
     expect(columns(ws.database,'logical_trips','accounting_engine')).toEqual([{cid:16,name:'accounting_engine',type:'INTEGER',notnull:1,dflt_value:'0',pk:0}]);
     expect(columns(ws.database,'logical_progress','quantity_flags')).toEqual([{cid:14,name:'quantity_flags',type:'INTEGER',notnull:0,dflt_value:null,pk:0}]);
     expect(readOnly(ws.database,db=>[db.prepare('SELECT accounting_engine FROM logical_trips').pluck().all(),db.prepare('SELECT quantity_flags FROM logical_progress').pluck().all()]))
-      .toEqual([[0],[null]]);
+      .toEqual([[1],[QUANTITY_FLAGS.base]]);
   });
   it('is refused with SCHEMA_NEWER by a schema9 build, and a schema10 build refuses a schema11 database, without changing either file',async()=>{
     const copy=ws.copyFixture(V9);(await ws.open({path:copy,migrations:CURRENT_MIGRATIONS})).close();

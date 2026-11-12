@@ -12,9 +12,10 @@ export type CommitCommand = Extract<StorageCommand, {name: 'commitEvent' | 'comm
 /**
  * In-process options of a test entry that starts the host itself (ET-015a, R13). They are passed by code on the worker
  * thread and are never read from a message. `commitOptions` may return the in-process commit options, such as a
- * `testHooks.beforeCommit` fault, for one commit or sample append command. The production storage worker passes none.
+ * `testHooks.beforeCommit` fault, for one commit or sample append command. `accountingEngine` is the in-process open
+ * option of the same name, for tests of legacy engine-0 accounting. The production storage worker passes none.
  */
-export interface HostTestOptions {commitOptions?: (command: CommitCommand) => CommitOptions | undefined}
+export interface HostTestOptions {commitOptions?: (command: CommitCommand) => CommitOptions | undefined; accountingEngine?: 0 | 1}
 
 /** The worker side of the port: worker_threads' parentPort satisfies it. */
 export interface HostPort {
@@ -46,7 +47,8 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     if (command.name === 'open') {
       if (storage) return failed('INVALID_INPUT');
       const {path, purpose, backupsDirectory, appVersion} = command.options;
-      const opened = await openStorage({path, purpose, backupsDirectory, appVersion});
+      const opened = await openStorage({path, purpose, backupsDirectory, appVersion,
+        ...(testOptions.accountingEngine === undefined ? {} : {accountingEngine: testOptions.accountingEngine})});
       if (!opened.ok) return opened;
       // A close that arrived while the open was running is impossible: requests are handled one at a time.
       storage = opened.value;

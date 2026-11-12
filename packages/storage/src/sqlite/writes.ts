@@ -1,4 +1,5 @@
 import {RULE_LOSSES} from './trailer-baselines';
+import {startReplayBudget} from './quantities';
 import {retainUploadDeletion} from './upload-discovery';
 import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
 import {admittedProfile, associate, decisionsEnabled, finalizePending, resolvePendingInSession, projectEndpoint, projectSessionBounds, retireObservedTerminal, projectEffects, projectSample, logicalEnabled, logicalFor, revise} from './logical-trips';
@@ -64,7 +65,8 @@ function clockRef(db: Database.Database, session: bigint, kind: 'source-monotoni
   statement(db, 'INSERT OR IGNORE INTO clocks (plugin_session_ref, kind, clock_uuid) VALUES (?, ?, ?)').run(session, kind, uuid);
   return statement(db, 'SELECT id FROM clocks WHERE plugin_session_ref = ? AND kind = ? AND clock_uuid = ?').pluck().get(session, kind, uuid) as bigint;
 }
-const transact = <T>(conn: StorageConnection, body: (db: Database.Database) => T): T => { const db = conn.writer(); return db.transaction(() => body(db)).immediate(); };
+// Each write transaction starts its own engine-1 replay budget (docs/storage.md, Schema version 10).
+const transact = <T>(conn: StorageConnection, body: (db: Database.Database) => T): T => { const db = conn.writer(); return db.transaction(() => { startReplayBudget(db); return body(db); }).immediate(); };
 
 /**
  * Stores the plugin session from its welcome, idempotently: a repeated welcome of the same session changes nothing, and

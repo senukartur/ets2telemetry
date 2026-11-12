@@ -8,10 +8,11 @@ import {job,r,Script} from '../shared/trip-messages';
 import {failed,ok,uploadGame,uploadProof,uploadTestSource,uploadTestOwner,workspace} from './helpers';
 let ws:Awaited<ReturnType<typeof workspace>>,opened:Storage[]=[];
 beforeEach(async()=>{ws=await workspace();});afterEach(async()=>{for(const storage of opened)storage.close();opened=[];await ws.dispose();});
-async function direct(){const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);return {conn,storage,db:conn.writer()};}
+async function direct(accountingEngine?:0){const conn=await openConnection(ws.options({purpose:'history',...(accountingEngine===undefined?{}:{accountingEngine})})),storage=new Storage(conn);opened.push(storage);return {conn,storage,db:conn.writer()};}
 describe('REG-003/004/005/006/007/008/009/012/014 same-commit discovery',()=>{
   it('captures every recorder entry point atomically, coalesces ordinary counters and retains terminal/correction/uncertainty references under pressure',async()=>{
-    const {storage,db}=await direct(),source=await uploadTestSource(storage),{script,tripUuid}=source;
+    // The counters and the correction come from trip.update totals, the raw-total selection of legacy engine 0 (ET-112c).
+    const {storage,db}=await direct(0),source=await uploadTestSource(storage),{script,tripUuid}=source;
     const head=()=>db.prepare('SELECT revision_ref,material_version,position FROM upload_change_heads').get() as {revision_ref:bigint;material_version:bigint;position:bigint};
     const initial=head();ok(storage.commitEvent({message:uploadGame(script.event(r.trailerConfigured())),effects:[{kind:'trip.update',tripUuid,set:{trailerConfigurations:['this-event']}}]}));expect(head().material_version).toBeGreaterThan(initial.material_version);expect(db.prepare('SELECT registration_ref FROM upload_reservations').pluck().get()).toBe(source.registrationId);
     ok(storage.commitGap({message:uploadGame(script.gap(1)),effects:[{kind:'completeness.add',interval:{tripUuid,kind:'event-loss'}}]}));expect(head().material_version).toBeGreaterThan(initial.material_version);

@@ -157,6 +157,14 @@ interface TripExpectation {
   label: string; listItem: Json; detailTrip: Json; job: Json; truck: string | null; trailers: {eventSeqs: string[]; total: number};
   outcome: Json | null; money: Json[]; window: Json; intervals: Json[]; events: [string, string, Json | null][]; samples: TripJournal['samples'];
 }
+/**
+ * ET-112c: a group of the default engine 1 shows its 1 Hz ledger, not the recorder's raw totals, which stay on the
+ * raw trip row. trip@3 of timers-truck-refuel-trip has frames with only fuel and odometer (no speed, position or game
+ * time), so no sample is a complete anchor and neither total is observed; the raw row keeps 0 m and 10 L.
+ */
+const LEDGER_TOTALS: Record<string, Record<string, {observedDistanceM: Json; fuelUsedL: Json}>> = {
+  'timers-truck-refuel-trip': {'trip@3': {observedDistanceM: {available: false, reason: 'not-observed'}, fuelUsedL: {available: false, reason: 'not-observed'}}}
+};
 function expectationsOf(s: Scenario, gapCommittedUtcMs?: number): TripExpectation[] {
   const original=JOURNAL.scenarios[s.id];
   const journal=s.id==='app-absent-hydration'?{...original,trips:[{...original.trips[0],trip:'attach@5',closedBy:null,window:{fromEventSeq:'5',throughEventSeq:null,end:'open'},outcome:null,money:[],samples:[]},...original.trips]}:original;
@@ -174,7 +182,7 @@ function expectationsOf(s: Scenario, gapCommittedUtcMs?: number): TripExpectatio
       hardModeDetails.latestDiagnostic = {...hardModeDetails.firstDiagnostic};
     }
     const listItem = {isHardMode: false, hardModeDetails, tripUuid: t.trip, game, gameMode: row.gameMode, gameModeAmbiguous: row.gameModeAmbiguous, outcome: row.outcome, closeReason: row.closeReason,
-      recordingCompleteness: row.recordingCompleteness, startedUtcMs: row.startedUtcMs, endedUtcMs: row.endedUtcMs, observedDistanceM: row.observedDistanceM, fuelUsedL: row.fuelUsedL,
+      recordingCompleteness: row.recordingCompleteness, startedUtcMs: row.startedUtcMs, endedUtcMs: row.endedUtcMs, ...(LEDGER_TOTALS[s.id]?.[t.trip] ?? {observedDistanceM: row.observedDistanceM, fuelUsedL: row.fuelUsedL}),
       job: expandMoney(t.job)};
     // A trip opened at an event has its job at its job configuration event; a late-attach trip (attach@<nextEventSeq>) has the checkpoint's job (J9).
     const checkpoint = row.openedEventSeq === null ? t.trip.replace(/^attach@/, '') : null;
