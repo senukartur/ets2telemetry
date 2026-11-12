@@ -52,7 +52,7 @@ beforeAll(async () => {
   ws = await workspace();
   exports = path.join(ws.directory, 'exports');
   mkdirSync(exports);
-  // The anchors set their distance totals through trip.update, the raw-total selection of legacy engine 0 (ET-112c, D14).
+  // The anchors set their distance totals through trip.update, the raw-total selection of legacy engine 0 (ET-112c).
   history = new HistoryStorage({localAppData: ws.directory, target: {purpose: 'synthetic', name: 'export'}, appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS,
     createWorker: () => storageWorker(ENGINE_0).handle, log: (event, _detail, facts) => { logs.push([event, facts]); }});
   history.start();

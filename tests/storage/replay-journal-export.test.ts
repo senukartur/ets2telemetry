@@ -158,7 +158,7 @@ interface TripExpectation {
   outcome: Json | null; money: Json[]; window: Json; intervals: Json[]; events: [string, string, Json | null][]; samples: TripJournal['samples'];
 }
 /**
- * ET-112c (D10): a group of the default engine 1 shows its 1 Hz ledger, not the recorder's raw totals, which stay on the
+ * ET-112c: a group of the default engine 1 shows its 1 Hz ledger, not the recorder's raw totals, which stay on the
  * raw trip row. trip@3 of timers-truck-refuel-trip has frames with only fuel and odometer (no speed, position or game
  * time), so no sample is a complete anchor and neither total is observed; the raw row keeps 0 m and 10 L.
  */

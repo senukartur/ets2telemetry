@@ -92,7 +92,7 @@ function close(storage: Storage, script: Script, uuid: string, terminal = false)
 }
 
 // The subject of this suite is legacy engine-0 accounting (saved and paused endpoints, retained endpoints, raw-total
-// selection and the version 1 chain break), so its groups are pinned to engine 0 (ET-112c, D14). Engine 1 is covered by
+// selection and the version 1 chain break), so its groups are pinned to engine 0 (ET-112c). Engine 1 is covered by
 // the incident corpus below and tests/storage/trip-quantities.test.ts.
 describe('REG-003/005/008/012/014 durable logical trips', () => {
   it.each([1,3])('sums v2 member check counts across %s sessions and worker/database reopen', async sessions => {

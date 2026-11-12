@@ -44,7 +44,7 @@ async function main() {
     return result.value;
   };
   // The anchors set their totals through trip.update and the logical trip checks a save rollback, both legacy engine-0
-  // accounting, so this synthetic seed pins its groups to engine 0 (ET-112c, D14).
+  // accounting, so this synthetic seed pins its groups to engine 0 (ET-112c).
   const opened = await openStorage({path: database, purpose: 'synthetic', backupsDirectory: path.join(path.dirname(database), 'backups'), appVersion: '0.1.0', accountingEngine: 0});
   let storage = check(opened, 'open');
   try {

@@ -384,7 +384,7 @@ describe('immutable private upload projections through the SQLite worker', () =>
     await client.close();
   });
   it('preserves selected save accounting and unavailable fuel instead of summing member totals', async () => {
-    // Its subject is the engine-0 save rollback against a raw total (ET-112c, D14).
+    // Its subject is the engine-0 save rollback against a raw total (ET-112c).
     const client=await start('history',storageWorker(ENGINE_0)),s=new Script(ETS2_A),uuid=await open(client,s);
     const append=(second:number,odo:number)=>appendSample(client,s,uuid,second,odo);
     await append(1,1000000);await append(2,1000050);await append(3,1000100);

@@ -124,7 +124,7 @@ export interface RecordingPlan {
   profileEvidence?:()=>ProfileObservation|undefined;
   /** workerData for the fault worker of the first service (R13); without it the production worker entry runs. */
   fault?: Record<string, unknown>;
-  /** ET-112c (D14): every service runs the fault worker pinned to this distance and fuel engine, for engine-0 subjects. */
+  /** ET-112c: every service runs the fault worker pinned to this distance and fuel engine, for engine-0 subjects. */
   accountingEngine?: 0;
   /** The coverage-item bound of the first service only; a restarted service has the production bound (MAX_PENDING_COMMITS). */
   maxPendingCommits?: number;
@@ -369,7 +369,7 @@ export async function until(ready: () => boolean, what: string, ms: number): Pro
 }
 
 /**
- * The fault worker data that pins a test-only worker to legacy engine-0 distance and fuel accounting (ET-112c, D14): for
+ * The fault worker data that pins a test-only worker to legacy engine-0 distance and fuel accounting (ET-112c): for
  * tests whose subject is engine-0 accounting, through `storageWorker(ENGINE_0)`.
  */
 export const ENGINE_0 = {accountingEngine: 0} as const;
