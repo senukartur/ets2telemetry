@@ -30,6 +30,6 @@ describe('REG-003/004/008 continuation evidence', () => {
     const changed=run(before.state,[read('b'.repeat(64),'1001000000000')]);
     expect(dueAttach(changed.state)).toMatchObject({pluginSessionId:ETS2_A,nextEventSeq:'2',profileChange:true});
     const attached=stepTrip(changed.state,{kind:'attach',receivedUtcMs:2000});expect(attached.ok).toBe(true);
-    if(attached.ok)expect(attached.effects).toContainEqual(expect.objectContaining({kind:'trip.close',outcome:'none',closeReason:'different-job'}));
+    if(attached.ok)expect(attached.effects).toContainEqual(expect.objectContaining({kind:'trip.close',outcome:'none',closeReason:'different-job',profileChange:true}));
   });
 });

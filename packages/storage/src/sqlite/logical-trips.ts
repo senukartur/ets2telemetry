@@ -5,13 +5,14 @@ import {matchesSavedEndpoint, savedEndpointLimits} from '../../../telemetry-core
 import type Database from 'better-sqlite3';
 import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
 import {compatibleContinuation, continuationIdentityFingerprint, learnContinuationConstraints, type ContinuationConstraints, type ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
-import {decideMembership, type MembershipCandidate} from '../../../telemetry-core/src/trips/membership';
+import {decideMembership, decideRetroactive, type MembershipCandidate} from '../../../telemetry-core/src/trips/membership';
 import {advanceProgress, restoredProgress, type ProgressAnchor, type ProgressCheckpoint} from '../../../telemetry-core/src/trips/progress';
 import type {CapturedEndpoint, CapturedRunning, SampleInput, TripEffect} from '../api';
 import {fail} from '../errors';
 import {jobValues} from './journal';
 import {advanceHardMode, hardModeLoss, emptyHardModeCounts, qualifiesHardMode} from '../../../telemetry-core/src/hard-mode';
 import {readHardModeDetails} from './hard-mode';
+import {rootBound} from './identity-pending';
 
 export type LogicalRow = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
@@ -30,7 +31,7 @@ function pendingDecision(db: Database.Database, row: LogicalRow): void {
  * Records a final decision of a still pending row. `decided_revision` is the highest logical revision id when the decision
  * row is written; a decided row never changes (I3).
  */
-function recordDecision(db: Database.Database, trip: unknown, state: 'joined' | 'root', reason: string, target: unknown): void {
+function recordDecision(db: Database.Database, trip: unknown, state: 'joined' | 'root' | 'separate', reason: string, target: unknown): void {
   db.prepare(`UPDATE logical_membership_decisions SET state = ?, reason = ?, target_logical_ref = ?, decided_revision = (SELECT coalesce(max(id), 0) FROM logical_revisions)
     WHERE trip_ref = ? AND state = 'pending'`).run(state, reason, target, trip);
 }
@@ -76,6 +77,10 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   const decisions = decisionsEnabled(db);
   if (decisions && row.outcome === 'open' && membership.proof_json === null) pendingDecision(db, row);
   if (!proof || group.retired === 1n || row.outcome !== 'open') return id;
+  // I4: the same admitted proof first resolves the session's earlier closed pending segments, oldest first; while any is
+  // left, this segment stays pending too, so its own decision always sees its resolved predecessors. It runs only while
+  // this segment is undecided: once its proof is stored, every earlier segment of the session was already resolved.
+  if (decisions && membership.proof_json === null && resolvePendingInSession(db, row.plugin_session_ref as bigint, proof, row.id as bigint, 8).remaining > 0) return id;
   const recordedJob=job(db,row),known=JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
   const recorded=learnContinuationConstraints(known,recordedJob);
   const learned = recorded===null?null:learnContinuationConstraints(recorded,currentJob);
@@ -135,6 +140,107 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
   if (pendingCoverage) revise(db, id, pendingCoverage);
   if (decisions) recordDecision(db, row.id, decision.state, decision.reason, decision.state === 'joined' ? id : null);
   return id;
+}
+
+/**
+ * Schema 9, inside the caller's transaction: decides one closed pending segment S from a later admitted proof of its own
+ * plugin session (retroactiveGate, then the live rules with the recorded job). `skipped` when S is no closed, pending,
+ * proof-less self-root. A separate segment keeps its singleton and stores no proof; a root or join stores the proof as
+ * the live decision does. A joined target becomes partial (sticky unknown loss) and is retired when S was delivered or
+ * cancelled, or interrupted when S was replaced by a different job.
+ */
+export function resolveClosed(db: Database.Database, tripRef: bigint, proof: ProfileObservation): 'joined' | 'root' | 'separate' | 'skipped' {
+  const pending = get(db, 'SELECT * FROM logical_membership_decisions WHERE trip_ref = ?', tripRef), row = raw(db, tripRef);
+  const membership = get(db, 'SELECT logical_ref, proof_json FROM logical_memberships WHERE trip_ref = ?', tripRef);
+  if (pending?.state !== 'pending' || row.outcome === 'open' || !membership || membership.logical_ref !== row.id || membership.proof_json !== null) return 'skipped';
+  const id = row.id as bigint, group = get(db, 'SELECT * FROM logical_trips WHERE id = ?', id)!;
+  const boundary = (get(db, 'SELECT through_event_seq FROM session_profile_boundaries WHERE plugin_session_ref = ?', row.plugin_session_ref)?.through_event_seq ?? null) as string | null;
+  // Mirrors the reading switch close: a decision of this session after its last boundary under another scope means the
+  // session's profile changed while no trip was open.
+  const sessionScopeConflict = get(db, `SELECT 1 FROM logical_membership_decisions d JOIN logical_memberships m ON m.trip_ref = d.trip_ref
+    WHERE d.plugin_session_ref = ? AND d.state IN ('joined','root') AND (d.raw_closed_event_seq IS NULL OR d.raw_closed_event_seq > ?)
+      AND json_extract(m.proof_json, '$.scope') <> ? LIMIT 1`, row.plugin_session_ref, boundary ?? '', proof.scope) !== undefined;
+  const recordedJob = job(db, row), known = JSON.parse(String(group.canonical_constraints)) as ContinuationConstraints;
+  const recorded = learnContinuationConstraints(known, recordedJob), learned = recorded === null ? null : learnContinuationConstraints(recorded, recordedJob);
+  const fingerprint = continuationIdentityFingerprint(recordedJob);
+  const rows = fingerprint === null ? [] : db.prepare(`SELECT * FROM logical_trips WHERE game = ? AND profile_scope = ? AND fingerprint = ? AND retired = 0 AND id <> ? ORDER BY id LIMIT 2`)
+    .all(row.game, proof.scope, fingerprint, id) as LogicalRow[];
+  const combinedFor = (candidate: LogicalRow) => {
+    const candidateRecorded = learnContinuationConstraints(JSON.parse(String(candidate.canonical_constraints)) as ContinuationConstraints, recordedJob);
+    return candidateRecorded === null ? null : learnContinuationConstraints(candidateRecorded, recordedJob);
+  };
+  const candidates: MembershipCandidate<LogicalRow>[] = rows.map(candidate => ({ref: candidate,
+    compatible: rows.length === 1 && combinedFor(candidate) !== null && compatibleContinuation(job(db, raw(db, candidate.id)), recordedJob)}));
+  const decision = decideRetroactive({closedByOwnSession: row.closed_by_session_ref === row.plugin_session_ref, rawClosedEventSeq: (pending.raw_closed_event_seq ?? null) as string | null,
+    boundaryThroughEventSeq: boundary, sessionScopeConflict, ownRootBound: rootBound(db, id)}, {recordedJob, consistent: learned !== null, candidates},
+  target => target.latest_trip_ref as bigint, id);
+  if (decision.state === 'pending') return 'skipped';
+  if (decision.state === 'separate') {
+    recordDecision(db, id, 'separate', decision.reason, null);
+    revise(db, id);
+    return 'separate';
+  }
+  if (decision.state === 'root') {
+    // A retroactive root retires no other trip (decideRetroactive): the later proof does not verify S's profile at the
+    // time S was recorded, and only complete, live, verified evidence replaces other unresolved trips.
+    db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), id);
+    db.prepare('UPDATE logical_trips SET profile_scope = ?, fingerprint = ?, canonical_constraints = ? WHERE id = ?').run(proof.scope, decision.fingerprint, JSON.stringify(learned ?? recorded ?? known), id);
+    recordDecision(db, id, 'root', decision.reason, null);
+    revise(db, id);
+    return 'root';
+  }
+  const target = decision.target, targetId = target.id as bigint, combined = combinedFor(target);
+  redirectReservation(db, id, targetId);
+  db.prepare('UPDATE logical_memberships SET logical_ref = ?, previous_logical_ref = ?, joined_after_revision = (SELECT coalesce(max(id),0) FROM logical_revisions) WHERE trip_ref = ?').run(targetId, id, id);
+  db.prepare('UPDATE logical_trips SET retired = 1 WHERE id = ?').run(id);
+  const originalAudit = readHardModeDetails(raw(db, targetId).hard_mode_details), memberAudit = readHardModeDetails(row.hard_mode_details);
+  if (originalAudit?.version === 1 && memberAudit?.version === 2) {
+    // A continued legacy trip keeps its original strict interruption policy.
+    const legacy = hardModeLoss(advanceHardMode(advanceHardMode(null, memberAudit.opening), memberAudit.latest), memberAudit.opening.observedUtcMs, 'source-changed');
+    db.prepare('UPDATE trips SET hard_mode_details=?, is_hard_mode=0 WHERE id=?').run(JSON.stringify(legacy), id);
+  }
+  db.prepare(`UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased = 1, canonical_constraints = ?, profile_scope = ?, fingerprint = ?
+    WHERE id = ?`).run(id, JSON.stringify(combined), proof.scope, decision.fingerprint, targetId);
+  db.prepare('UPDATE logical_memberships SET proof_json = ? WHERE trip_ref = ?').run(JSON.stringify(proof), id);
+  // The terminal of S ends the continued trip as it would have live; another close leaves the target unresolved.
+  if (row.outcome === 'delivered' || row.outcome === 'cancelled') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 0 WHERE id = ?').run(targetId);
+  else if (row.close_reason === 'different-job') db.prepare('UPDATE logical_trips SET retired = 1, interrupted = 1 WHERE id = ?').run(targetId);
+  const prior = latestCoverage(db, targetId).value;
+  revise(db, id);
+  // S's quantities were recorded outside the target's accounting chain: the target stays partial with no endpoint.
+  revise(db, targetId, {version: 1, start: prior?.start ?? 'unproven', losses: (prior?.losses ?? 0) | COVERAGE_LOSS.unknown, member: String(id), phase: 'active', endpoint: null, window: null});
+  recordDecision(db, id, 'joined', decision.reason, targetId);
+  return 'joined';
+}
+/**
+ * I4 and resolvePendingMemberships: resolves, oldest first, at most `limit` closed pending segments of one plugin session
+ * with that session's admitted proof, optionally only those before `before`. `remaining` counts the same predicate after.
+ * A proof of another session resolves nothing.
+ */
+export function resolvePendingInSession(db: Database.Database, sessionRef: bigint, proof: ProfileObservation, before: bigint | undefined, limit: number): {resolved: number; remaining: number} {
+  if (get(db, 'SELECT plugin_session_uuid FROM plugin_sessions WHERE id = ?', sessionRef)?.plugin_session_uuid !== proof.pluginSessionId) return {resolved: 0, remaining: 0};
+  const where = `WHERE plugin_session_ref = ? AND state = 'pending' AND raw_closed_event_seq IS NOT NULL${before === undefined ? '' : ' AND trip_ref < ?'}`;
+  const args: unknown[] = before === undefined ? [sessionRef] : [sessionRef, before];
+  const refs = db.prepare(`SELECT trip_ref FROM logical_membership_decisions ${where} ORDER BY trip_ref LIMIT ?`).pluck().all(...args, limit) as bigint[];
+  let resolved = 0;
+  for (const ref of refs) if (resolveClosed(db, ref, proof) !== 'skipped') resolved++;
+  const remaining = Number(db.prepare(`SELECT count(*) FROM logical_membership_decisions ${where}`).pluck().get(...args));
+  return {resolved, remaining};
+}
+/**
+ * Schema 9: a new plugin session of the game ends every earlier process, so at most `limit` closed pending segments of
+ * earlier sessions (lower ids, in first-seen order) become separate/process-ended, oldest session first; a late commit of an
+ * older session never finalizes a newer one. Open pending trips are left to their own rules.
+ */
+export function finalizePending(db: Database.Database, game: string, currentSessionRef: bigint, limit: number): number {
+  if (!decisionsEnabled(db)) return 0;
+  const refs = db.prepare(`SELECT trip_ref FROM logical_membership_decisions WHERE game = ? AND state = 'pending' AND plugin_session_ref < ? AND raw_closed_event_seq IS NOT NULL
+    ORDER BY plugin_session_ref, trip_ref LIMIT ?`).pluck().all(game, currentSessionRef, limit) as bigint[];
+  for (const ref of refs) {
+    recordDecision(db, ref, 'separate', 'process-ended', null);
+    revise(db, logicalFor(db, ref));
+  }
+  return refs.length;
 }
 
 /** Summary uses opening identity, final observed outcome, and irreversible evidence from every recording. */

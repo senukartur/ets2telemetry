@@ -90,6 +90,8 @@ it.each([true,false])('REG-003/005/008 preserves assigned=%s reservation through
   conn=await openConnection(ws.options({purpose:'history'}));storage=new Storage(conn);direct.push(storage);
   const beforeRun=randomUUID();ok(storage.confirmUploadOwner({confirmationId:beforeRun,registrationId:b.registrationId,credentialGeneration:'b-refreshed',expectedVersion:'2'}));ok(storage.advanceUploadScan({runId:beforeRun,registrationId:b.registrationId}));expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId})).identityPendingSources).toBe(1);
   ok(storage.commitEvent({message:game(script.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:uuid,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'complete',endedUtcMs:2000}]}));
+  // ET-112b2b (D9): the closed unproven segment stays identity-pending until a new session of its game ends its process.
+  ok(storage.upsertSession({message:game(new Script('10000000-0000-4000-8000-000000000003').welcome())}));
   expect(conn.writer().prepare('SELECT registration_ref,http_revision FROM upload_source_bindings').all()).toEqual([{registration_ref:a.registrationId,http_revision:0n}]);expect(ok(storage.getUploadStoreStatus({registrationId:a.registrationId}))).toMatchObject({identityPendingSources:0,pendingSources:1});
   expect(ok(storage.beginUploadMaterialization({workId:randomUUID(),tripUuid:uuid,registrationId:b.registrationId}))).toMatchObject({status:'held',reason:'reconciliation-required'});
 });

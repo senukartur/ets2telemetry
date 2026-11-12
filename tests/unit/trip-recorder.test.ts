@@ -10,8 +10,9 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {decodePayload, encodeFrame, type ClientMessage, type ServerMessage, type SourceIdentity} from '../../packages/contracts/src/protocol-v1';
 import type {
   AttachInput, AttachResult, CommitResult, CompletenessInterval, CompletenessOptions, EventRow, Result, SampleAppendOptions, SampleAppendResult, SampleInput, StorageErrorCode, TripEffect, TripList, TripPage,
-  TripRecord
+  TripRecord, ResolveMembershipsInput, ResolveMembershipsResult
 } from '../../packages/storage/src/api';
+import type {ProfileObservation} from '../../packages/telemetry-core/src/trips/continuation';
 import {storageError} from '../../packages/storage/src/errors';
 import {canonicalJson} from '../../packages/telemetry-core/src/index';
 import type {CoverageMessage, DurableSink, WelcomeMessage} from '../../apps/desktop/src/durable-sink';
@@ -771,6 +772,128 @@ describe('ET-016 PR-7 late-attach trips through the trip recorder (J9)', () => {
   });
 });
 
+
+describe('ET-112b2b resolving closed pending memberships from a later proof', () => {
+  /** ModelStorage with the optional resolve command: every call is logged, and `answers` scripts the next results. */
+  class ResolvingStorage extends ModelStorage {
+    readonly resolves: ResolveMembershipsInput[] = [];
+    readonly answers: Result<ResolveMembershipsResult>[] = [];
+    resolvePendingMemberships(input: ResolveMembershipsInput): Promise<Result<ResolveMembershipsResult>> {
+      this.resolves.push(structuredClone(input));
+      return Promise.resolve(this.answers.shift() ?? {ok: true, value: {status: 'resolved', resolved: 1, remaining: 0}});
+    }
+  }
+  const context = {receivedUtcMs: RECEIVED_UTC};
+  const proofOf = (s: Script, scope = 'a'.repeat(64)): ProfileObservation => ({version: 1, scope, binding: 'b'.repeat(64), game: 'ets2', pluginSessionId: s.session,
+    processInstanceId: s.welcome().source.processInstanceId, sourceClockId: s.clockId, afterMonotonicNs: '0', loadGeneration: 1});
+  /** A trip opened and delivered as eventSeq 1 and 2 while no proof exists; the proof then appears with the next reading. */
+  async function deliveredWithoutProof(storage: ModelStorage) {
+    const s = new Script(ETS2_A), evidence: {profile?: ProfileObservation} = {};
+    const recorder = new TripRecorderSink(storage, {profileEvidence: () => evidence.profile});
+    expect((await recorder.openSession(s.welcome())).ok).toBe(true);
+    expect(recorder.observe(s.checkpoint(null), context).ok).toBe(true);
+    for (const record of [r.jobConfigured(), r.delivered()]) expect((await recorder.commit(s.event(record), context)).ok).toBe(true);
+    expect(recorder.attach.due()).toBe(false);
+    evidence.profile = proofOf(s);
+    return {s, recorder, evidence};
+  }
+  it('R1 sends one resolve with the next eventSeq once the proof appears after the delivery', async () => {
+    const storage = new ResolvingStorage(), {s, recorder, evidence} = await deliveredWithoutProof(storage), snapshot = s.snapshot();
+    expect(recorder.observe(snapshot, context).ok).toBe(true);
+    expect(recorder.attach.due()).toBe(true);
+    expect(await recorder.attach.open(context)).toEqual({ok: true, value: {status: 'committed'}});
+    expect(storage.resolves).toEqual([{pluginSessionId: ETS2_A, nextEventSeq: '3', profile: evidence.profile, sourceClockId: s.clockId, monotonicNs: snapshot.capture.monotonicNs}]);
+    expect(recorder.attach.due()).toBe(false);
+  });
+  it('R2 does not send the same proof key again, and maps none to duplicate', async () => {
+    const storage = new ResolvingStorage(), {s, recorder} = await deliveredWithoutProof(storage);
+    storage.answers.push({ok: true, value: {status: 'none', resolved: 0, remaining: 0}});
+    recorder.observe(s.snapshot(), context);
+    expect(await recorder.attach.open(context)).toEqual({ok: true, value: {status: 'duplicate'}});
+    recorder.observe(s.snapshot(), context);
+    expect([recorder.attach.due(), await recorder.attach.open(context)]).toEqual([false, {ok: true, value: {status: 'none'}}]);
+    expect(storage.resolves).toHaveLength(1);
+  });
+  it('R2 sends the same proof key again after a later trip of the session closed without proof', async () => {
+    const storage = new ResolvingStorage(), s = new Script(ETS2_A), evidence: {profile?: ProfileObservation} = {profile: proofOf(s)};
+    const recorder = new TripRecorderSink(storage, {profileEvidence: () => evidence.profile});
+    const withoutJob = () => { const m = s.snapshot(); m.data.state.configuration.job = {available: false, reason: 'not-observed'}; return m; };
+    await recorder.openSession(s.welcome()); recorder.observe(s.checkpoint(null), context);
+    storage.answers.push({ok: true, value: {status: 'none', resolved: 0, remaining: 0}});
+    recorder.observe(withoutJob(), context);
+    expect(await recorder.attach.open(context)).toEqual({ok: true, value: {status: 'duplicate'}});
+    // The proof is dropped at the job's profile boundary and returns only after the delivery, with the same key inputs.
+    evidence.profile = undefined;
+    recorder.observe(withoutJob(), context);
+    for (const record of [r.jobConfigured(), r.delivered()]) expect((await recorder.commit(s.event(record), context)).ok).toBe(true);
+    evidence.profile = proofOf(s);
+    recorder.observe(withoutJob(), context);
+    expect(recorder.attach.due()).toBe(true);
+    expect(await recorder.attach.open(context)).toEqual({ok: true, value: {status: 'committed'}});
+    expect(storage.resolves.map(input => input.nextEventSeq)).toEqual(['1', '3']);
+  });
+  it('R3 sends the same proof again with the next reading while decisions remain', async () => {
+    const storage = new ResolvingStorage(), {s, recorder} = await deliveredWithoutProof(storage);
+    storage.answers.push({ok: true, value: {status: 'resolved', resolved: 8, remaining: 1}});
+    recorder.observe(s.snapshot(), context); await recorder.attach.open(context);
+    recorder.observe(s.snapshot(), context);
+    expect(recorder.attach.due()).toBe(true);
+    await recorder.attach.open(context);
+    recorder.observe(s.snapshot(), context);
+    expect(recorder.attach.due()).toBe(false);
+    expect(storage.resolves.map(input => input.nextEventSeq)).toEqual(['3', '3']);
+  });
+  it('R4 does not send while a trip is open', async () => {
+    const storage = new ResolvingStorage(), s = new Script(ETS2_A), recorder = new TripRecorderSink(storage, {profileEvidence: () => proofOf(s)});
+    await recorder.openSession(s.welcome()); recorder.observe(s.checkpoint(null), context);
+    await recorder.commit(s.event(r.jobConfigured()), context);
+    recorder.observe(s.snapshot(), context);
+    expect(recorder.view('ets2').current).not.toBeNull();
+    expect(storage.resolves).toEqual([]);
+  });
+  it('R4 drops a due resolve when a trip opens before it runs', async () => {
+    const storage = new ResolvingStorage(), {s, recorder} = await deliveredWithoutProof(storage);
+    recorder.observe(s.snapshot(), context);
+    expect(recorder.attach.due()).toBe(true);
+    await recorder.commit(s.event(r.jobConfigured()), context);
+    expect(await recorder.attach.open(context)).toEqual({ok: true, value: {status: 'none'}});
+    expect(storage.resolves).toEqual([]);
+  });
+  it('R5 does not send while a profile-switch close is queued or before its session attaches again', async () => {
+    const storage = new ResolvingStorage(), s = new Script(ETS2_A), evidence = {profile: proofOf(s)};
+    const recorder = new TripRecorderSink(storage, {profileEvidence: () => evidence.profile});
+    await recorder.openSession(s.welcome()); recorder.observe(s.checkpoint(null), context);
+    await recorder.commit(s.event(r.jobConfigured()), context);
+    recorder.observe(s.snapshot(), context);
+    /** A reading without a configured job, so no attach under the new profile becomes due. */
+    const withoutJob = () => { const m = s.snapshot(); m.data.state.configuration.job = {available: false, reason: 'not-observed'}; return m; };
+    // A reading under another profile scope queues the different-job close of the open trip for the next carrier.
+    evidence.profile = proofOf(s, 'c'.repeat(64));
+    recorder.observe(withoutJob(), context);
+    expect([recorder.view('ets2').current, recorder.attach.due()]).toEqual([null, false]);
+    expect((await recorder.commit(s.event(r.fined()), context)).ok).toBe(true);
+    expect(storage.attempts.at(-1)!.effects).toContainEqual(expect.objectContaining({kind: 'trip.close', closeReason: 'different-job', profileChange: true}));
+    // The close is committed, but its session has not attached since the switch: still no resolve.
+    recorder.observe(withoutJob(), context);
+    expect([recorder.attach.due(), await recorder.attach.open(context)]).toEqual([false, {ok: true, value: {status: 'none'}}]);
+    expect(storage.resolves).toEqual([]);
+  });
+  it('R6 fails the connection when the resolve fails', async () => {
+    const storage = new ResolvingStorage(), s = new Script(ETS2_A);
+    storage.answers.push({ok: false, error: storageError('DISK_FULL')});
+    const recorder = new TripRecorderSink(storage, {profileEvidence: () => proofOf(s)});
+    start(storage, recorder); connectLatest();
+    latest().feed(s.welcome(), s.checkpoint(null), s.event(r.fined()));
+    await settle();
+    expect(storage.resolves.map(input => input.nextEventSeq)).toEqual(['1']);
+    expect([latest().destroyed, state().durable]).toEqual([true, {state: 'pending', retryCode: 'DISK_FULL'}]);
+  });
+  it('R7 never sends without the optional command', async () => {
+    const storage = new ModelStorage(), {s, recorder} = await deliveredWithoutProof(storage);
+    recorder.observe(s.snapshot(), context);
+    expect([recorder.attach.due(), await recorder.attach.open(context)]).toEqual([false, {ok: true, value: {status: 'none'}}]);
+  });
+});
 
 it('REG-003/005 persists no-job checkpoints before later trip events without replacing them during older replay',async()=>{
   const storage=new ModelStorage();const recorder=start(storage);connectLatest();const s=new Script(ETS2_A);

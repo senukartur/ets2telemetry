@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {compatibleContinuation, continuationFingerprint, continuationIdentityFingerprint} from '../../packages/telemetry-core/src/trips/continuation';
-import {decideMembership, type MembershipCandidate, type MembershipDecision, type MembershipEvidence} from '../../packages/telemetry-core/src/trips/membership';
+import {decideMembership, decideRetroactive, retroactiveGate, type MembershipCandidate, type MembershipDecision, type MembershipEvidence, type RetroactiveDecision, type RetroactiveFacts,
+  type RetroactiveSeparate} from '../../packages/telemetry-core/src/trips/membership';
 import {INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_DEADLINE, INCIDENT_OTHER_JOB} from '../shared/trip-continuation-incident';
 
 // Expected decisions are written by hand from the ET-112 agreed continuation rules (docs/trips.md).
@@ -46,5 +47,47 @@ describe('REG-003/REG-008 continuation membership decisions', () => {
   ];
   it.each(table)('decides %s', (_name, overrides, expected) => {
     expect(decideMembership(evidence(overrides))).toEqual(expected);
+  });
+});
+
+describe('REG-005/REG-008 retroactive resolution of a closed pending segment', () => {
+  const key = (eventSeq: number) => String(eventSeq).padStart(20, '0');
+  const clear: RetroactiveFacts = {closedByOwnSession: true, rawClosedEventSeq: key(2), boundaryThroughEventSeq: null, sessionScopeConflict: false, ownRootBound: false};
+  const separate = (reason: RetroactiveSeparate['reason']): RetroactiveSeparate => ({state: 'separate', reason});
+  const gates: [string, Partial<RetroactiveFacts>, RetroactiveSeparate | null][] = [
+    ['a close by another session, even with a boundary and a binding', {closedByOwnSession: false, boundaryThroughEventSeq: key(9), ownRootBound: true}, separate('process-ended')],
+    ['a boundary at the close carrier', {boundaryThroughEventSeq: key(2)}, separate('profile-boundary')],
+    ['a boundary after the close carrier', {boundaryThroughEventSeq: key(10)}, separate('profile-boundary')],
+    ['an unknown close carrier', {rawClosedEventSeq: null}, separate('profile-boundary')],
+    ['a later decision of another scope in the session', {sessionScopeConflict: true}, separate('profile-boundary')],
+    ['a boundary inside the segment, before its close', {boundaryThroughEventSeq: key(1)}, null],
+    ['a bound own root', {ownRootBound: true}, separate('published')],
+    ['a boundary before the close and a bound own root', {boundaryThroughEventSeq: key(1), ownRootBound: true}, separate('published')],
+    ['no boundary, conflict or binding', {}, null]
+  ];
+  it.each(gates)('gates %s', (_name, overrides, expected) => {
+    expect(retroactiveGate({...clear, ...overrides})).toEqual(expected);
+  });
+  const latest = (values: Record<string, bigint>) => (ref: string) => values[ref];
+  const decide = (overrides: Partial<{recordedJob: typeof INCIDENT_JOB; consistent: boolean; candidates: MembershipCandidate<string>[]}>, values: Record<string, bigint> = {A: 5n}) =>
+    decideRetroactive(clear, {recordedJob: INCIDENT_JOB, consistent: true, candidates: [match('A')], ...overrides}, latest(values), 7n);
+  it('joins the one compatible candidate whose latest member precedes the segment', () => {
+    expect(decide({})).toEqual({state: 'joined', reason: 'matched', target: 'A', fingerprint: F});
+  });
+  it('keeps the segment separate when the target already continued at or after it', () => {
+    expect(decide({}, {A: 7n})).toEqual(separate('out-of-order'));
+    expect(decide({}, {A: 9n})).toEqual(separate('out-of-order'));
+  });
+  it.each([
+    ['no candidate', {candidates: []}, {state: 'root', reason: 'no-candidate', fingerprint: F, interrupt: false}],
+    ['two candidates', {candidates: [match('A'), match('B')]}, {state: 'root', reason: 'ambiguous-candidates', fingerprint: F, interrupt: false}],
+    ['an incomplete recorded job', {recordedJob: missingCargo}, {state: 'root', reason: 'recorded-job-incomplete', fingerprint: null, interrupt: false}],
+    ['inconsistent learned offer fields', {consistent: false}, {state: 'root', reason: 'job-evidence-conflict', fingerprint: null, interrupt: false}]
+  ] as [string, Parameters<typeof decide>[0], RetroactiveDecision<string>][])('decides %s as a root that interrupts no other trip', (_name, overrides, expected) => {
+    expect(decide(overrides)).toEqual(expected);
+  });
+  it('returns the gate result before any candidate is considered', () => {
+    expect(decideRetroactive({...clear, ownRootBound: true}, {recordedJob: INCIDENT_JOB, consistent: true, candidates: [match('A')]}, () => { throw new Error('not read'); }, 7n))
+      .toEqual(separate('published'));
   });
 });

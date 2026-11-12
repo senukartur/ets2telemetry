@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type {JournalSyncRow, JournalTripSync} from '../../../contracts/src/journal';
 import {isDashboardOwner, uploadUuid, type DashboardOwner} from '../../../contracts/src/dashboard-upload';
+import {identityPending} from './identity-pending';
 
 type Row = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as Row | undefined;
@@ -10,7 +11,9 @@ export const JOURNAL_SYNC_QUERIES = {
     JOIN logical_trips l ON l.id=m.logical_ref WHERE t.trip_uuid=?`,
   claim: 'SELECT * FROM upload_history_claims WHERE first_ordinal<=? ORDER BY first_ordinal DESC LIMIT 1',
   envelope: 'SELECT * FROM upload_envelopes WHERE root_ref=? ORDER BY revision DESC LIMIT 1',
-  attempt: 'SELECT * FROM upload_attempt WHERE active=1'
+  attempt: 'SELECT * FROM upload_attempt WHERE active=1',
+  /** Schema 9 only: the root's membership decision, by primary key. */
+  decision: 'SELECT state FROM logical_membership_decisions WHERE trip_ref=?'
 } as const;
 
 /** SELECT-only evidence for precisely the returned page. Caller owns the SQLite read transaction. */
@@ -50,7 +53,8 @@ export function journalSync(db: Database.Database, tripUuids: readonly string[])
     const head = get(db, 'SELECT * FROM upload_change_heads WHERE root_ref=?', root.id);
     const held = (reason: unknown): JournalSyncRow => ({...absent, state: 'held', materialVersion: head ? String(head.material_version) : null, reason: reason === 'validation' ? 'validation' : 'reconciliation'});
     if (reservation?.hold_reason != null || reservation?.identity_state === 'held' || bound?.held === 1n) return held(bound?.hold_reason);
-    if (reservation?.identity_state === 'pending' || root.proof_json === null && root.retired === 0n && root.outcome === 'open') return {...absent, state: 'identity-pending', materialVersion: head ? String(head.material_version) : null};
+    const decision = Number(db.pragma('user_version', {simple: true})) >= 9 ? get(db, JOURNAL_SYNC_QUERIES.decision, root.id)?.state as string | undefined : undefined;
+    if (reservation?.identity_state === 'pending' || identityPending(root, decision, bound !== undefined)) return {...absent, state: 'identity-pending', materialVersion: head ? String(head.material_version) : null};
     if (bound && reservation?.identity_state !== 'resolved') return absent;
     if (!head) return absent;
     const pending = {...absent, state: 'pending' as const, materialVersion: String(head.material_version)};

@@ -774,6 +774,53 @@ describe('StorageClient openAttachedTrip (ET-016 PR-7, J9)', () => {
     });
 });
 
+describe('StorageClient resolvePendingMemberships (ET-112b2b)', () => {
+  const PROFILE = {version: 1 as const, scope: 'a'.repeat(64), binding: 'b'.repeat(64), game: 'ets2' as const, pluginSessionId: P1, processInstanceId: '20000000-0000-4000-8000-000000000001',
+    sourceClockId: '30000000-0000-4000-8000-000000000001', afterMonotonicNs: '0', loadGeneration: 1};
+  const INPUT = {pluginSessionId: P1, nextEventSeq: '3', profile: PROFILE, sourceClockId: PROFILE.sourceClockId, monotonicNs: '5000000000'};
+  const resolveRequest = (command: Record<string, unknown>): StorageRequest => ({type: 'storage.request', id: 1, command: {name: 'resolvePendingMemberships', ...command} as StorageRequest['command']});
+  it('copies only the five input fields, which the worker parser accepts', () => {
+    const f = fixture();
+    void f.client.resolvePendingMemberships({...INPUT, effects: [], testHooks: {}} as Parameters<StorageClient['resolvePendingMemberships']>[0]);
+    expect(f.sent[0].command).toEqual({name: 'resolvePendingMemberships', input: INPUT});
+    expect(parseRequest(f.sent[0]).ok).toBe(true);
+  });
+  const missing: Partial<typeof INPUT> = {...INPUT};
+  delete missing.monotonicNs;
+  it.each([
+    ['an unknown input key', {input: {...INPUT, extra: 1}}, false],
+    ['a missing input key', {input: missing}, false],
+    ['an extra command key', {input: INPUT, options: {}}, false],
+    ['no input', {}, false],
+    ['an array input', {input: []}, false],
+    ['the five fields', {input: INPUT}, true]
+  ])('checks the request strictly at the worker boundary: %s', (_name, command, accepted) => {
+    expect(parseRequest(resolveRequest(command)).ok).toBe(accepted);
+  });
+  it.each([['none', {status: 'none', resolved: 0, remaining: 0}], ['resolved', {status: 'resolved', resolved: 8, remaining: 3}]])('accepts a %s answer', async (_name, value) => {
+    const f = fixture();
+    const resolve = f.client.resolvePendingMemberships(INPUT);
+    f.ok(1, value);
+    await expect(resolve).resolves.toEqual({ok: true, value});
+  });
+  it.each([
+    ['more than eight resolved', {status: 'resolved', resolved: 9, remaining: 0}],
+    ['resolved without a resolution', {status: 'resolved', resolved: 0, remaining: 0}],
+    ['none with a resolution', {status: 'none', resolved: 1, remaining: 0}],
+    ['the dropped duplicate status', {status: 'duplicate', resolved: 0, remaining: 0}],
+    ['a negative remainder', {status: 'none', resolved: 0, remaining: -1}],
+    ['an extra key', {status: 'none', resolved: 0, remaining: 0, committedThroughEventSeq: '2'}],
+    ['a missing key', {status: 'none', resolved: 0}],
+    ['no object', 'none']
+  ])('fails closed on a resolve answer with %s', async (_name, value) => {
+    const f = fixture();
+    const resolve = f.client.resolvePendingMemberships(INPUT);
+    f.ok(1, value);
+    await expect(resolve).resolves.toEqual(error('WORKER_FAILED'));
+    expect(f.client.state).toBe('failed');
+  });
+});
+
 it('strictly validates private Hard Mode freshness verdicts on observer and event requests', () => {
   const observation = {assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null};
   const request = (command: unknown) => ({type: 'storage.request', id: 1, command});

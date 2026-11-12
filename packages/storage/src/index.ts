@@ -11,7 +11,7 @@ import type {HardModeObservation} from '../../contracts/src/hard-mode';
 import {rmSync} from 'node:fs';
 import type {
   AttachInput, AttachResult, CommitOptions, CommitResult, CompletenessInterval, CompletenessOptions, DeleteTripOptions, EventRow, JournalEventPage, JournalIntervalPage, JournalPageQuery, JournalTripDetail, JournalTripPage,
-  JournalTripsQuery, OpenSummary, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
+  JournalTripsQuery, OpenSummary, ResolveMembershipsInput, ResolveMembershipsResult, Result, SampleAppendOptions, SampleAppendResult, SampleInput, SampleRecord, SessionRecord, StorageInfo, TripEffect, TripList, TripPage, TripRecord, Uint64
 } from './api';
 import {classifyError} from './errors';
 import {restoreCopy} from './sqlite/backup';
@@ -49,6 +49,8 @@ export class Storage {
   }
   /** ET-016 PR-7 (J9): opens a trip from a checkpoint job; see AttachInput. */
   openAttachedTrip(input: AttachInput, options?:CommitOptions): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input,options)); }
+  /** ET-112b2b (schema 9): resolves closed pending membership decisions with a later proof; see ResolveMembershipsInput. */
+  resolvePendingMemberships(input: ResolveMembershipsInput, options?: CommitOptions): Result<ResolveMembershipsResult> { return attempt(() => writes.resolvePendingMemberships(this.connection, input, options)); }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Result<void> {return attempt(() => writes.observeHardMode(this.connection, game, observation, fresh));}
   committedThrough(pluginSessionId: string): Result<Uint64> { return attempt(() => reads.committedThrough(this.connection, pluginSessionId)); }
   getSession(pluginSessionId: string): Result<SessionRecord> { return attempt(() => reads.getSession(this.connection, pluginSessionId)); }

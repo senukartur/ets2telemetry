@@ -47,3 +47,54 @@ export function decideMembership<T>(evidence: MembershipEvidence<T>): Membership
   if (candidate?.compatible) return {state: 'joined', reason: 'matched', target: candidate.ref, fingerprint: current};
   return {state: 'root', reason: 'no-candidate', fingerprint: current, interrupt: true};
 }
+
+/** A closed pending segment that a later proof can no longer resolve; it stays its own singleton for good. */
+export type RetroactiveSeparate = {state: 'separate'; reason: 'process-ended' | 'profile-boundary' | 'published' | 'out-of-order'};
+/** A retroactive root: the live root with the same reason and fingerprint, which never interrupts other trips. */
+export type RetroactiveRoot<T> = Extract<MembershipDecision<T>, {state: 'root'}> extends infer R ? R extends {state: 'root'} ? Omit<R, 'interrupt'> & {interrupt: false} : never : never;
+/** The result of decideRetroactive. */
+export type RetroactiveDecision<T> = Exclude<MembershipDecision<T>, {state: 'root'}> | RetroactiveRoot<T> | RetroactiveSeparate;
+/** What storage knows about a closed pending segment S when a later in-process proof arrives. */
+export interface RetroactiveFacts {
+  /** S was closed by a commit of its own plugin session; a close carried by a later session means the process ended. */
+  closedByOwnSession: boolean;
+  /** S's close carrier, a 20-digit eventSeq key of its session, or null when it is unknown. */
+  rawClosedEventSeq: string | null;
+  /** The session's highest profile boundary, a 20-digit eventSeq key, or null when it has none. */
+  boundaryThroughEventSeq: string | null;
+  /** A root or join decided in the session after the boundary carries another profile scope than the proof. */
+  sessionScopeConflict: boolean;
+  /** S's own logical root already has an upload source binding. */
+  ownRootBound: boolean;
+}
+
+/**
+ * The gate of a retroactive resolution, in order: a close by another session is process-ended; a profile boundary at or
+ * after the close (20-digit keys, so text order is numeric order), an unknown close carrier or a scope conflict is
+ * profile-boundary; a bound root is published. A boundary inside the segment, before its close, is ignored, exactly as the
+ * live decision ignores it while the raw trip is open. Null means the proof may decide S.
+ */
+export function retroactiveGate(facts: RetroactiveFacts): RetroactiveSeparate | null {
+  if (!facts.closedByOwnSession) return {state: 'separate', reason: 'process-ended'};
+  const raw = facts.rawClosedEventSeq, boundary = facts.boundaryThroughEventSeq;
+  if (raw === null || (boundary !== null && boundary >= raw) || facts.sessionScopeConflict) return {state: 'separate', reason: 'profile-boundary'};
+  if (facts.ownRootBound) return {state: 'separate', reason: 'published'};
+  return null;
+}
+
+/**
+ * Decides a closed pending segment from a later admitted proof of its own session. After the gate, the live rules decide
+ * with the recorded job as the current reading, since a closed raw trip has no later reading. A join is allowed only into
+ * a target whose latest member precedes the segment (`latest(target) < segment`); otherwise the segment stays separate.
+ * A root never interrupts other trips: a proof that arrives after S closed does not verify S's own profile at that time
+ * (a profile switch with no trip open and no boundary event is not observable), and only complete, live, verified
+ * evidence retires other trips. A later live proof-bearing trip of another job still interrupts them.
+ */
+export function decideRetroactive<T>(facts: RetroactiveFacts, evidence: {recordedJob: JobConfiguration; consistent: boolean; candidates: readonly MembershipCandidate<T>[]},
+  latest: (target: T) => bigint, segment: bigint): RetroactiveDecision<T> {
+  const gate = retroactiveGate(facts);
+  if (gate) return gate;
+  const decision = decideMembership({profileVerified: true, recordedJob: evidence.recordedJob, currentJob: evidence.recordedJob, consistent: evidence.consistent, candidates: evidence.candidates});
+  if (decision.state === 'joined' && latest(decision.target) >= segment) return {state: 'separate', reason: 'out-of-order'};
+  return decision.state === 'root' ? {...decision, interrupt: false} : decision;
+}
