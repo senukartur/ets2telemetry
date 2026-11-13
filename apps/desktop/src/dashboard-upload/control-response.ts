@@ -16,6 +16,17 @@ export function registrationResponse(body:Uint8Array,owner:DashboardOwner):Uploa
   let v:unknown;try{v=jsonBody(body,16384);}catch{return undefined;}
   return uploadShape({contract,installationId:uploadUuid,bindingId:uploadUuid,identityEpoch:value=>identityEpoch(value)===owner.identityEpoch})(v)?{...v as UploadServerRegistration,identityEpoch:owner.identityEpoch}:undefined;
 }
+/**
+ * The event minor to freeze new events with: the highest of 1.2 and 1.1 that the connection response header
+ * `VTC-Telemetry-Event-Versions` lists, else 0. Well-formed versions of another major are ignored. A header with any
+ * malformed token is not a recognized advertisement, so it selects 0 as an absent or over-length header does.
+ */
+export function advertisedEventMinor(header:string|undefined):0|1|2 {
+  if(header===undefined||header.length>128)return 0;
+  const tokens=header.split(',').map(token=>token.trim());
+  if(!tokens.every(token=>/^[1-9][0-9]{0,4}\.(0|[1-9][0-9]{0,4})$/.test(token)))return 0;
+  return tokens.includes('1.2')?2:tokens.includes('1.1')?1:0;
+}
 export type UploadFailure='authentication'|'configuration'|'reconciliation'|'validation'|'retry';
 export function responseFailure(status:number,body:Uint8Array):UploadFailure {
   let code:unknown;try{const v=jsonBody(body,4096);if(uploadRecord(v)&&Object.keys(v).length===2&&v.contract&&uploadShape({major:uploadOne(1),minor:uploadOne(0)})(v.contract))code=v.code;}catch{/* Never retain raw server text. */}

@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {sameDashboardOwner,type DashboardOwner,type DashboardUploadStatus,type DashboardUploadError} from '../../../../packages/contracts/src/dashboard-upload';
 import {UploadScheduler,stored,type UploadStorage,type UploadClock} from './scheduler';
-import {connectionResponse,registrationResponse,responseFailure,type UploadLimits} from './control-response';
+import {advertisedEventMinor,connectionResponse,registrationResponse,responseFailure,type UploadLimits} from './control-response';
 import type {UploadTransport,UploadHttpResult} from './http';
 import type {UploadServiceCommand,UploadServiceReply} from './service-contract';
 const failure=(error:DashboardUploadError):UploadServiceReply=>({ok:false,error});
@@ -13,9 +13,10 @@ function controlFailure(result:UploadHttpResult):DashboardUploadError {
 export class DashboardUploadService {
   readonly scheduler:UploadScheduler;#control=false;#stopped=false;#startup:Promise<void>;#abort=new AbortController();#controlEpoch=0;
   constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,private readonly origin:string,producerVersion:string,publish:(status:DashboardUploadStatus)=>void,time?:UploadClock){this.scheduler=new UploadScheduler(db,http,origin,producerVersion,publish,time);this.#startup=stored(db.getUploadConfiguration()).then(async configuration=>{if(configuration.purpose!=='history')throw Error('RECONCILIATION');await stored(db.recoverUploadAttempt({startup:true}));});this.#startup.catch(()=>undefined);}
-  async #verify(token:string):Promise<{owner:DashboardOwner;limits:UploadLimits;contractMinor:number}|DashboardUploadError>{
+  /** The body stays the v1.0 control contract; the event minor for new freezes comes from the response header only. */
+  async #verify(token:string):Promise<{owner:DashboardOwner;limits:UploadLimits;contractMinor:0|1|2}|DashboardUploadError>{
     const result=await this.http.request('connection',token,undefined,this.#abort.signal);if(!result.ok||result.statusCode!==200)return controlFailure(result);
-    const value=connectionResponse(result.body);return value?{owner:{origin:this.origin,accountId:value.accountId,companyId:value.companyId,identityEpoch:value.identityEpoch},limits:value.limits,contractMinor:value.contract.minor}:'UNSUPPORTED_CONTRACT';
+    const value=connectionResponse(result.body);return value?{owner:{origin:this.origin,accountId:value.accountId,companyId:value.companyId,identityEpoch:value.identityEpoch},limits:value.limits,contractMinor:advertisedEventMinor(result.eventVersions)}:'UNSUPPORTED_CONTRACT';
   }
   async execute(command:UploadServiceCommand):Promise<UploadServiceReply>{
     if(this.#stopped)return failure('RETIRED');if(this.#control)return failure('BUSY');this.#control=true;const epoch=this.#controlEpoch;
@@ -29,7 +30,8 @@ export class DashboardUploadService {
       if(configuration.status!=='ready')return failure('RECONCILIATION');
       if(command.action==='confirm'){const connection=await stored(this.db.confirmUploadOwner({confirmationId:command.confirmationId,registrationId:command.registrationId,credentialGeneration:command.credentialGeneration,expectedVersion:command.expectedVersion}));return {ok:true,value:{kind:'connection',connection}};}
       const verified=await this.#verify(command.token);if(typeof verified==='string')return failure(verified);if(this.#stopped||this.#abort.signal.aborted||epoch!==this.#controlEpoch)return failure('RETIRED');
-      if(command.action==='verify')return {ok:true,value:{kind:'verified',...verified}};
+      // The private reply carries exactly the owner and limits; the event minor stays inside the service.
+      if(command.action==='verify')return {ok:true,value:{kind:'verified',owner:verified.owner,limits:verified.limits}};
       if(command.action==='activate'){
         const reg=configuration.registration;if(!reg||configuration.version!==command.version||configuration.credentialGeneration!==command.generation||!sameDashboardOwner(verified.owner,reg))return failure('RECONCILIATION');
         const registered=await this.http.request('installations',command.token,new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:0},clientInstallationId:reg.clientInstallationId})),this.#abort.signal);

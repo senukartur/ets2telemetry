@@ -9,6 +9,7 @@ import {advanceQuantities, completeAnchor, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAG
   type QuantityAdvance, type QuantityAnchor, type QuantityPath, type QuantityPoint, type QuantityRun, type QuantityStep} from '../../../telemetry-core/src/trips/quantities';
 import {JOURNAL_DISTANCE_BREAKS, JOURNAL_DISTANCE_QUALITY, JOURNAL_FUEL_BREAKS, JOURNAL_FUEL_QUALITY, type JournalAccounting, type JournalQuantityStatus} from '../../../contracts/src/journal';
 import {MAX_RESOLVE_MEMBERSHIPS, MAX_SAMPLE_BATCH, type SampleInput} from '../api';
+import type {UploadAccounting} from '../upload-projection';
 import {registeredAccountingEngine} from './connection';
 import {cleanLoadWindow, COVERAGE_LOSS, pausedReconnect, type LogicalCoverage} from './logical-coverage';
 
@@ -315,6 +316,21 @@ export function quantitiesIncomplete(db: Database.Database, head: bigint | null)
   if (!point) return false;
   const flags = Number(point.quantity_flags);
   return quantityStatus(real(point.distance_m), flags, 'distance') !== 'complete' || quantityStatus(real(point.fuel_used_l), flags, 'fuel') !== 'complete';
+}
+/**
+ * Upload event v1.2 (ET-113): the accounting status of each quantity at the snapshot ledger head, from the same head row
+ * as quantitiesIncomplete. Complete and partial keep their name; an unavailable or invalid (negative) value is unknown.
+ * Without an engine-1 head row (an engine-0 group, or no row yet) both are unknown.
+ */
+export function uploadAccounting(db: Database.Database, head: bigint | null): UploadAccounting {
+  const point = quantityHead(db, head);
+  if (!point) return {distance: 'unknown', fuel: 'unknown'};
+  const flags = Number(point.quantity_flags);
+  const status = (value: number | null, quantity: 'distance' | 'fuel'): UploadAccounting['distance'] => {
+    const found = quantityStatus(value !== null && value < 0 ? null : value, flags, quantity);
+    return found === 'unavailable' ? 'unknown' : found;
+  };
+  return {distance: status(real(point.distance_m), 'distance'), fuel: status(real(point.fuel_used_l), 'fuel')};
 }
 
 /** The raw members of `logical` in join order: the order of reconstruction and of the upgrade's replay. */

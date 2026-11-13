@@ -98,10 +98,14 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     const outcome=mapping.summary.snapshot.outcome;
     if(bound.terminal===1n&&outcome==='open')return hold(db,work,'reconciliation-required');
     if((bound.http_revision as bigint)>=BigInt(Number.MAX_SAFE_INTEGER))return hold(db,work,'revision-exhausted');
-    const minor = input.contractMinor === 1 ? 1 : 0;
+    // The event minor fixes the frozen shape: v1.0 has neither field, v1.1 adds hardModeResult and v1.2 adds accounting.
+    const minor = input.contractMinor === 2 ? 2 : input.contractMinor === 1 ? 1 : 0;
     const summary = structuredClone(mapping.summary);
     if (minor === 0) {
       delete summary.snapshot.hardModeResult;
+    }
+    if (minor < 2) {
+      delete summary.snapshot.accounting;
     }
     const envelope:UploadEnvelope={...summary,contract:{major:1,minor},producer:{application:'ets2telemetry',version:input.producerVersion},eventId:randomUUID(),revision:Number(bound.http_revision)+1,
       installationId:String(registration.installation_id),bindingId:String(registration.binding_id),delivery:{mode:work.mode as 'live'|'backfill',syncRunId:String(work.run_ref)},
@@ -187,10 +191,20 @@ export function recoverUploadAttempt(conn:StorageConnection,input:Input<'recover
     return attemptReply(receipt?'delivered':'recovered',attempt);
   },options);
 }
+/**
+ * The contract minor of the frozen bytes, which a receipt must echo. The bytes are reclaimed only after a committed
+ * receipt, so without them (undefined) the stored receipt identity decides a replay. Unreadable bytes (null) accept no
+ * receipt version.
+ */
+function frozenMinor(payload:unknown):0|1|2|null|undefined {
+  if(!(payload instanceof Uint8Array))return undefined;
+  try{const minor=(JSON.parse(Buffer.from(payload).toString('utf8')) as {contract?:{minor?:unknown}}).contract?.minor;if(minor===0||minor===1||minor===2)return minor;}catch{/* Unreadable bytes: no version matches. */}
+  return null;
+}
 export function commitUploadReceipt(conn:StorageConnection,input:Input<'commitUploadReceipt'>,options?:CommitOptions):UploadReceiptResult {
   check('commitUploadReceipt',input);return syncTransaction(conn,db=>{
     const attempt=required(get(db,'SELECT * FROM upload_attempt WHERE attempt_id=?',input.attemptId)),eventId=String(attempt.event_ref);
-    const receipt=decodeUploadReceipt(input.body,input.statusCode,eventId);if(!receipt)return {status:'invalid-response',eventId,receiptId:null};
+    const receipt=decodeUploadReceipt(input.body,input.statusCode,eventId,frozenMinor(get(db,'SELECT payload FROM upload_envelopes WHERE event_id=?',eventId)?.payload));if(!receipt)return {status:'invalid-response',eventId,receiptId:null};
     const prior=get(db,'SELECT * FROM upload_receipts WHERE event_ref=?',eventId);
     if(prior){if(prior.receipt_id!==receipt.receiptId||Number(prior.first_received)!==receipt.firstReceivedAtUtcMs){reconcile(db,attempt.registration_ref);return {status:'reconciliation-required',eventId,receiptId:String(prior.receipt_id)};}
       return {status:'duplicate',eventId,receiptId:receipt.receiptId};}

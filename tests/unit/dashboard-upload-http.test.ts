@@ -29,3 +29,14 @@ it('REG-011 aborts the absolute deadline during a stalled body and supports sync
 it.each(['UNABLE_TO_VERIFY_LEAF_SIGNATURE','ERR_TLS_CERT_ALTNAME_INVALID','CERT_HAS_EXPIRED','ECONNRESET'])('REG-010/011 sanitizes %s into configuration hold or transient network failure',async code=>{
   const f=fixture(),pending=f.http.request('connection',token);f.request.emit('error',Object.assign(Error('must never be returned'),{code}));expect(await pending).toEqual({ok:false,code:code==='ECONNRESET'?'NETWORK':'TLS_CONFIGURATION',statusCode:null,retryAfter:null});f.http.close();
 });
+it.each([
+  ['connection',{'vtc-telemetry-event-versions':'1.0, 1.1, 1.2'},'1.0, 1.1, 1.2'],
+  ['connection',{},undefined],
+  ['connection',{'vtc-telemetry-event-versions':'1'.repeat(129)},undefined],
+  ['installations',{'vtc-telemetry-event-versions':'1.0, 1.1, 1.2'},undefined]
+] as const)('REG-010 returns the bounded event version advertisement of a %s response only (%j)',async(route,extra,expected)=>{
+  const f=fixture(),pending=f.http.request(route,token,route==='connection'?undefined:Buffer.from('{}')),stream=f.respond(200,{'content-type':'application/json',...extra});stream.end('{}');
+  const result=await pending;expect(result).toEqual({ok:true,statusCode:200,body:new Uint8Array(Buffer.from('{}')),retryAfter:null,...(expected===undefined?{}:{eventVersions:expected})});
+  // toEqual ignores an undefined property, so the absence is checked by name.
+  expect(Object.hasOwn(result,'eventVersions')).toBe(expected!==undefined);f.http.close();
+});

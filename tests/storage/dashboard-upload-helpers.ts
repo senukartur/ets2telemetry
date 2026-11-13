@@ -19,10 +19,12 @@ export async function tlsDashboard(){
   const server=https.createServer({key,cert},(request,response)=>{const chunks:Buffer[]=[];request.on('data',chunk=>chunks.push(chunk));request.on('end',()=>{
     response.setHeader('content-type','application/json');
     const accountId=owners.get((request.headers.authorization??'').slice(7));if(!accountId){response.statusCode=401;response.end('{}');return;}
-    if(request.url==='/api/telemetry/v1/connection'){response.end(JSON.stringify({contract:{major:1,minor:0},accountId,companyId:'c',identityEpoch:'e',limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}}));return;}
+    // The Dashboard keeps the v1.0 control body and advertises its event versions in this header only.
+    if(request.url==='/api/telemetry/v1/connection'){response.setHeader('VTC-Telemetry-Event-Versions','1.0, 1.1, 1.2');response.end(JSON.stringify({contract:{major:1,minor:0},accountId,companyId:'c',identityEpoch:'e',limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}}));return;}
     if(request.url==='/api/telemetry/v1/installations'){const body=JSON.parse(Buffer.concat(chunks).toString());if(Object.keys(body).sort().join(',')!=='clientInstallationId,contract')throw Error('Invalid fixture registration');response.statusCode=201;response.end(JSON.stringify({contract:{major:1,minor:0},installationId,bindingId,identityEpoch:'e'}));return;}
-    const bytes=Buffer.concat(chunks);events.push(bytes);eventOwners.push(accountId);const eventId=JSON.parse(bytes.toString()).eventId as string;let receiptId=eventIds.get(eventId);const duplicate=receiptId!==undefined;if(!receiptId){receiptId=randomUUID();eventIds.set(eventId,receiptId);}response.statusCode=duplicate?200:202;signals.emit('event');
-    const body=JSON.stringify({contract:{major:1,minor:0},eventId,receiptId,status:duplicate?'duplicate':'stored',firstReceivedAtUtcMs:5000});
+    const bytes=Buffer.concat(chunks);events.push(bytes);eventOwners.push(accountId);const {eventId,contract}=JSON.parse(bytes.toString()) as {eventId:string;contract:unknown};let receiptId=eventIds.get(eventId);const duplicate=receiptId!==undefined;if(!receiptId){receiptId=randomUUID();eventIds.set(eventId,receiptId);}response.statusCode=duplicate?200:202;signals.emit('event');
+    // Receipts echo the version of the event they acknowledge.
+    const body=JSON.stringify({contract,eventId,receiptId,status:duplicate?'duplicate':'stored',firstReceivedAtUtcMs:5000});
     if(hold){held=response;response.setHeader('x-fixture-receipt',Buffer.from(body).toString('base64'));}else response.end(body);
   });});
   const sockets=new Set<Duplex>();server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});

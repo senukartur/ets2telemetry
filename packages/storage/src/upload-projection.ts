@@ -13,6 +13,9 @@ export interface UploadVersions {nativeProtocol: {major: number; minor: number};
 export interface UploadMember {id: string; rawTripUuid: string; pluginSessionId: string; game: 'ets2' | 'ats'; origin: 'game' | 'synthetic' | 'replay'; versions: UploadVersions}
 export interface UploadConfiguration {id: string; occurrence: QualifiedOccurrence; index: number; idValue: Available<string>; bodyType: Available<string>; chainType: Available<string>}
 export interface UploadInterval {id: string; rawTripUuid: string; pluginSessionId: string; kind: 'event-loss' | 'not-connected' | 'storage-unavailable' | 'sample-loss' | 'discontinuity' | 'restore-loss'}
+/** Whether the client accounted for a quantity over the whole trip, across game restarts (event v1.2). */
+export type UploadAccountingStatus = 'complete' | 'partial' | 'unknown';
+export interface UploadAccounting {distance: UploadAccountingStatus; fuel: UploadAccountingStatus}
 export interface UploadFacts {
   game: 'ets2' | 'ats'; pluginSessionId: string; outcome: TripOutcome; closeReason: CloseReason | null; recordingCompleteness: RecordingCompleteness;
   openedBy: 'event' | 'checkpoint'; checkpointNextEventSeq: string | null; checkpointUtcMs: number | null;
@@ -24,6 +27,8 @@ export interface UploadFacts {
   moneyIncomplete: boolean;
   clockAnomaly: boolean;
   hardModeResult: 'qualified' | 'not-qualified';
+  /** Engine-1 accounting at the snapshot ledger head. Absent in pins prepared before it existed, which map to unknown. */
+  accounting?: UploadAccounting;
 }
 export interface UploadProjection {
   requestedTripUuid: string; rootTripUuid: string; readiness: UploadReadiness | 'redirected'; rootReadiness: UploadReadiness;
@@ -78,11 +83,19 @@ const jobFields: [string, Check][] = [
 const jobCheck = shape(Object.fromEntries(jobFields));
 const occurrence = shape({pluginSessionId: isUploadUuid, rawTripUuid: isUploadUuid, eventSeq: sequence, type: one(...EVENT_TYPES), utcMs: nullable(count)});
 const mode = shape({mode: one('unknown','single-player','truckersmp','haulmp'), method: one('none','module-scan','process-scan'), confidence: one('none','weak','strong'), ambiguous: bool});
-const facts = shape({game: one('ets2','ats'), pluginSessionId: isUploadUuid, outcome: one('open','none','delivered','cancelled'),
+const accountingStatus = one('complete', 'partial', 'unknown');
+const accountingCheck = shape({distance: accountingStatus, fuel: accountingStatus});
+const factsShape = shape({game: one('ets2','ats'), pluginSessionId: isUploadUuid, outcome: one('open','none','delivered','cancelled'),
   closeReason: nullable(one('outcome','configuration-cleared','different-job','restart','discontinuity','gap')), recordingCompleteness: one('complete','partial','unknown'),
   openedBy: one('event','checkpoint'), checkpointNextEventSeq: nullable(sequence), checkpointUtcMs: nullable(count), opening: nullable(occurrence), outcomeOccurrence: nullable(occurrence), close: nullable(occurrence),
   gameMode: mode, job: jobCheck, observedDistance: available(real,'m'), fuelUsed: available(real,'L'), deliveredDistance: available(real,'m'), cargoDamage: available(real,'fraction'),
   revenue: moneyOf('s64'), penalty: moneyOf('s64'), moneyIncomplete: bool, clockAnomaly: bool, hardModeResult: one('qualified', 'not-qualified')});
+// Facts persisted before the accounting status existed omit it; a present value must be valid.
+const facts: Check = v => {
+  if (!record(v)) return false;
+  const {accounting, ...rest} = v;
+  return (!Object.hasOwn(v, 'accounting') || accountingCheck(accounting)) && factsShape(rest);
+};
 const totals = shape({members: count, configurations: count, intervals: count});
 const readiness = one('ready','identity-pending');
 export const uploadSnapshotParts = (v: unknown): string[] | undefined => {
@@ -144,6 +157,8 @@ export interface UploadSummary {
     expectedIncome: Available<Money>; revenue: Available<Money>; penalty: Available<Money>;
     evidence: {startObserved: boolean; endObserved: boolean; ruleContextComplete: boolean; clockAnomaly: boolean; reasons: string[]};
     hardModeResult?: 'qualified' | 'not-qualified';
+    /** Required in v1.2 and forbidden in v1.0 and v1.1. */
+    accounting?: UploadAccounting;
   };
 }
 interface UploadPlace {cityId: Available<string>; cityName: Available<string>; companyId: Available<string>; companyName: Available<string>}
@@ -210,7 +225,7 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
     if(!hasConfigurations)reasons.add('trailer-context-unavailable');
     if(hasIntervals)reasons.add('recording-intervals');
   }
-  // v1 has no separate accounting-uncertainty field; retain its existing wire-visible reason.
+  // The wire-visible reason is kept at every minor; v1.2 also carries the separate snapshot.accounting status.
   if(f.moneyIncomplete)reasons.add('accounting-unavailable');
   if(!usable(j.sourceCityId)||!usable(j.destinationCityId)||!usable(j.cargoId))reasons.add('job-context-unavailable');
   if(!j.cargoMass.available||!Number.isFinite(j.cargoMass.value)||j.cargoMass.value<0)reasons.add('cargo-mass-unavailable');
@@ -226,7 +241,8 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
     fuelUsed: f.fuelUsed, cargoDamage: f.cargoDamage, expectedIncome: j.expectedIncome, revenue: f.revenue, penalty: f.penalty,
     evidence: {startObserved: start.basis === 'event' && !clockAnomaly, endObserved: !!f.outcomeOccurrence && end?.basis === 'event' && !clockAnomaly,
       ruleContextComplete: reasons.size===0, clockAnomaly, reasons: [...reasons].sort()},
-    hardModeResult: f.hardModeResult
+    hardModeResult: f.hardModeResult,
+    accounting: f.accounting ?? {distance: 'unknown', fuel: 'unknown'}
   }};
   // Validate the exact allowlisted wire subset, including Dashboard's UTF-8, numeric and money limits.
   if (!wireValuesFit(summary)) return hold('unrepresentable');
@@ -315,7 +331,8 @@ export function isUploadSummary(value:unknown, minor = 0):value is UploadSummary
     plannedDistance:metric('m'),observedDistance:metric('m'),deliveredDistance:metric('m'),fuelUsed:metric('L'),cargoDamage:metric('fraction'),expectedIncome:moneyOf('u64'),revenue:moneyOf('s64'),penalty:moneyOf('s64'),
     evidence:shape({startObserved:bool,endObserved:bool,ruleContextComplete:bool,clockAnomaly:bool,reasons:v=>Array.isArray(v)&&v.length<=32&&new Set(v).size===v.length&&v.every(x=>typeof x==='string'&&/^[a-z][a-z0-9-]{0,63}$/.test(x))})
   };
-  if(minor === 1) snapshotFields.hardModeResult = one('qualified', 'not-qualified');
+  if(minor >= 1) snapshotFields.hardModeResult = one('qualified', 'not-qualified');
+  if(minor === 2) snapshotFields.accounting = accountingCheck;
   const check=shape({source:shape({provider:one('ets2telemetry'),game:one('ets2','ats'),tripId:isUploadUuid,pluginSessionId:isUploadUuid,databaseUuid:isUploadUuid,origin:one('game')}),
     snapshot:shape(snapshotFields)});
   if(!check(value))return false;
