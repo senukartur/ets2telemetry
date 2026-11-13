@@ -76,7 +76,8 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
   it('freezes contract minor 2 with hardModeResult and accounting and forbids accounting at minors 0 and 1',()=>{
     const e2=envelope();e2.contract.minor=2;e2.snapshot.hardModeResult='not-qualified';e2.snapshot.accounting={distance:'complete',fuel:'partial'};
     expect(validateUploadEnvelope(e2)).toBe(true);
-    const frozen2=JSON.parse(new TextDecoder().decode(encodeUploadEnvelope(e2)!)) as UploadEnvelope;
+    const encoded2=encodeUploadEnvelope(e2);expect(encoded2).toBeDefined();
+    const frozen2=JSON.parse(new TextDecoder().decode(encoded2)) as UploadEnvelope;
     expect(frozen2.contract).toEqual({major:1,minor:2});expect(frozen2.snapshot.accounting).toEqual({distance:'complete',fuel:'partial'});
     const without=(key:'hardModeResult'|'accounting')=>{const e=structuredClone(e2);delete e.snapshot[key];return e;};
     expect(validateUploadEnvelope(without('accounting'))).toBe(false);expect(validateUploadEnvelope(without('hardModeResult'))).toBe(false);
