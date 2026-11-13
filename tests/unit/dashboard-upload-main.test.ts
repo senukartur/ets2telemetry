@@ -278,3 +278,46 @@ it.each(['cancel', 'stop'] as const)('REG-010/012 retains disconnect intent and 
     expect(controlled.recover.mock.calls).toEqual([[{startup: true}]]); expect(controlled.request).not.toHaveBeenCalled();
   } finally {gate.resolve(); main.stop(); f.controller.stop(); await controlled.service.stop();}
 });
+/** A service whose Dashboard answers the connection with `bodyMinor` in the body and `eventVersions` as the header, if any. */
+function advertisingService(bodyMinor: 0 | 1, eventVersions?: string) {
+  const registration = {...owner, registrationId: randomUUID(), clientInstallationId: randomUUID(), installationId: randomUUID(), bindingId: randomUUID()};
+  const configuration: UploadActiveConfiguration = {status: 'ready', purpose: 'history', version: '1', registration, credentialGeneration: randomUUID(), runId: randomUUID()};
+  const db = new Proxy({} as UploadStorage, {get(_target, key) {
+    if (key === 'getUploadConfiguration') return () => Promise.resolve({ok: true, value: configuration});
+    if (key === 'recoverUploadAttempt') return () => Promise.resolve({ok: true, value: {status: 'empty', attemptId: null, eventId: null, registrationId: null, registration: null, payload: null}});
+    throw Error('UNEXPECTED_STORAGE_OPERATION');
+  }});
+  const limits = {maxEventBytes: 65536, maxDepth: 16, eventsPerMinute: 60, burst: 10}, json = (value: unknown) => new Uint8Array(Buffer.from(JSON.stringify(value)));
+  const request = vi.fn((route: string) => Promise.resolve(route === 'connection'
+    ? {ok: true as const, statusCode: 200, body: json({contract: {major: 1, minor: bodyMinor}, accountId: 'a', companyId: 'c', identityEpoch: 'e', limits}), retryAfter: null, ...(eventVersions === undefined ? {} : {eventVersions})}
+    : {ok: true as const, statusCode: 201, body: json({contract: {major: 1, minor: 0}, installationId: registration.installationId, bindingId: registration.bindingId, identityEpoch: 'e'}), retryAfter: null}));
+  const service = new DashboardUploadService(db, {request, abort() {}, close() {}}, origin, 'test', () => {});
+  const activate = vi.spyOn(service.scheduler, 'activate').mockResolvedValue();
+  return {service, configuration, limits, activate};
+}
+// ET-113: the Dashboard keeps the v1.0 control body and lists its event versions only in VTC-Telemetry-Event-Versions.
+it.each([
+  [0, '1.0, 1.1, 1.2', 2], [0, '1.0, 1.1', 1], [0, undefined, 0], [1, undefined, 0], [1, '1.0', 0]
+] as const)('REG-010 activates with the event minor of the connection header, not the body: body minor %s, header %j', async (bodyMinor, header, minor) => {
+  const f = advertisingService(bodyMinor, header);
+  try {
+    const reply = await f.service.execute({action: 'activate', token, generation: f.configuration.credentialGeneration!, version: '1'});
+    expect(reply).toMatchObject({ok: true, value: {kind: 'settled'}});
+    expect(f.activate.mock.calls).toEqual([[f.configuration, token, f.limits, minor]]);
+  } finally {await f.service.stop();}
+});
+// ET-113: a verify reply with any private field is dropped by the main-process bridge, which then times out after 65 s.
+it('REG-010/012 answers verify through the real private bridge with only the owner and limits', async () => {
+  const f = advertisingService(0, '1.0, 1.1, 1.2');
+  let answered: Promise<void> | undefined, settled: UploadServiceReply | undefined;
+  const bridge = new UploadServiceBridge(value => {
+    const message = value as {id: string; generation: string; command: UploadServiceCommand};
+    answered = f.service.execute(message.command).then(reply => {bridge.receive({type: 'dashboard-upload:answer', id: message.id, generation: message.generation, reply});});
+  }, () => {});
+  try {
+    const pending = bridge.call({action: 'verify', token}).then(reply => {settled = reply;});
+    await answered; await Promise.resolve();
+    expect(settled).toEqual({ok: true, value: {kind: 'verified', owner, limits: f.limits}});
+    await pending;
+  } finally {bridge.retire(); await f.service.stop();}
+});

@@ -5,7 +5,7 @@ import {promisify} from 'node:util';
 import {initialDashboardUploadStatus,isDashboardUploadStatus,isDashboardToken,isReleaseDashboardOrigin} from '../../packages/contracts/src/dashboard-upload';
 import {configuredDashboardOrigin} from '../../apps/desktop/src/dashboard-upload/config';
 import {ACTIVE_CHANNEL, RELEASE_CHANNELS} from '../../apps/desktop/src/channel';
-import {connectionResponse,registrationResponse,jsonBody} from '../../apps/desktop/src/dashboard-upload/control-response';
+import {advertisedEventMinor,connectionResponse,registrationResponse,jsonBody} from '../../apps/desktop/src/dashboard-upload/control-response';
 import {isUploadServiceRequest,isUploadServiceCancel,isUploadServiceReply,uploadReplyMatches} from '../../apps/desktop/src/dashboard-upload/service-contract';
 const bytes=(v:unknown)=>Buffer.from(JSON.stringify(v));
 const token=`vtc1_${randomUUID()}_${'a'.repeat(43)}`;
@@ -50,6 +50,15 @@ describe('REG-010/012 closed Dashboard upload boundaries',()=>{
     expect(registrationResponse(bytes(registered),owner)).toEqual(registered);
     expect(registrationResponse(bytes({...registered,contract:{major:1,minor:1}}),owner)).toEqual({...registered,contract:{major:1,minor:1}});
     expect(registrationResponse(bytes({...registered,identityEpoch:'new'}),owner)).toBeUndefined();
+  });
+  // ET-113: the connection response header, not the v1.0 control body, selects the minor of newly frozen events.
+  it.each([
+    ['1.0, 1.1, 1.2',2],['1.0, 1.1',1],['1.1',1],['1.2',2],['1.0,1.2',2],['1.0, 1.2, 1.3',2],['1.0, 1.3',0],
+    ['1.0',0],[undefined,0],['',0],['2.0',0],['1.02',0],['1.2,x',0],['1.2,',0],['1.0, 1.1, 1.2, 2.0',0],
+    // 26 listed versions are 128 characters, the bound; 27 are 133 and not a recognized advertisement.
+    [Array(26).fill('1.2').join(', '),2],[Array(27).fill('1.2').join(', '),0]
+  ] as const)('selects the event minor from the advertised versions %j',(header,minor)=>{
+    expect(advertisedEventMinor(header)).toBe(minor);
   });
   it('accepts the Dashboard numeric identityEpoch as the owner key decimal text',()=>{
     const response={contract:{major:1,minor:0},accountId:'a',companyId:'c',identityEpoch:2,limits:{maxEventBytes:65536,maxDepth:16,eventsPerMinute:60,burst:10}};
