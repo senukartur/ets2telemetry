@@ -86,7 +86,8 @@ async function publish(storage: Storage, tripUuid: string, registrationId: strin
   expect(frozen.status).toBe('frozen');
   const attempt = ok(storage.claimUploadAttempt({attemptId: randomUUID(), registrationId, expectedVersion, mode: 'any', nowMs: 1000}));
   expect(attempt.eventId).toBe(frozen.eventId);
-  expect(ok(storage.commitUploadReceipt({attemptId: attempt.attemptId!, statusCode: 202, body: uploadReceipt(frozen.eventId!)})).status).toBe('delivered');
+  // The receipt echoes the frozen event's minor 1.
+  expect(ok(storage.commitUploadReceipt({attemptId: attempt.attemptId!, statusCode: 202, body: uploadReceipt(frozen.eventId!, undefined, 1)})).status).toBe('delivered');
   return frozen.eventId!;
 }
 const payload = (db: Database.Database, eventId: string) => Buffer.from(db.prepare('SELECT payload FROM upload_envelopes WHERE event_id = ?').pluck().get(eventId) as Uint8Array);

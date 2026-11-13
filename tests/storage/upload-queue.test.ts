@@ -543,6 +543,27 @@ it.each([0,1] as const)('REG-005/010 keeps a queued minor %s envelope byte-ident
   expect([latest.contract,latest.revision,latest.type,latest.snapshot.accounting]).toEqual([{major:1,minor:2},2,'trip.completed',{distance:'complete',fuel:'complete'}]);
   expect(payload(first.eventId)).toEqual(bytes);
 });
+// ET-113: both receipt statuses echo the frozen event's version; a receipt with another version is not an ACK and
+// leaves the claimed event in flight, so the receipt that echoes it still commits.
+it.each([
+  [0,2,'invalid-response'],[0,0,'delivered'],[1,1,'delivered'],[1,0,'invalid-response'],[2,2,'delivered'],[2,1,'invalid-response']
+] as const)('REG-005/010 commits a receipt for a minor %s event only when it echoes that minor: receipt minor %s is %s',async(minor,receiptMinor,status)=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
+  const workId=await complete(storage,source),frozen=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000,contractMinor:minor}));
+  expect(frozen.status).toBe('frozen');ok(storage.releaseUploadMaterialization({workId}));
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));expect(attempt.eventId).toBe(frozen.eventId);
+  const state=()=>db.prepare('SELECT state FROM upload_envelopes WHERE event_id=?').pluck().get(frozen.eventId);expect(state()).toBe('sending');
+  const receipt=(echoed:number)=>new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:echoed},eventId:frozen.eventId,receiptId:randomUUID(),status:'stored',firstReceivedAtUtcMs:5000}));
+  expect(ok(storage.commitUploadReceipt({attemptId:attempt.attemptId!,statusCode:202,body:receipt(receiptMinor)}))).toMatchObject({status,eventId:frozen.eventId});
+  const delivered=status==='delivered';
+  expect(state()).toBe(delivered?'delivered':'sending');
+  expect(db.prepare('SELECT count(*) FROM upload_receipts').pluck().get()).toBe(delivered?1n:0n);
+  expect(ok(storage.getUploadStoreStatus({registrationId:source.registrationId})).deliveredEvents).toBe(delivered?1:0);
+  if(!delivered){
+    expect(ok(storage.commitUploadReceipt({attemptId:attempt.attemptId!,statusCode:202,body:receipt(minor)})).status).toBe('delivered');
+    expect(ok(storage.getUploadStoreStatus({registrationId:source.registrationId})).deliveredEvents).toBe(1);
+  }
+});
 // ET-112c: an engine-1 root's frozen upload keeps its bytes. The retroactive join of a later segment revises the root, so
 // it is the next material change, and the upload materialized after it carries the spliced head's accounting state. A
 // drives 40 m on 20 ml and stops; B's first reading is its junction, then B drives 20 m on 10 ml: 60 m either way.

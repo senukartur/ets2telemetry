@@ -44,10 +44,14 @@ export function validateUploadEnvelope(value:unknown):value is UploadEnvelope {
 export function encodeUploadEnvelope(envelope:UploadEnvelope):Uint8Array|undefined {
   return validateUploadEnvelope(envelope)?new Uint8Array(Buffer.from(canonicalUpload(envelope),'utf8')):undefined;
 }
-export function decodeUploadReceipt(bytes:Uint8Array,statusCode:number,eventId:string):UploadReceipt|undefined {
+/**
+ * `minor`, when given, is the frozen event's version, which the receipt must echo; any other version is not an ACK.
+ * Null (an unreadable frozen version) accepts no receipt.
+ */
+export function decodeUploadReceipt(bytes:Uint8Array,statusCode:number,eventId:string,minor?:0|1|2|null):UploadReceipt|undefined {
   if(bytes.byteLength>4096||statusCode!==200&&statusCode!==202)return undefined;
   let parsed:unknown;
   try{parsed=strictJson(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes));}catch{return undefined;}
-  if(!shape({contract,eventId:one(eventId),receiptId:isUploadUuid,status:one(statusCode===202?'stored':'duplicate'),firstReceivedAtUtcMs:safe})(parsed))return undefined;
+  if(!shape({contract:minor===undefined?contract:shape({major:one(1),minor:minor===null?one():one(minor)}),eventId:one(eventId),receiptId:isUploadUuid,status:one(statusCode===202?'stored':'duplicate'),firstReceivedAtUtcMs:safe})(parsed))return undefined;
   return parsed as UploadReceipt;
 }

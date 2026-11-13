@@ -386,7 +386,8 @@ describe('ET-112g publication', () => {
     expect(frozen.status).toBe('frozen');
     const attempt = ok(storage.claimUploadAttempt({attemptId: randomUUID(), registrationId, expectedVersion: '1', mode: 'any', nowMs: 1000}));
     expect(attempt.eventId).toBe(frozen.eventId);
-    expect(ok(storage.commitUploadReceipt({attemptId: attempt.attemptId!, statusCode: 202, body: uploadReceipt(frozen.eventId!)})).status).toBe('delivered');
+    // The receipt echoes the frozen event's minor 1.
+    expect(ok(storage.commitUploadReceipt({attemptId: attempt.attemptId!, statusCode: 202, body: uploadReceipt(frozen.eventId!, undefined, 1)})).status).toBe('delivered');
     ok(storage.close());
   }
   it('lists a separately published segment as reconciliation-required and refuses a forged action for it (F-D7)', async () => {

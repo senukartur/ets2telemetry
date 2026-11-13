@@ -186,4 +186,5 @@ export async function uploadTestWork(storage:Storage|StorageClient,source:{tripU
   for(let turns=0;['preparing','folding'].includes(work.status)&&turns<1000;turns++){work=ok(await storage.advanceUploadMaterialization({workId}));expect(work.examined).toBeLessThanOrEqual(100);}
   expect(work.status).toBe('complete');return workId;
 }
-export const uploadReceipt=(eventId:string,receiptId=randomUUID())=>new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:0},eventId,receiptId,status:'stored',firstReceivedAtUtcMs:5000}));
+/** A 202 receipt body; `minor` must echo the frozen event's contract minor. */
+export const uploadReceipt=(eventId:string,receiptId=randomUUID(),minor:0|1|2=0)=>new TextEncoder().encode(JSON.stringify({contract:{major:1,minor},eventId,receiptId,status:'stored',firstReceivedAtUtcMs:5000}));

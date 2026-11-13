@@ -92,6 +92,9 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
     const receipt={contract:{major:1,minor:2},eventId:id,receiptId:id,status:'stored',firstReceivedAtUtcMs:0};
     expect(decodeUploadReceipt(bytes(receipt),202,id)).toEqual(receipt);
     expect(decodeUploadReceipt(bytes({...receipt,contract:{major:1,minor:3}}),202,id)).toBeUndefined();
+    // Bound to the frozen event's minor, only that minor is a receipt; null (an unreadable frozen version) accepts none.
+    expect([0,1,2].map(minor=>decodeUploadReceipt(bytes(receipt),202,id,minor as 0|1|2)!==undefined)).toEqual([false,false,true]);
+    expect(decodeUploadReceipt(bytes(receipt),202,id,null)).toBeUndefined();
   });
   it('keeps the accounting status out of the material comparison',()=>{
     const base=structuredClone(summary),complete=structuredClone(summary),partial=structuredClone(summary);
