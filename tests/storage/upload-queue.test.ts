@@ -7,7 +7,7 @@ import {StorageClient} from '../../packages/storage/src/client';
 import {UploadScheduler,type UploadStorage,type UploadClock} from '../../apps/desktop/src/dashboard-upload/scheduler';
 import type {UploadHttpResult} from '../../apps/desktop/src/dashboard-upload/http';
 import type {UploadWork} from '../../packages/storage/src/upload-sync';
-import {encodeUploadEnvelope,uploadDigest,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
+import {encodeUploadEnvelope,uploadDigest,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS} from '../../packages/storage/src/upload-sync';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
 import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core/src';
@@ -486,44 +486,62 @@ it.each([[1,false],[1,true],[2,false],[2,true]] as const)('TEL-034 re-evaluates 
   expect(snapshot.trailers.complete).toBe(frozen);expect(snapshot.evidence).toMatchObject({ruleContextComplete:frozen,reasons:frozen?[]:['trailer-context-unproven']});
 });
 
-it('preserves minor 0 payloads and emits minor 1 envelopes with hardModeResult when negotiated',async()=>{
-  const conn1=await openConnection(ws.options({purpose:'history'})),storage1=new Storage(conn1);opened.push(storage1);
-  const source1=await setup(storage1);const db1=conn1.writer();
-  ok(storage1.commitEvent({message:game(source1.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source1.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
-  
-  // 1. Freeze with contractMinor 1 (negotiated)
-  const workId1=await complete(storage1,source1);
-  expect(ok(storage1.freezeUploadMaterialization({workId:workId1,producerVersion:'test',createdUtcMs:1000,contractMinor:1})).status).toBe('frozen');
-  const payload1=db1.prepare('SELECT payload FROM upload_envelopes WHERE work_ref=?').pluck().get(workId1) as Buffer;
-  const envelope1=JSON.parse(payload1.toString()) as UploadEnvelope;
-  expect(envelope1.contract).toEqual({major:1,minor:1});
-  expect(envelope1.snapshot.hardModeResult).toBe('not-qualified');
-  ok(storage1.releaseUploadMaterialization({workId:workId1}));
-
-  // 2. Separate trip in new database workspace to test minor 0 (older dashboard negotiation)
-  const ws0=await workspace();
-  const conn0=await openConnection(ws0.options({purpose:'history'})),storage0=new Storage(conn0);
-  try {
-    const source0=await setup(storage0);const db0=conn0.writer();
-    ok(storage0.commitEvent({message:game(source0.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source0.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
-    const workId0=await complete(storage0,source0);
-    expect(ok(storage0.freezeUploadMaterialization({workId:workId0,producerVersion:'test',createdUtcMs:1001,contractMinor:0})).status).toBe('frozen');
-    const payload0=db0.prepare('SELECT payload FROM upload_envelopes WHERE work_ref=?').pluck().get(workId0) as Buffer;
-    const envelope0=JSON.parse(payload0.toString()) as UploadEnvelope;
-    expect(envelope0.contract).toEqual({major:1,minor:0});
-    expect(envelope0.snapshot).not.toHaveProperty('hardModeResult');
-    
-    // 3. Queued minor 0 envelope is claimed and retryable without payload mutation
-    const attempt=ok(storage0.claimUploadAttempt({attemptId:randomUUID(),registrationId:source0.registrationId,expectedVersion:'1',mode:'any',nowMs:1002}));
-    expect(attempt.status).toBe('claimed');
-    expect(attempt.payload).toEqual(new Uint8Array(payload0));
-    const claimedEnvelope=JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope;
-    expect(claimedEnvelope.contract).toEqual({major:1,minor:0});
-    expect(claimedEnvelope.snapshot).not.toHaveProperty('hardModeResult');
-  } finally {
-    storage0.close();
-    await ws0.dispose();
-  }
+/** Three linked engine-1 readings with proof: 40 m on 20 ml, complete distance and fuel accounting at the ledger head. */
+function engineOneSamples(storage:Storage,source:Awaited<ReturnType<typeof setup>>){
+  const absent={available:false,reason:'not-observed'} as const,s=source.s;
+  const point=(at:number,odo:number,fuel:number,speed:number):SampleInput=>({tripUuid:source.tripUuid,utcMs:1000+at*1000,sourceClockId:s.clockId,
+    monotonicNs:String(BigInt(at)*1_000_000_000n),gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},speed:{available:true,value:speed},
+    fuel:{available:true,value:fuel},averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:{available:true,value:{x:odo-1_000_000,y:0,z:0}},
+    odometer:{available:true,value:odo},recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
+      ...(at>1?{previous:{tripUuid:source.tripUuid,sourceClockId:s.clockId,monotonicNs:String(BigInt(at-1)*1_000_000_000n)}}:{})}});
+  ok(storage.appendSamples(s.session,[point(1,1_000_000,100,20),point(2,1_000_020,99.99,20),point(3,1_000_040,99.98,0)],{uniqueSeconds:true}));
+}
+const delivered=(storage:Storage,source:Awaited<ReturnType<typeof setup>>)=>ok(storage.commitEvent({message:game(source.s.event(r.delivered())),
+  effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
+// ET-113: the negotiated minor fixes the frozen shape. v1.0 has neither field, v1.1 adds hardModeResult, v1.2 also adds
+// the accounting status of the engine-1 ledger head; every shape validates and is claimed with its exact bytes.
+it.each([
+  [0,undefined,undefined],
+  [1,'not-qualified',undefined],
+  [2,'not-qualified',{distance:'complete',fuel:'complete'}]
+] as const)('REG-005/010 freezes an engine-1 delivered trip at contract minor %s with its own snapshot fields',async(minor,hardModeResult,accounting)=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
+  engineOneSamples(storage,source);delivered(storage,source);
+  const workId=await complete(storage,source);
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000,contractMinor:minor})).status).toBe('frozen');
+  const payload=db.prepare('SELECT payload FROM upload_envelopes WHERE work_ref=?').pluck().get(workId) as Buffer,envelope=JSON.parse(payload.toString()) as UploadEnvelope;
+  expect(envelope.contract).toEqual({major:1,minor});expect(envelope.type).toBe('trip.completed');
+  expect(Object.hasOwn(envelope.snapshot,'hardModeResult')).toBe(hardModeResult!==undefined);expect(envelope.snapshot.hardModeResult).toBe(hardModeResult);
+  expect(Object.hasOwn(envelope.snapshot,'accounting')).toBe(accounting!==undefined);expect(envelope.snapshot.accounting).toEqual(accounting);
+  expect(envelope.snapshot.observedDistance).toEqual({available:true,value:40,unit:'m'});
+  expect(validateUploadEnvelope(envelope)).toBe(true);
+  ok(storage.releaseUploadMaterialization({workId}));
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1002}));
+  expect(attempt.status).toBe('claimed');expect(attempt.payload).toEqual(new Uint8Array(payload));
+});
+// ET-113: an upgrade to v1.2 never re-encodes queued v1.0/v1.1 bytes. Without a material change the next comparison is
+// equal, so no revision is minted for the new version alone; the next material change freezes a v1.2 revision.
+it.each([0,1] as const)('REG-005/010 keeps a queued minor %s envelope byte-identical when the Dashboard later advertises minor 2',async minor=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
+  engineOneSamples(storage,source);
+  // A rule-context availability change that maps to the same already-incomplete context, as in completeAfterMaterial.
+  ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));
+  let workId=await complete(storage,source);const first=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000,contractMinor:minor}));
+  expect(first.status).toBe('frozen');ok(storage.releaseUploadMaterialization({workId}));
+  const payload=(id:string|null)=>new Uint8Array(db.prepare('SELECT payload FROM upload_envelopes WHERE event_id=?').pluck().get(id) as Buffer),bytes=payload(first.eventId);
+  ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));
+  workId=await complete(storage,source);
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:2000,contractMinor:2})).status).toBe('equal');ok(storage.releaseUploadMaterialization({workId}));
+  expect(db.prepare('SELECT count(*) FROM upload_envelopes').pluck().get()).toBe(1n);expect(payload(first.eventId)).toEqual(bytes);
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:2001}));
+  expect([attempt.status,attempt.eventId]).toEqual(['claimed',first.eventId]);expect(attempt.payload).toEqual(bytes);
+  delivered(storage,source);
+  workId=await complete(storage,source);const next=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:3000,contractMinor:2}));
+  expect(next.status).toBe('frozen');ok(storage.releaseUploadMaterialization({workId}));
+  const old=JSON.parse(Buffer.from(bytes).toString()) as UploadEnvelope,latest=JSON.parse(Buffer.from(payload(next.eventId)).toString()) as UploadEnvelope;
+  expect([old.contract,old.revision,old.type]).toEqual([{major:1,minor},1,'trip.started']);
+  expect([latest.contract,latest.revision,latest.type,latest.snapshot.accounting]).toEqual([{major:1,minor:2},2,'trip.completed',{distance:'complete',fuel:'complete'}]);
+  expect(payload(first.eventId)).toEqual(bytes);
 });
 // ET-112c: an engine-1 root's frozen upload keeps its bytes. The retroactive join of a later segment revises the root, so
 // it is the next material change, and the upload materialized after it carries the spliced head's accounting state. A

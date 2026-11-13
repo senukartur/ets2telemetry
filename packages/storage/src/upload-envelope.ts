@@ -4,21 +4,26 @@ import {isUploadSummary,isUploadUuid,type UploadSummary} from './upload-projecti
 import {one,record,safe,shape,text} from './upload-sync';
 
 export interface UploadEnvelope extends UploadSummary {
-  contract:{major:1;minor:0|1};producer:{application:'ets2telemetry';version:string};eventId:string;revision:number;
+  contract:{major:1;minor:0|1|2};producer:{application:'ets2telemetry';version:string};eventId:string;revision:number;
   installationId:string;bindingId:string;delivery:{mode:'live'|'backfill';syncRunId:string};
   type:'trip.started'|'trip.completed'|'trip.cancelled'|'trip.closed'|'trip.corrected';createdUtcMs:number;
 }
-export interface UploadReceipt {contract:{major:1;minor:0|1};eventId:string;receiptId:string;status:'stored'|'duplicate';firstReceivedAtUtcMs:number}
-const contract=shape({major:one(1),minor:one(0,1)});
+/** Receipts echo the version of the event they acknowledge. */
+export interface UploadReceipt {contract:{major:1;minor:0|1|2};eventId:string;receiptId:string;status:'stored'|'duplicate';firstReceivedAtUtcMs:number}
+const contract=shape({major:one(1),minor:one(0,1,2)});
 export function canonicalUpload(value:unknown):string {
   if(Array.isArray(value))return `[${value.map(canonicalUpload).join(',')}]`;
   if(record(value))return `{${Object.keys(value).sort().map(key=>`${JSON.stringify(key)}:${canonicalUpload(value[key])}`).join(',')}}`;
   return JSON.stringify(value);
 }
 export const uploadDigest=(bytes:Uint8Array|string)=>createHash('sha256').update(bytes).digest('hex');
-/** Volatile upload metadata is absent; ordinary OPEN counters do not create material revisions. */
+/**
+ * Volatile upload metadata is absent; ordinary OPEN counters do not create material revisions. The v1.2 accounting
+ * status is not material either: it never mints a revision alone, and each new revision carries the current status.
+ */
 export function uploadMaterialDigest(summary:UploadSummary):string {
   const value=structuredClone(summary);
+  delete value.snapshot.accounting;
   if(value.snapshot.outcome==='open'){
     if(value.snapshot.observedDistance.available)value.snapshot.observedDistance.value=0;
     if(value.snapshot.fuelUsed.available)value.snapshot.fuelUsed.value=0;

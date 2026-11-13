@@ -225,7 +225,7 @@ function upload(storage: Storage, tripUuid: string) {
   }
   const mapped = mapUploadProjection(projection, pages);
   if (mapped.status !== 'projected') throw new Error(`Upload projection ${mapped.status}: ${JSON.stringify(mapped)}`);
-  return {moneyIncomplete: projection.facts.moneyIncomplete, reasons: mapped.summary.snapshot.evidence.reasons};
+  return {moneyIncomplete: projection.facts.moneyIncomplete, reasons: mapped.summary.snapshot.evidence.reasons, facts: projection.facts.accounting, summary: mapped.summary.snapshot.accounting};
 }
 function deliver(storage: Storage, m: Member) {
   ok(storage.commitEvent({message: shaped(m.script.event(r.delivered(), {advanceMs: 100_000})), effects: [{kind: 'trip.close', tripUuid: m.uuid, outcome: 'delivered', closeReason: 'outcome',
@@ -301,18 +301,23 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
         .toEqual([{trip_uuid: a.uuid, n: 4, flagged: 0}, {trip_uuid: b.uuid, n: 3, flagged: 0}]);
     } finally { db.close(); }
   });
+  // ET-113: the same head row gives the v1.2 accounting status; an unavailable quantity and an engine-0 group are unknown.
   it.each([
-    ['a partial engine-1 distance', 1, scenario('Q13').readings, true],
-    ['complete engine-1 quantities', 1, scenario('Q1').readings, false],
+    ['a partial engine-1 distance', 1, scenario('Q13').readings, true, {distance: 'partial', fuel: 'complete'}],
+    ['a partial engine-1 fuel', 1, scenario('Q2-linked').readings, true, {distance: 'complete', fuel: 'partial'}],
+    ['complete engine-1 quantities', 1, scenario('Q1').readings, false, {distance: 'complete', fuel: 'complete'}],
+    ['unavailable engine-1 quantities', 1, scenario('Q9').readings, true, {distance: 'unknown', fuel: 'unknown'}],
     // Four linked readings: complete engine-0 accounting, whose rows carry no quantity flags.
-    ['engine 0', 0, [s(0), s(1), s(2), s(3)], false]
-  ] as const)('reports accounting-unavailable to the upload only for a partial or unavailable quantity: %s', async (_name, accountingEngine, readings, incomplete) => {
+    ['engine 0', 0, [s(0), s(1), s(2), s(3)], false, {distance: 'unknown', fuel: 'unknown'}]
+  ] as const)('reports accounting-unavailable to the upload only for a partial or unavailable quantity: %s', async (_name, accountingEngine, readings, incomplete, accounting) => {
     gameOrigin = true;
     const storage = await ws.open({accountingEngine, purpose: 'history'}), {members} = record(storage, readings);
     deliver(storage, members[0]);
     const found = upload(storage, members[0].uuid);
     expect(found.moneyIncomplete).toBe(incomplete);
     expect(found.reasons.includes('accounting-unavailable')).toBe(incomplete);
+    expect(found.facts).toEqual(accounting);
+    expect(found.summary).toEqual(accounting);
   });
   it.each([
     ['Q5', 'open', [{distanceFlags: F.distanceTruck, fuelFlags: F.fuelTruck}]],

@@ -73,6 +73,33 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
     e0WithHardMode.snapshot.hardModeResult='not-qualified';
     expect(validateUploadEnvelope(e0WithHardMode)).toBe(false);
   });
+  it('freezes contract minor 2 with hardModeResult and accounting and forbids accounting at minors 0 and 1',()=>{
+    const e2=envelope();e2.contract.minor=2;e2.snapshot.hardModeResult='not-qualified';e2.snapshot.accounting={distance:'complete',fuel:'partial'};
+    expect(validateUploadEnvelope(e2)).toBe(true);
+    const frozen2=JSON.parse(new TextDecoder().decode(encodeUploadEnvelope(e2)!)) as UploadEnvelope;
+    expect(frozen2.contract).toEqual({major:1,minor:2});expect(frozen2.snapshot.accounting).toEqual({distance:'complete',fuel:'partial'});
+    const without=(key:'hardModeResult'|'accounting')=>{const e=structuredClone(e2);delete e.snapshot[key];return e;};
+    expect(validateUploadEnvelope(without('accounting'))).toBe(false);expect(validateUploadEnvelope(without('hardModeResult'))).toBe(false);
+    for(const accounting of [{distance:'unavailable',fuel:'complete'},{distance:'complete'},{distance:'complete',fuel:'complete',extra:'x'},{distance:'complete',fuel:null}]){
+      const e=structuredClone(e2);Object.assign(e.snapshot,{accounting});expect(validateUploadEnvelope(e)).toBe(false);expect(encodeUploadEnvelope(e)).toBeUndefined();
+    }
+    const e1=structuredClone(e2);e1.contract.minor=1;expect(validateUploadEnvelope(e1)).toBe(false);
+    const e0=envelope();e0.snapshot.accounting={distance:'unknown',fuel:'unknown'};expect(validateUploadEnvelope(e0)).toBe(false);
+    expect(validateUploadEnvelope({...structuredClone(e2),contract:{major:1,minor:3}})).toBe(false);
+  });
+  it('accepts a receipt that echoes minor 2 and rejects minor 3',()=>{
+    const receipt={contract:{major:1,minor:2},eventId:id,receiptId:id,status:'stored',firstReceivedAtUtcMs:0};
+    expect(decodeUploadReceipt(bytes(receipt),202,id)).toEqual(receipt);
+    expect(decodeUploadReceipt(bytes({...receipt,contract:{major:1,minor:3}}),202,id)).toBeUndefined();
+  });
+  it('keeps the accounting status out of the material comparison',()=>{
+    const base=structuredClone(summary),complete=structuredClone(summary),partial=structuredClone(summary);
+    complete.snapshot.accounting={distance:'complete',fuel:'complete'};partial.snapshot.accounting={distance:'partial',fuel:'unknown'};
+    expect(uploadMaterialDigest(complete)).toBe(uploadMaterialDigest(base));expect(uploadMaterialDigest(partial)).toBe(uploadMaterialDigest(base));
+    // Other fields stay material next to it.
+    partial.snapshot.recordingCompleteness='complete';expect(uploadMaterialDigest(partial)).not.toBe(uploadMaterialDigest(base));
+    expect(complete.snapshot.accounting).toEqual({distance:'complete',fuel:'complete'});
+  });
 });
 
 it('REG-004/009/010 accepts unique DLC IDs and rejects duplicate DLC IDs required unique by the frozen v1 schema',()=>{

@@ -22,6 +22,8 @@ it('REG-003/005/007/010/011/012 verifies/registers through real TLS, freezes ori
     const journalScope=controller.journalReadScope;expect(journalScope).toMatchObject({owner:{accountId:'a'},connectionVersion:'1'});
     const journalPage=ok(await client.journalTrips());expect(guardJournalSync(journalPage,journalScope,controller.journalReadScope).sync?.rows.map(row=>row.tripUuid)).toEqual(journalPage.trips.map(row=>row.tripUuid));
     await remote.waitForEvent(1);const wire=Buffer.from(remote.events[0]);expect(JSON.parse(wire.toString())).toMatchObject({source:{tripId:trip.tripUuid},delivery:{mode:'backfill'}});
+    // ET-113: the connection header advertises 1.2, so the event is v1.2; the trip has no engine-1 ledger row yet.
+    expect(JSON.parse(wire.toString())).toMatchObject({contract:{major:1,minor:2},snapshot:{hardModeResult:'not-qualified',accounting:{distance:'unknown',fuel:'unknown'}}});
     // No response exists yet. A real recorder mutation still crosses the shared worker.
     ok(await client.commitEvent({message:game(trip.s.event(r.paused())),effects:[{kind:'trip.update',tripUuid:trip.tripUuid,set:{observedDistanceM:{available:true,value:25}}}]}));
     remote.releaseOne();let guard:ReturnType<typeof setTimeout>|undefined;try{await Promise.race([receiptStatus,new Promise((_,reject)=>{guard=setTimeout(()=>reject(Error('UPLOAD_RECEIPT_STATUS_HANG_GUARD')),6000);})]);}finally{clearTimeout(guard);}

@@ -7,6 +7,8 @@ import {ETS2_A, ETS2_B, job} from '../shared/trip-messages';
 const golden = JSON.parse(readFileSync('tests/fixtures/dashboard-upload/continued-summary.json','utf8')) as {expected: UploadSummary};
 const root = '70000000-0000-4000-8000-000000000001', child = '70000000-0000-4000-8000-000000000002', db = '50000000-0000-4000-8000-000000000001';
 const absent = {available:false,reason:'not-observed'} as const;
+/** The golden v1.0 summary with the fields a current projection adds: hardModeResult and the accounting status of a pin without it. */
+const goldenSummary = {...golden.expected, snapshot: {...golden.expected.snapshot, hardModeResult: 'not-qualified', accounting: {distance: 'unknown', fuel: 'unknown'}}};
 function fixture() {
   const occurrence = {pluginSessionId:ETS2_A,rawTripUuid:root,eventSeq:'1200',type:'job.configured',utcMs:1000};
   const pin: UploadProjection = {requestedTripUuid:root,rootTripUuid:root,readiness:'ready',rootReadiness:'ready',databaseUuid:db,purpose:'history',revision:'5',
@@ -29,7 +31,7 @@ function mapped(f = fixture()) {const result = mapUploadProjection(f.pin,f.pages
 describe('private Dashboard summary projection', () => {
   it('matches independently authored v1.0 source/snapshot, preserves exact SDK money and selected availability', () => {
     const f=fixture();expect(isUploadProjection(f.pin)).toBe(true);
-    expect(mapped(f).summary).toEqual({...golden.expected, snapshot: {...golden.expected.snapshot, hardModeResult: 'not-qualified'}});
+    expect(mapped(f).summary).toEqual(goldenSummary);
     expect(mapped(f).provenance.outcome).toMatchObject({pluginSessionId:ETS2_B,rawTripUuid:child,eventSeq:'3'});
   });
   it.each(['3','1200'])('keeps native final sequence %s in its own session without cross-session ordering', seq => {
@@ -116,7 +118,7 @@ it('REG-004/009 folds independently expected pages with constant state and refus
   expect(finishUploadFold(f.pin,fold)).toEqual({status:'hold',reason:'evidence-incomplete'});
   expect(advanceUploadFold(f.pin,fold,f.pages[1],()=>true).invalid).toBe('evidence-incomplete');
   for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,(trip,session)=>trip===root&&session===ETS2_A);
-  expect(finishUploadFold(f.pin,fold)).toMatchObject({status:'projected',summary:{...golden.expected,snapshot:{...golden.expected.snapshot,hardModeResult:'not-qualified'}}});
+  expect(finishUploadFold(f.pin,fold)).toEqual({status:'projected',summary:goldenSummary,provenance:mapped(f).provenance});
   const many=fixture();many.pin.totals.members=10_001;many.pages[0].total=10_001;fold=beginUploadFold(many.pin);
   for(let offset=0;offset<10_001;offset+=100){const rows=Array.from({length:Math.min(100,10_001-offset)},(_,i)=>({...many.pages[0].rows[0],id:String(offset+i+1)}));const end=offset+rows.length;
     fold=advanceUploadFold(many.pin,fold,{...many.pages[0],cursor:offset?`${many.pin.snapshot}:members:${offset}`:null,nextCursor:end<10_001?`${many.pin.snapshot}:members:${end}`:null,rows},()=>true);
@@ -186,21 +188,61 @@ describe('TEL-034 stored whole-trip rule context',()=>{
     }
   });
 
-  it('validates hardModeResult in summary snapshot according to minor contract version', () => {
-    const f = fixture();
+  it('validates hardModeResult and accounting in summary snapshot according to minor contract version', () => {
+    const f = fixture();f.pin.facts.accounting = {distance: 'complete', fuel: 'partial'};
     const result = mapped(f);
     expect(result.summary.snapshot.hardModeResult).toBe('not-qualified');
-    // Minor 1 accepts hardModeResult
-    expect(isUploadSummary(result.summary, 1)).toBe(true);
-    // Minor 0 rejects summary with hardModeResult
-    expect(isUploadSummary(result.summary, 0)).toBe(false);
-
-    // Minor 0 accepts summary when hardModeResult is stripped
-    const minor0Summary = structuredClone(result.summary);
+    expect(result.summary.snapshot.accounting).toEqual({distance: 'complete', fuel: 'partial'});
+    // Minor 2 requires both fields; minors 0 and 1 forbid accounting.
+    expect([0, 1, 2].map(minor => isUploadSummary(result.summary, minor))).toEqual([false, false, true]);
+    // The minor 1 shape: hardModeResult without accounting.
+    const minor1Summary = structuredClone(result.summary);
+    delete minor1Summary.snapshot.accounting;
+    expect([0, 1, 2].map(minor => isUploadSummary(minor1Summary, minor))).toEqual([false, true, false]);
+    // The minor 0 shape: neither field.
+    const minor0Summary = structuredClone(minor1Summary);
     delete minor0Summary.snapshot.hardModeResult;
-    expect(isUploadSummary(minor0Summary, 0)).toBe(true);
-    // Minor 1 rejects summary when hardModeResult is missing
-    expect(isUploadSummary(minor0Summary, 1)).toBe(false);
+    expect([0, 1, 2].map(minor => isUploadSummary(minor0Summary, minor))).toEqual([true, false, false]);
+    // Accounting without hardModeResult is no version's shape.
+    const noHardMode = structuredClone(result.summary);
+    delete noHardMode.snapshot.hardModeResult;
+    expect([0, 1, 2].map(minor => isUploadSummary(noHardMode, minor))).toEqual([false, false, false]);
+  });
+  it.each([
+    ['an unavailable status', {distance: 'unavailable', fuel: 'complete'}],
+    ['a missing quantity', {distance: 'complete'}],
+    ['an extra key', {distance: 'complete', fuel: 'complete', engine: 1}],
+    ['null', null]
+  ])('rejects a v1.2 accounting status with %s', (_name, accounting) => {
+    const f = fixture();f.pin.facts.accounting = {distance: 'complete', fuel: 'complete'};
+    const summary = structuredClone(mapped(f).summary);
+    Object.assign(summary.snapshot, {accounting});
+    expect(isUploadSummary(summary, 2)).toBe(false);
+  });
+  it.each([
+    [{distance: 'complete', fuel: 'complete'}], [{distance: 'partial', fuel: 'complete'}], [{distance: 'complete', fuel: 'partial'}], [{distance: 'unknown', fuel: 'unknown'}]
+  ] as const)('copies the stored accounting status %j into the summary through the map and the fold', accounting => {
+    const f = fixture();f.pin.facts.accounting = {...accounting};
+    expect(isUploadProjection(f.pin)).toBe(true);
+    expect(mapped(f).summary).toEqual({...goldenSummary, snapshot: {...goldenSummary.snapshot, accounting}});
+    let fold = beginUploadFold(f.pin);for (const page of f.pages) fold = advanceUploadFold(f.pin, fold, page, () => true);
+    expect(finishUploadFold(f.pin, fold)).toEqual(mapUploadProjection(f.pin, f.pages));
+  });
+  it('maps a pin prepared before the accounting status to unknown through the map and the fold', () => {
+    const f = fixture();
+    expect(Object.hasOwn(f.pin.facts, 'accounting')).toBe(false);
+    const stored = JSON.parse(JSON.stringify(f.pin)) as UploadProjection;
+    expect(isUploadProjection(stored)).toBe(true);
+    expect(mapUploadProjection(stored, f.pages)).toMatchObject({status: 'projected', summary: {snapshot: {accounting: {distance: 'unknown', fuel: 'unknown'}}}});
+    let fold = beginUploadFold(stored);for (const page of f.pages) fold = advanceUploadFold(stored, fold, page, () => true);
+    expect(finishUploadFold(stored, fold)).toMatchObject({status: 'projected', summary: {snapshot: {accounting: {distance: 'unknown', fuel: 'unknown'}}}});
+  });
+  it.each([
+    [{distance: 'unavailable', fuel: 'complete'}], [{distance: 'complete'}], [{distance: 'complete', fuel: 'complete', extra: true}], [null], ['complete']
+  ])('rejects a pin whose stored accounting status is %j', accounting => {
+    const f = fixture();Object.assign(f.pin.facts, {accounting});
+    expect(isUploadProjection(f.pin)).toBe(false);
+    expect(mapUploadProjection(f.pin, f.pages)).toEqual({status: 'hold', reason: 'evidence-contradictory'});
   });
 
   it('projects qualified hard mode result when trip qualifies', () => {
