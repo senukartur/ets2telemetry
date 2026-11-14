@@ -1120,13 +1120,13 @@ function Test-RuntimeReceipt {
             $rows = @($overlay.observations | Where-Object { $_.phase -ceq $phase })
             if ($rows.Count -ne 1) { $valid = $false; continue }
             $row = $rows[0]
-            $speed = '90'; $fuel = '73'; $freshness = 'current'; $states = @('connected')
+            $speed = '90'; $fuel = '73'; $fuelUnit = 'L'; $freshness = 'current'; $states = @('connected')
             if ($phase -in @('changed','overlay-credit-recovery','dashboard-reload','during-dashboard-stall','dashboard-credit-recovery')) { $speed = '72'; $fuel = '71' }
             if ($phase -in @('missing','silent-open-stale','disconnected')) { $speed = [string][char]0x2014; $fuel = $speed }
             if ($phase -ceq 'zero') { $speed = '0'; $fuel = '0' }
             if ($phase -ceq 'silent-open-stale') { $freshness = 'stale'; $states = @('stale') }
-            if ($phase -ceq 'disconnected') { $freshness = 'unavailable'; $states = @('disconnected','waiting') }
-            if ($row.source -cne 'ETS2' -or $row.origin -cne 'synthetic' -or $row.speedUnit -cne 'km/h' -or $row.fuelUnit -cne 'L' -or
+            if ($phase -ceq 'disconnected') { $freshness = 'unavailable'; $states = @('disconnected','waiting'); $fuelUnit = $null }
+            if ($row.source -cne 'ETS2' -or $row.origin -cne 'synthetic' -or $row.speedUnit -cne 'km/h' -or $row.fuelUnit -cne $fuelUnit -or
                 $row.speed -cne $speed -or $row.fuel -cne $fuel -or $row.freshness -cne $freshness -or $row.status -cnotin $states) { $valid = $false }
             $windowRows = @($overlay.windows | Where-Object { $_.phase -ceq $phase })
             if ($windowRows.Count -ne 1 -or @($windowRows[0].windows).Count -ne 2) { $valid = $false; continue }
