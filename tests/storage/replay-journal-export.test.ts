@@ -24,7 +24,7 @@ import {unobservedHardModeAudit} from '../shared/hard-mode';
 import {existsSync, mkdirSync, readFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import type {JournalCallResult} from '../../packages/contracts/src';
+import type {JournalAccounting, JournalCallResult, JournalTripDetail} from '../../packages/contracts/src';
 import {StorageClient} from '../../packages/storage/src/client';
 import {parseJournalReply, refusal, type JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {JournalExporter} from '../../apps/desktop/src/journal-export-writer';
@@ -304,8 +304,15 @@ async function expectExports(journal: JournalService, s: Scenario, trips: TripEx
     expect([document.bounds.lastSampleId === null, document.bounds.lastIntervalId === null], t.label).toEqual([t.samples.length === 0, t.intervals.length === 0]);
     // The export's trip block is the detail's trip without the list's job summary (docs/journal-export.md).
     // The pending profile check is a page-time hint the export never writes (format 6).
-    const {job: summary, isHardMode, hardModeDetails, membership, ...trip} = t.detailTrip; void summary; void membership;
-    expect(document.trip, t.label).toEqual({is_hard_mode: isHardMode, hard_mode_details: hardModeDetails, ...trip});
+    const {job: summary, isHardMode, hardModeDetails, membership, fuelUsedL, ...trip} = t.detailTrip; void summary; void membership;
+    const result = await journal.query({kind: 'trip', tripUuid: uuidOf(t.label, seed)});
+    const detail = parseJournalReply({kind: 'trip', tripUuid: uuidOf(t.label, seed)}, result);
+    if (!detail?.ok) throw new Error('Expected journal trip');
+    const type = (detail.value as JournalTripDetail).energyPowertrain;
+    const energyUsed = type === 'diesel' ? {...fuelUsedL as Json, unit: 'L'} : {available: false, reason: 'not-observed', unit: null};
+    const original = trip.accounting as JournalAccounting | null;
+    const accounting = type === 'unknown' && original ? {...original, fuel: {...original.fuel, status: 'unavailable'}} : original;
+    expect(document.trip, t.label).toEqual({is_hard_mode: isHardMode, hard_mode_details: hardModeDetails, ...trip, powertrain: type, energyUsed, accounting});
     expect({source: document.job.source, eventSeq: document.job.eventSeq, checkpointNextEventSeq: document.job.checkpointNextEventSeq}, t.label).toEqual(t.job);
     expect([document.truck?.eventSeq ?? null, {eventSeqs: document.trailers.items.map(i => i.eventSeq), total: document.trailers.total}], t.label).toEqual([t.truck, t.trailers]);
     if (t.outcome === null) expect(document.outcomeDetails, t.label).toBeNull();
@@ -313,7 +320,12 @@ async function expectExports(journal: JournalService, s: Scenario, trips: TripEx
     expect({incomplete: document.money.incomplete, totals: sortMoney(document.money.totals), unavailable: document.money.unavailable}, t.label)
       .toEqual({incomplete: false, totals: sortMoney(t.money), unavailable: []});
     expect(document.window, t.label).toEqual(t.window);
-    expect(withoutId(document.intervals), t.label).toEqual(t.intervals);
+    expect(withoutId(document.intervals), t.label).toEqual(t.intervals.map(interval => {
+      const detail = interval.detail as Json | null;
+      if (detail?.cause !== 'refuel') return interval;
+      const {addedLiters, powertrain = type, ...rest} = detail;
+      return {...interval, detail: {...rest, powertrain, amountAdded: {value: addedLiters, unit: powertrain === 'diesel' ? 'L' : null}}};
+    }));
     expect(document.events.map(eventTuple), t.label).toEqual(t.events);
     expect(document.samples, t.label).toHaveLength(t.samples.length);
     expect(document.samples, t.label).toMatchObject(t.samples.map(x => ({utcMs: x.utcMs, monotonicNs: x.monotonicNs, sourceClockId: 'capture-clock', ...x.values})));

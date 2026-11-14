@@ -567,13 +567,13 @@ it('keeps stored SDK names equal to known UI labels exact in both selected langu
 
 it('separates typed hero amounts and missing values from their provenance without converting exact money', () => {
   expect(journalTileValues(DELIVERED_DETAIL, {language: 'ru'})).toEqual({distance: {value: '152.0 км', note: null},
-    fuel: {value: '—', note: 'недоступно (не наблюдалось)'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'},
+    fuel: {value: '—', note: 'недоступно (не наблюдалось)', label: 'Израсходовано', basis: 'по сэмплам, без заправок'}, money: {value: '15000 EUR', note: 'Валюта подтверждена SDK'},
     planned: '152.0 км', gameDistance: '151.3 км', expected: '12345 (валюта неизвестна)',
     // ET-112e: the game's delivery distance is the hero of a delivered trip, and the odometer distance is a separate note.
     distanceTile: {label: 'По данным игры', value: '151.3 км', notes: ['одометр 152.0 км', 'по заказу 152.0 км']}, fuelPartial: null,
     recorded: {value: '3 с', note: 'по сэмплам 1 Гц, без пауз и пропусков; могут входить сэмплы, не учтённые в дистанции и расходе'}, gameTime: '7 ч 51 мин игрового'});
   expect(journalTileValues(ZERO_DETAIL).distance).toEqual({value: '0.0 mi', note: null});
-  expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
+  expect(journalTileValues(ZERO_DETAIL).fuel).toMatchObject({value: '0.0 US gal', note: null, label: 'Fuel used', basis: 'from samples, refuels excluded'});
   const detail = structuredClone(DELIVERED_DETAIL);
   if (detail.outcomeDetails?.record.type !== 'job.delivered') throw new Error('Delivered fixture unavailable');
   detail.outcomeDetails.record.revenue = money('9007199254740993.123456', 's64', UNKNOWN_CURRENCY);
@@ -660,7 +660,7 @@ describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
     if (detail.outcomeDetails?.record.type !== 'job.delivered') throw new Error('Delivered fixture unavailable');
     detail.outcomeDetails.record.deliveryDuration = {available: false, reason: 'not-observed', unit: 'min'} as never;
     expect(journalTileValues(detail).gameTime).toBe('game time not available');
-    expect(journalTileValues(ZERO_DETAIL).fuel).toEqual({value: '0.0 US gal', note: null});
+    expect(journalTileValues(ZERO_DETAIL).fuel).toMatchObject({value: '0.0 US gal', note: null});
   });
 
   it('builds the route, the money rows and the vehicle from the detail', () => {

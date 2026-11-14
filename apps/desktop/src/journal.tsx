@@ -342,7 +342,7 @@ function TripDetail({trip, site, options, onDatabase, onBack, onDeleted}: {trip:
               <TabsTrigger value="intervals" data-testid="journal-detail-tab-intervals">{t('tr.tab.completeness', undefined, language)}</TabsTrigger>
             </TabsList>
             <TabsContent value="summary"><div data-testid="journal-summary"><Samples trip={trip} options={options} onDatabase={onDatabase} /></div></TabsContent>
-            <TabsContent value="timeline"><Timeline trip={trip} options={options} onDatabase={onDatabase} intervals={detail.intervals} /></TabsContent>
+            <TabsContent value="timeline"><Timeline trip={trip} options={{...options, energyPowertrain: detail.energyPowertrain ?? 'unknown'}} onDatabase={onDatabase} intervals={detail.intervals} /></TabsContent>
             <TabsContent value="intervals"><div className="yu-trip-panel"><TripCompleteness text={journalCompletenessText(detail, language)} language={language} /><Intervals trip={trip} options={options} onDatabase={onDatabase} /></div></TabsContent>
           </Tabs>
         </section>

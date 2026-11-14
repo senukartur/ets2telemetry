@@ -19,6 +19,8 @@ export type SpeedUnit = 'km/h' | 'mph';
 export type DistanceUnit = 'km' | 'mi';
 export type VolumeUnit = 'L' | 'US gal';
 export type ConsumptionUnit = 'L/100 km' | 'US mpg';
+export type TruckAmountUnit = VolumeUnit | 'kWh';
+export type TruckConsumptionUnit = ConsumptionUnit | 'kWh/100 km';
 export type MassUnit = 't' | 'lb';
 
 export function convertSpeed(metersPerSecond: number, unit: SpeedUnit): number {
@@ -37,8 +39,8 @@ export function convertMass(kilograms: number, unit: MassUnit): number {
  * Converts the SDK mean consumption. US mpg is the reciprocal, so zero, negative or non-finite L/100 km has no mpg
  * value and returns undefined; the caller reports it as non-numeric instead of inventing an infinite economy.
  */
-export function convertConsumption(litersPer100Km: number, unit: ConsumptionUnit): number | undefined {
+export function convertConsumption(litersPer100Km: number, unit: TruckConsumptionUnit): number | undefined {
   if (!Number.isFinite(litersPer100Km) || litersPer100Km < 0) return undefined;
-  if (unit === 'L/100 km') return litersPer100Km;
+  if (unit !== 'US mpg') return litersPer100Km;
   return litersPer100Km > 0 ? L100KM_US_MPG / litersPer100Km : undefined;
 }

@@ -49,6 +49,8 @@ const UNIT_MAP: Readonly<Record<string, I18nKey>> = Object.freeze({
   't': 'u.t',
   'lb': 'u.lb',
   'L/100 km': 'u.l100',
+  'kWh': 'u.kwh',
+  'kWh/100 km': 'u.kwh100',
   'mpg': 'u.mpg'
 });
 

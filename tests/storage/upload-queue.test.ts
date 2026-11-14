@@ -489,6 +489,8 @@ it.each([[1,false],[1,true],[2,false],[2,true]] as const)('TEL-034 re-evaluates 
 /** Three linked engine-1 readings with proof: 40 m on 20 ml, complete distance and fuel accounting at the ledger head. */
 function engineOneSamples(storage:Storage,source:Awaited<ReturnType<typeof setup>>){
   const absent={available:false,reason:'not-observed'} as const,s=source.s;
+  ok(storage.commitEvent({message:game(s.event(r.truckConfigured())), effects:[
+    {kind:'trip.update',tripUuid:source.tripUuid,set:{truckConfiguration:'this-event'}}]}));
   const point=(at:number,odo:number,fuel:number,speed:number):SampleInput=>({tripUuid:source.tripUuid,utcMs:1000+at*1000,sourceClockId:s.clockId,
     monotonicNs:String(BigInt(at)*1_000_000_000n),gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},speed:{available:true,value:speed},
     fuel:{available:true,value:fuel},averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:{available:true,value:{x:odo-1_000_000,y:0,z:0}},

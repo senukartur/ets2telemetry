@@ -6,6 +6,7 @@ import type {JobConfiguration} from '../../../contracts/src/protocol-v1';
 import type {Available, EventRecord, Money, Uint64} from '../../../contracts/src/protocol-v1';
 import type {CompletenessInterval} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
+import {liveTruckPowertrain} from '../truck-powertrain';
 import {
   accumulate, advanceGameTime, classifyStep, accountingUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, startRunClock, switchRunClock,
   type GameTimeJump, type ReadingPoint, type ReadingStep
@@ -928,7 +929,10 @@ function accountStep(slot: GameSlot, trip: OpenTrip, session: SessionState, prev
     if (waiting !== undefined) {
       const detail = waiting.interval.detail!;
       waiting.interval.detail = {...detail, addedLiters: (detail.addedLiters as number) + refuel.addedLiters, lastAtMonotonicNs: next.capture.monotonicNs};
-    } else notes.push(readingNote(trip.tripUuid, next, {cause: 'refuel', addedLiters: refuel.addedLiters, ...(refuel.episode ? {} : {continues: true})}));
+    } else {
+      const powertrain = liveTruckPowertrain(session.game, next.truck);
+      notes.push(readingNote(trip.tripUuid, next, {cause: 'refuel', addedLiters: refuel.addedLiters, powertrain, ...(refuel.episode ? {} : {continues: true})}));
+    }
   }
   queueAnnotations(slot, notes);
 }

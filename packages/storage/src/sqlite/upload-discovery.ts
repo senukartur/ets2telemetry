@@ -78,7 +78,7 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
     JOIN logical_trips l ON l.id=r.logical_ref JOIN logical_memberships m ON m.trip_ref=l.id WHERE r.id=?`,revision));
   const row=JSON.parse(String(r.row_json)) as Row,outcome=String(row.outcome),head=r.progress_head===null?undefined:get(db,'SELECT distance_m,fuel_used_l FROM logical_progress WHERE id=?',r.progress_head);
   const evidence=get(db,'SELECT generation FROM upload_projection_evidence_versions WHERE root_ref=?',root)?.generation??0n;
-  const fields=['game','game_mode','game_mode_method','game_mode_confidence','game_mode_ambiguous','job_configuration_ref','opened_by','opened_event_ref',
+  const fields=['game','game_mode','game_mode_method','game_mode_confidence','game_mode_ambiguous','truck_configuration_ref','job_configuration_ref','opened_by','opened_event_ref',
     'outcome','outcome_event_ref','close_reason','recording_completeness','started_utc_ms','ended_utc_ms','closed_by_session_ref','closed_by_event_seq',
     'observed_distance_m_state','fuel_used_l_state','is_hard_mode','hard_mode_details','_moneyIncomplete','_rawDistance','_rawFuel','_currentProgress'];
   // Separate material context/availability from ordinary OPEN counter values and update labels.

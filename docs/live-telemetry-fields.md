@@ -70,6 +70,8 @@ Exact constants: mile 1,609.344 m; US gallon 3.785411784 L; pound 0.45359237 kg;
 | Bearing | degrees | placement heading | v1 | ((1 − heading) mod 1) × 360°, integer; 0° north, 90° east. The SDK heading is counterclockwise from north (`scssdk_value.h`) |
 | Source | — | — | `LiveTelemetry`, v1 status | Game, origin (synthetic and replay flagged), status, current or paused, protocol; v1 game mode with method and confidence, and the total event loss |
 
+The model ID selects the powertrain for Live and the overlay. The exact electric IDs are `vehicle.daf.xf_electric`, `vehicle.renault.etech_t` and `vehicle.scania.s_2024e` in ETS2, and `vehicle.volvo.vnr_e` in ATS. Other reported IDs use the diesel profile. A missing ID leaves the powertrain unknown and suppresses amount, capacity, percentage and mean consumption. Electric amounts use kWh and the converted SDK mean uses kWh/100 km, including under the US customary profile. The mean hold ends when the model ID changes.
+
 Rounding uses `Number.prototype.toFixed` on the converted value, and a rounded negative zero is shown as positive zero for every quantity. A provided empty text value shows `(empty)`.
 
 Owner-requested presentation update, October 22, 2026 (ET-012e): the Live dashboard gauge, its accessible name and every overlay layout show speed as an integer after conversion to the selected game's km/h or mph profile. They use the existing `fixed(..., 0)` rounding, including negative values and normalization of rounded negative zero to `0`. For example, 25 m/s shows `90 km/h` or `56 mph`. The canonical numeric reading, gauge ratio, telemetry-core's general one-decimal formatter, journal samples and exports retain their existing precision. Fuel and consumption formatting are unchanged.

@@ -16,6 +16,7 @@ import {ACCOUNTING_PATH, encodeRow, decodeRow, type LogicalRow} from './logical-
 import {deriveTripHardModeResult} from '../../../telemetry-core/src/hard-mode';
 import {decisionState, identityPending, rootBound} from './identity-pending';
 import {quantitiesIncomplete, uploadAccounting} from './quantities';
+import {tripEnergyPowertrain} from './truck-energy';
 
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
 const all = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).all(...args) as LogicalRow[];
@@ -68,18 +69,21 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
   const unknown = {available:false,reason:'not-observed'} as const;
   const mode = row.game_mode === 'convoy' ? 'unknown' : row.game_mode;
   const opening = occurrence(db,row.opened_event_ref,String(root.trip_uuid),snap);
-  return {game: row.game as 'ets2'|'ats', pluginSessionId: String(openingSession.plugin_session_uuid), outcome: row.outcome as UploadFacts['outcome'],
+  const game = row.game as 'ets2' | 'ats';
+  const diesel = tripEnergyPowertrain(db, game, row.truck_configuration_ref, snap.head, snap.logical, row.opened_event_ref, snap.events) === 'diesel';
+  const accounting = uploadAccounting(db, snap.head);
+  return {game, pluginSessionId: String(openingSession.plugin_session_uuid), outcome: row.outcome as UploadFacts['outcome'],
     closeReason: row.close_reason as UploadFacts['closeReason'], recordingCompleteness: row.recording_completeness as UploadFacts['recordingCompleteness'],
     openedBy: row.opened_by as 'event'|'checkpoint', checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null,
     checkpointUtcMs: job.source === 'checkpoint' ? n(row.started_utc_ms) : null, opening, outcomeOccurrence: outcome, close,
     gameMode: {mode,method:mode==='unknown'?'none':row.game_mode_method,confidence:mode==='unknown'?'none':row.game_mode_confidence,ambiguous:row.game_mode_ambiguous===1n} as UploadFacts['gameMode'],
-    job: jobValues(job), observedDistance: measure('observed_distance_m','m'), fuelUsed: measure('fuel_used_l','L'),
+    job: jobValues(job), observedDistance: measure('observed_distance_m','m'), fuelUsed: diesel ? measure('fuel_used_l','L') : {...unknown,unit:'L'},
     deliveredDistance: (record.distance ?? {...unknown,unit:'m'}) as UploadFacts['deliveredDistance'], cargoDamage: (record.cargoDamage ?? {...unknown,unit:'fraction'}) as UploadFacts['cargoDamage'],
     revenue: money('revenue'), penalty: money('penalty'), moneyIncomplete: row._moneyIncomplete === true || snap.head !== null
       && !!get(db,`${ACCOUNTING_PATH} SELECT 1 FROM path WHERE cut_odometer_m IS NOT NULL OR depth=256 AND prefix_ref IS NOT NULL LIMIT 1`,{head:snap.head}) || quantitiesIncomplete(db,snap.head),
     clockAnomaly: opening?.utcMs !== null && opening?.utcMs !== undefined && opening.utcMs !== n(row.started_utc_ms)
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms),
-    hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n), accounting: uploadAccounting(db, snap.head)};
+    hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n), accounting: {...accounting, fuel: diesel ? accounting.fuel : 'unknown'}};
 }
 
 const unproven=():RuleContext=>({version:2,status:'unproven',items:[],recordingLoss:false});

@@ -297,8 +297,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
-      expect(exported.formatVersion).toBe(6);expect(exported.intervals.length).toBeGreaterThan(0);expect(JSON.stringify(exported.intervals)).not.toMatch(/[a-f0-9]{64}/);
-      expect(exported.trip).toMatchObject({outcome:'delivered',recordingCompleteness:'complete',observedDistanceM:broken?{available:false}:{available:true,value:750},fuelUsedL:broken?{available:false}:{available:true,value:1.5}});
+      expect(exported.formatVersion).toBe(7);expect(exported.intervals.length).toBeGreaterThan(0);expect(JSON.stringify(exported.intervals)).not.toMatch(/[a-f0-9]{64}/);
+      expect(exported.trip).toMatchObject({outcome:'delivered',recordingCompleteness:'complete',observedDistanceM:broken?{available:false}:{available:true,value:750},energyUsed:broken?{available:false}:{available:true,value:1.5,unit:'L'}});
       const breaks=(exported.intervals as {cause:string;detail:unknown}[]).filter(note=>note.cause==='accounting-chain-break');
       if(broken)expect(breaks).toMatchObject([{detail:{version:1,reason:'missing-predecessor',recorderReset:'offline-transition',distanceLost:true,fuelLost:true}}]);else expect(breaks.map(note=>note.detail)).toEqual([]);
       if(scenario==='before-first-start')expect(exported.trip).toMatchObject({is_hard_mode:true,hard_mode_details:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
@@ -2012,9 +2012,12 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     expect(detail.trip).not.toHaveProperty('membership');
     expect(detail.outcomeDetails?.record).toMatchObject(outcome);expect(detail.money.incomplete).toBe(false);
     const document=await reads.exported(root);
-    expect(document.formatVersion).toBe(6);
-    expect(document.trip).toMatchObject({...values,accounting,is_hard_mode:true,hard_mode_details:hardMode});
-    expect(Object.keys(document.trip).slice(Object.keys(document.trip).indexOf('fuelUsedL'),Object.keys(document.trip).indexOf('fuelUsedL')+2)).toEqual(['fuelUsedL','accounting']);
+    expect(document.formatVersion).toBe(7);
+    expect(document.trip).toMatchObject({outcome:values.outcome,recordingCompleteness:values.recordingCompleteness,observedDistanceM:values.observedDistanceM,
+      powertrain:'unknown',energyUsed:{available:false,unit:null},accounting:{...accounting,fuel:{...accounting.fuel,status:'unavailable'}},
+      is_hard_mode:true,hard_mode_details:hardMode});
+    const keys=Object.keys(document.trip),energyAt=keys.indexOf('energyUsed');
+    expect(keys.slice(energyAt,energyAt+2)).toEqual(['energyUsed','accounting']);
     expect(document.trip).not.toHaveProperty('membership');
     expect((document.outcomeDetails as {record:unknown}).record).toMatchObject(outcome);expect(document.money.incomplete).toBe(false);
   });

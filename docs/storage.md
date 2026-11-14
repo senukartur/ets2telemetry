@@ -452,6 +452,8 @@ Both event-sequence columns hold the 20-digit key of `events.event_seq`. The row
 
 ## Schema version 10 (ET-112)
 
+The historical fuel columns store the SDK's reading and retain their original numeric representation. Journal reads derive the amount unit from the recorded model ID, using the sample's stored recorder identity when present and time-qualified truck configuration evidence for older samples. Totals require a single supported unit across the recorded evidence. Dashboard projections only use the stored number as liters when the evidence establishes diesel.
+
 Migration `0010-quantity-engine` ([schema-v10.ts](../packages/storage/src/sqlite/schema-v10.ts)) adds two columns, without a backfill, a rebuild or a new index; the verified backup, the integrity checks and the `SCHEMA_NEWER` refusal of a schema 9 build apply unchanged.
 
 | Column | Contents |

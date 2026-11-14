@@ -1,15 +1,17 @@
 import {sameDashboardOwner, type DashboardOwner, type DashboardUploadStatus} from '../../../packages/contracts/src/dashboard-upload';
 import type {
   AppLanguage, JournalAccounting, JournalCallResult, JournalDatabase, JournalExportResult, JournalEvent, JournalEventPage, JournalGame, JournalGameMode, JournalInterval, JournalIntervalPage, JournalMoneyTotals,
-  JournalOutcome, JournalSample, JournalSamplePage, JournalSyncRow, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalTripTotals, JournalWindow, RecordingHealth, UnitProfiles
+  JournalOutcome, JournalSample, JournalSamplePage, JournalSyncRow, JournalTripDetail, JournalTripListItem, JournalTripPage, JournalTripTotals, JournalWindow, RecordingHealth, TruckPowertrain, UnitProfiles
 } from '../../../packages/contracts/src';
+import {isTruckPowertrain} from '../../../packages/contracts/src/truck-powertrain';
 import {JOURNAL_MARKET_KINDS, JOURNAL_TRIP_PAGE} from '../../../packages/contracts/src/journal';
 import type {Currency, EventRecord, Money, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits, type DisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {
   formatConsumption as coreFormatConsumption, formatDistance as coreFormatDistance, formatGear, formatMass as coreFormatMass, formatMoney as coreFormatMoney, formatPercent, formatPosition, formatRpm as coreFormatRpm,
-  formatSpeed as coreFormatSpeed, formatVolume as coreFormatVolume
+  formatSpeed as coreFormatSpeed, formatTruckAmount
 } from '../../../packages/telemetry-core/src/format';
+import {truckPowertrain} from '../../../packages/telemetry-core/src/truck-powertrain';
 import type {MoneyCurrency} from '../../../packages/telemetry-core/src/readings';
 import * as BASE_COPY from './strings';
 import {copyTable, localizedMeasurement} from './screens/app-copy';
@@ -36,6 +38,7 @@ export interface JournalTextOptions {
   firstPage?: boolean;
   /** The user's active UI language. */
   language?: AppLanguage;
+  energyPowertrain?: TruckPowertrain;
 }
 /** One labelled value. `note` says what the value means, such as "job offer, excludes ferries". */
 export interface JournalField {id: string; label: string; value: string; note?: string}
@@ -120,7 +123,6 @@ type Avail<T> = {available: true; value: T} | {available: false; reason: Unavail
 const JOB_KINDS: Readonly<Record<string, JournalJobKind>> = JOURNAL_MARKET_KINDS;
 
 function createJournalText(language: AppLanguage) {
- const formatVolume = (...args: Parameters<typeof coreFormatVolume>) => localizedMeasurement(coreFormatVolume(...args), language);
 
  const formatSpeed = (...args: Parameters<typeof coreFormatSpeed>) => localizedMeasurement(coreFormatSpeed(...args), language);
 
@@ -168,7 +170,8 @@ const currencyOf = (currency: Currency): MoneyCurrency => currency.status === 's
 const moneyText = (money: {raw: string; sdkType: Money['sdkType']; currency: Currency}) =>
   formatMoney({kind: 'revenue', raw: money.raw, sdkType: money.sdkType, currency: currencyOf(money.currency)});
 const distance = (units: DisplayUnits) => (meters: number) => formatDistance(meters, units.distance, 1);
-const volume = (units: DisplayUnits) => (liters: number) => formatVolume(liters, units.volume, 1);
+const amount = (units: DisplayUnits, powertrain: TruckPowertrain) => (value: number) => powertrain === 'unknown'
+  ? unavailable('not-observed') : localizedMeasurement(formatTruckAmount(value, powertrain === 'electric' ? 'kWh' : units.volume, 1), language);
 /** Absolute game minutes (a decimal uint64) as `Day N, HH:MM`. */
 const gameTime = (minutes: string, gameLanguage: AppLanguage = language) => formatLocalizedGameTime(BigInt(minutes), gameLanguage);
 
@@ -303,6 +306,9 @@ function moneyLines(totals: JournalMoneyTotals): {fields: JournalField[]; notes:
 function journalDetailText(detail: JournalTripDetail, options: JournalTextOptions = {}): JournalDetailText {
   const {trip, job: {values: job}} = detail, language = options.language ?? 'en';
   const units = unitsFor(trip.game, options), zone = options.timeZone;
+  const truck = detail.truck?.values, truckType = truckPowertrain(trip.game, truck?.id.available ? truck.id.value : undefined);
+  const powertrain = detail.energyPowertrain ?? truckType;
+  const electric = powertrain === 'electric';
   const record = detail.outcomeDetails?.record ?? null;
   const delivered = record?.type === 'job.delivered' ? record : null, cancelled = record?.type === 'job.cancelled' ? record : null;
   const ended = trip.endedUtcMs === null ? JOURNAL_STRINGS.inProgress : localTime(trip.endedUtcMs, zone);
@@ -319,7 +325,10 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
       field('deliveredDistance', delivered ? show(delivered.distance, distance(units)) : JOURNAL_STRINGS.notDelivered, JOURNAL_NOTE_TEXT.deliveredDistance)
     ]),
     // The base note already says that refuels are excluded.
-    section('fuel', [field('fuelUsed', show(trip.fuelUsedL, volume(units)), provenanceNote(JOURNAL_NOTE_TEXT.fuelUsed, trip.accounting?.fuel, ['refuel-excluded']))])
+    {...section('fuel', [{...field('fuelUsed', show(trip.fuelUsedL, amount(units, powertrain)),
+      provenanceNote(electric ? t('energy.useNote', undefined, language) : JOURNAL_NOTE_TEXT.fuelUsed, powertrain === 'unknown' ? undefined : trip.accounting?.fuel, ['refuel-excluded'])),
+      ...(electric ? {label: t('energy.used', undefined, language)} : {})}]),
+      ...(electric ? {title: t('energy.used', undefined, language)} : {})}
   ];
   const money = moneyLines(detail.money);
   const outcomeMoney = delivered ? field('revenue', show(delivered.revenue, moneyText), JOURNAL_NOTE_TEXT.revenue)
@@ -343,10 +352,10 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
     ]));
   }
   // A trip attached late has no truck or trailer identity until the game sends them again (J22).
-  const truck = detail.truck?.values;
   sections.push(truck ? section('truck', [
     field('brand', nameOf(truck.brand)), field('model', nameOf(truck.name)), field('licensePlate', nameOf(truck.licensePlate)),
-    field('plateCountry', nameOf(truck.plateCountry)), field('fuelCapacity', show(truck.fuelCapacity, volume(units)))
+    field('plateCountry', nameOf(truck.plateCountry)), {...field('fuelCapacity', show(truck.fuelCapacity, amount(units, truckType))),
+      ...(truckType === 'electric' ? {label: t('energy.capacity', undefined, language)} : {})}
   ]) : section('truck', [], [JOURNAL_STRINGS.noTruck]));
   // Trailers in commit order; the label numbers the game's trailer slot (index 0 is trailer 1).
   const trailerFields = detail.trailers.items.flatMap(({values}, position) => {
@@ -462,8 +471,9 @@ function journalEventText(page: JournalEventPage, trip: {tripUuid: string; game:
 const sampleGameTime = (sample: JournalSample, language: AppLanguage = 'en') => sample.gameTime === null ? unavailable('not-observed')
   : show(sample.gameTime.minutes, minutes => Number.isSafeInteger(minutes) && minutes >= 0 ? formatLocalizedGameTime(BigInt(minutes), language) : unavailable('invalid'));
 /** The SDK mean in the profile's unit. Zero L/100 km has no US mpg value and is shown as no consumption, never as zero mpg. */
-function consumptionText(litersPer100Km: number, units: DisplayUnits): string {
-  const result = formatConsumption(litersPer100Km, units.consumption);
+function consumptionText(value: number, units: DisplayUnits, powertrain: TruckPowertrain): string {
+  if (powertrain === 'unknown') return unavailable('not-observed');
+  const result = formatConsumption(value, powertrain === 'electric' ? 'kWh/100 km' : units.consumption);
   return 'text' in result ? result.text : result.reason === 'zero-consumption' ? JOURNAL_STRINGS.zeroConsumption : unavailable('invalid');
 }
 /** The UTC label of an event as a number; only a label, never a duration. */
@@ -479,8 +489,10 @@ function intervalItem(interval: JournalInterval, options: JournalTextOptions, ga
   const shared = {key: `interval-${interval.id}`, time: interval.startUtcMs === null ? '—' : localTime(interval.startUtcMs, options.timeZone),
     eventSeq: interval.firstEventSeq !== null && interval.lastEventSeq !== null ? fill(JOURNAL_STRINGS.eventRange, {first: interval.firstEventSeq, last: interval.lastEventSeq}) : '—', attribution: '—'};
   if (interval.annotation) {
-    const added = interval.detail?.addedLiters;
-    return {...shared, kind: 'refuel', tone: 'ok', type: t('ev.refuel', undefined, language), detail: typeof added === 'number' && Number.isFinite(added) ? volume(unitsFor(game, options))(added) : '—'};
+    const added = interval.detail?.addedLiters, type = interval.detail?.powertrain;
+    const powertrain = isTruckPowertrain(type) ? type : options.energyPowertrain ?? 'diesel';
+    return {...shared, kind: 'refuel', tone: 'ok', type: t(powertrain === 'electric' ? 'energy.increased' : powertrain === 'diesel' ? 'ev.refuel' : 'energy.unknownIncrease', undefined, language),
+      detail: powertrain !== 'unknown' && typeof added === 'number' && Number.isFinite(added) ? amount(unitsFor(game, options), powertrain)(added) : '—'};
   }
   const seconds = intervalSeconds(interval), kind = JOURNAL_INTERVAL_KIND_TEXT[interval.kind];
   return {...shared, kind: 'gap', tone: 'warn', type: `${t('tr.ivGap', undefined, language)}: ${interval.cause === null ? kind : causeText(interval)}`,
@@ -571,14 +583,17 @@ function journalSampleText(page: JournalSamplePage, game: JournalGame, options: 
       if (missing > 0n) rows.push({kind: 'gap', key: `gap-${sample.id}`, text: fill(JOURNAL_STRINGS.sampleGap, {seconds: missing.toString()})});
     }
     rows.push({kind: 'sample', key: sample.id, time: localTime(sample.utcMs, options.timeZone), speed: show(sample.speed, value => formatSpeed(value, units.speed)),
-      fuel: show(sample.fuel, volume(units)),
-      consumption: show(sample.averageConsumption, value => consumptionText(value, units)),
+      fuel: show(sample.fuel, amount(units, sample.powertrain ?? options.energyPowertrain ?? 'diesel')),
+      consumption: show(sample.averageConsumption, value => consumptionText(value, units, sample.powertrain ?? options.energyPowertrain ?? 'diesel')),
       range: show(sample.estimatedRange, distance(units)), rpm: show(sample.engineRpm, formatRpm), gear: show(sample.gear, formatGear),
       odometer: show(sample.odometer, distance(units)), gameTime: sampleGameTime(sample, language), position: show(sample.position, formatPosition)});
     previous = sample;
   }
   const L = JOURNAL_LABEL_TEXT;
-  const columns: JournalColumn[] = [{label: L.time}, {label: L.speed}, {label: L.fuel}, {label: L.gear}, {label: L.rpm}, {label: L.odometer}, {label: L.range},
+  const powertrains = new Set(page.samples.map(sample => sample.powertrain ?? options.energyPowertrain ?? 'diesel'));
+  const amountLabel = powertrains.size === 1 && powertrains.has('electric') ? t('energy.charge', undefined, language)
+    : powertrains.has('electric') ? t('energy.amount', undefined, language) : L.fuel;
+  const columns: JournalColumn[] = [{label: L.time}, {label: L.speed}, {label: amountLabel}, {label: L.gear}, {label: L.rpm}, {label: L.odometer}, {label: L.range},
     {label: L.consumption, note: JOURNAL_NOTE_TEXT.consumption}, {label: L.gameTime}, {label: L.position, note: JOURNAL_NOTE_TEXT.position}];
   return {columns, rows, empty: page.samples.length ? null : (options.firstPage ?? true) ? JOURNAL_STRINGS.noSamples : JOURNAL_STRINGS.noMoreSamples,
     hasNext: page.nextCursor !== null};

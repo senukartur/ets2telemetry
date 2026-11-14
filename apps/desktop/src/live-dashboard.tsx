@@ -51,7 +51,8 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const waiting = state === 'waiting' || state === 'partial' || state !== 'stale' && live?.v1?.status === 'incompatible';
   const status = live?.status ?? 'waiting';
   const connectionText = gameConnectionText(live, language);
-  const consNote = t(sources.v0View.connection.game === 'ats' ? 'live.consNoteAts' : 'live.consNote', undefined, language);
+  const electric = sources.v0View.powertrain === 'electric';
+  const consNote = t(sources.v0View.connection.game === 'ats' && sources.v0View.powertrain === 'diesel' ? 'live.consNoteAts' : 'live.consNote', undefined, language);
 
   // Job: the body exists while v0 reports a job (current or stale); otherwise why there is none.
   const jobSection = sources.v0View.sections.find(section => section.id === 'job');
@@ -97,7 +98,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
       <div className="yu-fuel" data-testid="live.instrument.fuel">
         <div className="yu-tank" data-testid="live.instrument.tank" data-state={view.fuelRatio === null ? 'unavailable' : 'value'} aria-hidden="true">{view.fuelRatio === null ? <span className="yu-tank-unavailable">—</span> : <span className="yu-tank-track"><i style={{height: `${view.fuelRatio * 100}%`, background: view.fuelRatio < .3 ? 'var(--yu-progress-pending)' : 'var(--yu-ok-fg)'}} /></span>}</div>
         <div className="yu-fuel-info">
-          <p className="yu-fuel-amount"><strong className="yu-metric" data-testid="fuel">{strings.fuelLabel}: {fuelText}</strong> <span className="yu-muted">{t('live.of', {v: value('fuel-capacity')}, language)} · {value('fuel-level')}</span></p>
+          <p className="yu-fuel-amount"><strong className="yu-metric" data-testid="fuel">{electric ? t('energy.charge', undefined, language) : strings.fuelLabel}: {fuelText}</strong> <span className="yu-muted">{t('live.of', {v: value('fuel-capacity')}, language)} · {value('fuel-level')}</span></p>
           <dl className="yu-fuel-rows">
             <div><dt className="yu-label-hint"><Navigation aria-hidden="true" />{t('live.range', undefined, language)}{hint(t('live.range', undefined, language), t('live.rangeNote', undefined, language))}</dt>
               <dd><strong>{value('estimated-range')}</strong> <small>{t('live.rangeNote', undefined, language)}</small></dd></div>

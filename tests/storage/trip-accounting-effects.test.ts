@@ -103,7 +103,7 @@ describe('ET-014 PR-2 readings accounting effects through real commits', () => {
       .map(({detail_json, ...row}) => ({...row, detail: JSON.parse(detail_json) as unknown})));
     expect(intervals).toEqual([
       {kind: 'sample-loss', startUtc: BASE_UTC + 1000, endUtc: BASE_UTC + 6000, startNs: 1_001_000_000_000, endNs: 1_006_000_000_000, clock: 1, detail: {cause: 'reading-hole'}},
-      {kind: 'discontinuity', startUtc: null, endUtc: null, startNs: null, endNs: null, clock: 0, detail: {annotation: true, cause: 'refuel', addedLiters: 52, atMonotonicNs: '1007000000000'}},
+      {kind: 'discontinuity', startUtc: null, endUtc: null, startNs: null, endNs: null, clock: 0, detail: {annotation: true, cause: 'refuel', powertrain: 'diesel', addedLiters: 52, atMonotonicNs: '1007000000000'}},
       {kind: 'discontinuity', startUtc: null, endUtc: null, startNs: null, endNs: null, clock: 0,
         detail: {annotation: true, cause: 'odometer-jump', deltaM: 58_850, atMonotonicNs: '1008000000000'}}
     ]);

@@ -13,7 +13,7 @@ import type {SampleInput, TripEffect} from '../../packages/storage/src/api';
 import {mapUploadProjection, UPLOAD_PAGE_KINDS, type UploadProjection, type UploadProjectionPage} from '../../packages/storage/src/upload-projection';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
 import {attachTripUuidFor, tripUuidFor, type ProfileObservation} from '../../packages/telemetry-core/src';
-import {ETS2_A, ETS2_B, job, r, Script, trailer} from '../shared/trip-messages';
+import {ETS2_A, ETS2_B, job, r, Script, trailer, truck} from '../shared/trip-messages';
 import {failed, ok, readOnly, TEST_CLOSE_GRACE_MS, withEventSeq, workspace} from './helpers';
 import {ENGINE_0, storageWorker, terminateWorkers} from './recording-helpers';
 
@@ -383,6 +383,30 @@ describe('immutable private upload projections through the SQLite worker', () =>
     expect(result.status).toBe('projected');if(result.status==='projected'){expect(result.summary.snapshot.start).toEqual({utcMs:1000,basis:'checkpoint',eventSeq:null});expect(result.summary.snapshot.evidence.startObserved).toBe(false);}
     await client.close();
   });
+  it.each([['ets2', 'vehicle.daf.xf_electric'], ['ats', 'vehicle.volvo.vnr_e']] as const)(
+    'uses the recorded %s powertrain per sample and withholds non-diesel totals from Dashboard', async (game, electric) => {
+      const client = await start(), s = new Script(ETS2_A, game), tripUuid = await open(client, s);
+      const reading = {available: true, value: 73} as const;
+      const model = async (id: string) => {
+        const message = gameShaped(s.event(r.truckConfigured(truck({id: {available: true, value: id}}))));
+        ok(await client.commitEvent({message, effects: [{kind: 'trip.update', tripUuid, set: {truckConfiguration: 'this-event', fuelUsedL: reading}},
+          {kind: 'event.attribute', tripUuid, attribution: 'trip'}]}));
+        const sample: SampleInput = {tripUuid, utcMs: 5000, sourceClockId: s.clockId, monotonicNs: message.capture.monotonicNs, gameTime: null,
+          speed: absent, odometer: absent, fuel: reading, averageConsumption: absent, estimatedRange: absent, engineRpm: absent, gear: absent, position: absent};
+        ok(await client.appendSamples(s.session, [sample]));
+      };
+      await model(electric);
+      const first = ok(await client.journalTrip(tripUuid));
+      expect(first.energyPowertrain).toBe('electric');
+      expect(ok(await prepare(client, tripUuid)).facts).toMatchObject({fuelUsed: {...absent, unit: 'L'}, accounting: {fuel: 'unknown'}});
+      await model('vehicle.diesel.stock');
+      const mixed = ok(await client.journalTrip(tripUuid));
+      expect(mixed.energyPowertrain).toBe('unknown');
+      const rows = ok(await client.listSamples({tripUuid}));
+      expect(rows.map(row => row.powertrain)).toEqual(['electric', 'diesel']);
+      expect(ok(await prepare(client, tripUuid)).facts.fuelUsed).toEqual({...absent, unit: 'L'});
+      await client.close();
+    });
   it('preserves selected save accounting and unavailable fuel instead of summing member totals', async () => {
     // Its subject is the engine-0 save rollback against a raw total (ET-112c).
     const client=await start('history',storageWorker(ENGINE_0)),s=new Script(ETS2_A),uuid=await open(client,s);

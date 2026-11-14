@@ -1,8 +1,8 @@
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, OverlayPresentation, OverlaySectionId, OverlaySectionView, OverlaySettings, UnitProfiles} from '../../../packages/contracts/src';
 import {resolveDisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {CRUISE_CONTROL_OFF, cruiseControlActive} from '../../../packages/telemetry-core/src/cruise-control';
-import {fixed, formatDistance, formatMoneyAmount, formatVolume} from '../../../packages/telemetry-core/src/format';
-import {convertConsumption, convertMass, convertVolume} from '../../../packages/telemetry-core/src/units';
+import {fixed, formatConsumption, formatDistance, formatMoneyAmount} from '../../../packages/telemetry-core/src/format';
+import {convertMass, convertVolume} from '../../../packages/telemetry-core/src/units';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
 import {DEFAULT_OVERLAY_SETTINGS, isGaugeFraction, OVERLAY_SECTION_IDS} from './overlay-sections';
@@ -96,15 +96,19 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
   const state = observation?.state;
   const displayUnits = resolveDisplayUnits(game, {profile});
   const sources = liveSources(live, displayUnits, gearDisplayFor(gearDisplay, game));
+  const powertrain = sources.v0View.powertrain;
+  const amountUnit = powertrain === 'unknown' ? null : powertrain === 'electric' ? 'kWh' : volumeUnit(profile);
+  const fuel = amountUnit && sources.field('fuel').state === 'value' && state?.fuel.available
+    ? fixed(amountUnit === 'kWh' ? state.fuel.value : convertVolume(state.fuel.value, amountUnit), 0) : undefined;
   const valueOf = (id: LiveFieldId): string | undefined => {
     const field = sources.field(id);
     if (field.state !== 'value') return undefined;
     // Reformat canonical readings only after the shared field's eligibility check; never round an already rounded string.
     const v0 = sources.v0State, v1 = sources.v1State;
-    if (id === 'fuel' && v0?.fuel.state === 'value') return formatVolume(v0.fuel.value, displayUnits.volume, 0);
+    if (id === 'fuel') return fuel === undefined ? undefined : `${fuel} ${amountUnit}`;
     if (id === 'sdk-average-consumption' && v0?.averageConsumption.state === 'value') {
-      const converted = convertConsumption(v0.averageConsumption.value, displayUnits.consumption);
-      if (converted !== undefined) return `${fixed(converted, 0)} ${displayUnits.consumption}`;
+      const formatted = formatConsumption(v0.averageConsumption.value, powertrain === 'electric' ? 'kWh/100 km' : displayUnits.consumption, 0);
+      if ('text' in formatted) return formatted.text;
     }
     if (id === 'route-remaining' && v1?.navigationDistance.state === 'value') return formatDistance(v1.navigationDistance.value.meters, displayUnits.distance, 0);
     // ET-071: a set speed rounds like the speed section; zero (off) stays the app-owned word, never "0 km/h".
@@ -176,8 +180,8 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     source: game === 'ats' ? 'ATS' : game === 'ets2' ? 'ETS2' : 'No game', origin: observation?.source.origin ?? 'none', status: live.status,
     speed: current && state?.speed.available ? speedNumber(state.speed.value, profile) : '—',
     speedUnit: speedUnit(profile),
-    fuel: current && state?.fuel.available ? fixed(convertVolume(state.fuel.value, displayUnits.volume), 0) : '—',
-    fuelUnit: volumeUnit(profile),
+    fuel: current ? fuel ?? '—' : '—',
+    fuelUnit: current ? amountUnit : live.status === 'stale' ? previous?.fuelUnit ?? null : null,
     freshness: current ? 'current' : live.status === 'stale' ? 'stale' : 'unavailable',
     layout: overlay.layout, backgroundOpacity: overlay.backgroundOpacity,
     paused: current && sources.v0View.connection.paused,

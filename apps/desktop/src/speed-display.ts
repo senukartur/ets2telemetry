@@ -1,6 +1,10 @@
 import type {AppLanguage, LiveTelemetry, UnitProfile} from '../../../packages/contracts/src';
 import {speedNumber, speedUnit, volumeNumber, volumeUnit} from './unit-profiles';
 import {translateUnit} from './i18n';
+import {isCurrent} from '../../../packages/telemetry-core/src/live-view';
+import {localizedMeasurement} from './screens/app-copy';
+import {formatTruckAmount} from '../../../packages/telemetry-core/src/format';
+import {truckPowertrain} from '../../../packages/telemetry-core/src/truck-powertrain';
 import {getStrings} from './strings';
 
 /**
@@ -17,7 +21,10 @@ export function dashboardSpeed(live: LiveTelemetry | undefined, profile: UnitPro
 /** Dashboard fuel in the displayed game's profile, with the same freshness gate. */
 export function dashboardFuel(live: LiveTelemetry | undefined, profile: UnitProfile = 'metric', language: AppLanguage = 'en'): string {
   const fuel = live?.observation?.state.fuel;
-  const unit = translateUnit(volumeUnit(profile), language);
-  const unavail = getStrings(language).unavailableText;
-  return live?.fresh && fuel?.available ? `${volumeNumber(fuel.value, profile)} ${unit}` : unavail;
+  const truckId = live?.observation?.state.configuration.truckId;
+  const type = truckPowertrain(live?.observation?.source.game, truckId?.available ? truckId.value : undefined);
+  return live && isCurrent(live) && fuel?.available && type !== 'unknown'
+    ? type === 'electric' ? localizedMeasurement(formatTruckAmount(fuel.value, 'kWh', 1), language)
+      : `${volumeNumber(fuel.value, profile)} ${translateUnit(volumeUnit(profile), language)}`
+    : getStrings(language).unavailableText;
 }

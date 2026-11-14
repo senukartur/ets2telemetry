@@ -86,7 +86,7 @@ describe('a saved export (J16, J17)', () => {
       return {ok: true as const, value: {...value, database: {purpose: 'history', schemaVersion: 2}}};
     };
   };
-  it('copies the trip quantity provenance after fuel used and never writes the page-time membership hint (ET-112e)', async () => {
+  it('copies the trip quantity provenance after energy used and never writes the page-time membership hint (ET-112e)', async () => {
     // The fixture's distance is 0 m (a value) and its fuel used is unavailable.
     const accounting = {engine: 1, distance: {status: 'partial', breaks: ['truck-change', 'reading-hole'], quality: ['bridged']}, fuel: {status: 'unavailable', breaks: ['unsupported'], quality: []}};
     const detail = changed(DETAIL, d => { Object.assign(d.trip, {accounting, membership: 'pending'}); });
@@ -94,10 +94,10 @@ describe('a saved export (J16, J17)', () => {
     expect((await f.instance.export(TRIP)).ok).toBe(true);
     const value = JSON.parse(await readFile(path.join(out, 'trip.json'), 'utf8')) as {formatVersion: number; trip: Record<string, unknown>};
     expect(tripExportProblems(value)).toEqual([]);
-    expect(value.formatVersion).toBe(6);
+    expect(value.formatVersion).toBe(7);
     expect(value.trip.accounting).toEqual(accounting);
     expect(JSON.stringify(value.trip.accounting)).toBe(JSON.stringify(accounting));
-    expect(Object.keys(value.trip).slice(Object.keys(value.trip).indexOf('fuelUsedL'), Object.keys(value.trip).indexOf('fuelUsedL') + 3)).toEqual(['fuelUsedL', 'accounting', 'openedBy']);
+    expect(Object.keys(value.trip).slice(Object.keys(value.trip).indexOf('energyUsed'), Object.keys(value.trip).indexOf('energyUsed') + 3)).toEqual(['energyUsed', 'accounting', 'openedBy']);
     expect(value.trip).not.toHaveProperty('membership');
     expect(JSON.stringify(value)).not.toContain('membership');
   });
@@ -107,7 +107,7 @@ describe('a saved export (J16, J17)', () => {
     expect((await f.instance.export(TRIP)).ok).toBe(true);
     expect(diagnostics).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({trip: DETAIL.trip}), 1_800_000_000_000);
     const value = JSON.parse(await readFile(path.join(out, 'trip.json'), 'utf8'));
-    expect(value.diagnostics).toEqual(diagnosticInput()); expect(value.formatVersion).toBe(6);
+    expect(value.diagnostics).toEqual(diagnosticInput()); expect(value.formatVersion).toBe(7);
   });
   it.each(['cancelled', 'refused', 'synthetic'] as const)('does not collect game diagnostics for a %s export', async mode => {
     const diagnostics = vi.fn().mockResolvedValue(diagnosticInput());

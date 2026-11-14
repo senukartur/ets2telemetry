@@ -4,6 +4,7 @@
 // against the journal contract (packages/contracts/src/journal.ts) and the request it answers. A reply that fails the
 // check is never forwarded to the renderer. Renderer-safe: no Node or Electron API, so the sandboxed preload can import
 // it. See docs/journal.md#ipc-methods-and-codes-j10-j11.
+import {isTruckPowertrain} from '../../../packages/contracts/src/truck-powertrain';
 import type {JournalCallCode, JournalCallResult, JournalDatabase, JournalSample, JournalStorageCode, JournalTripsQuery} from '../../../packages/contracts/src';
 import {
   journalJobFilterOf, isJournalListCursor, isJournalSnapshotCursor, journalCursorPosition, isJournalEventCursor, isJournalRowCursor, isJournalTripsQuery, isJournalUuid, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_SAMPLE_LIMITS,
@@ -170,7 +171,9 @@ const SAMPLE_KEYS = ['id', 'tripUuid', 'utcMs', 'sourceClockId', 'monotonicNs', 
 const SAMPLE_VALUES = ['speed', 'fuel', 'averageConsumption', 'estimatedRange', 'engineRpm', 'gear', 'odometer'];
 /** One stored sample of the requested trip, exactly the JournalSample shape. */
 function sample(value: unknown, tripUuid: string): void {
-  const o = exact(value, [...SAMPLE_KEYS, ...(isRecord(value) && value.pluginSessionId !== undefined ? ['pluginSessionId', 'rawTripUuid', 'accountingIncluded'] : [])]);
+  const o = exact(value, [...SAMPLE_KEYS, ...(isRecord(value) && value.pluginSessionId !== undefined ? ['pluginSessionId', 'rawTripUuid', 'accountingIncluded'] : []),
+    ...(isRecord(value) && Object.hasOwn(value, 'powertrain') ? ['powertrain'] : [])]);
+  if (Object.hasOwn(o, 'powertrain') && !isTruckPowertrain(o.powertrain)) bad();
   if (o.pluginSessionId !== undefined) {uuid(o.pluginSessionId); uuid(o.rawTripUuid); if (typeof o.accountingIncluded !== 'boolean') bad();}
   if (!isJournalRowCursor(o.id) || o.tripUuid !== tripUuid) bad();
   count(o.utcMs); uuid(o.sourceClockId); uint64(o.monotonicNs);

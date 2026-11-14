@@ -28,24 +28,30 @@ const textOf = (value: unknown) => typeof value === 'string' ? value : '';
 const isObject = (value: unknown): value is Json => typeof value === 'object' && value !== null && !Array.isArray(value);
 const sameKeys = (value: Json, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key, index) => Object.keys(value)[index] === key);
 
-/** Every problem of `document` as a trip export of format version 1 to 6; an empty list for a valid one. */
+/** Every problem of `document` as a trip export of format version 1 to 7; an empty list for a valid one. */
 export function tripExportProblems(document: unknown): string[] {
   const problems: string[] = [];
   const problem = (where: string, what: string) => { problems.push(`${where}: ${what}`); };
   if (!isObject(document)) return ['$: not an object'];
   // Formats 4 to 6 add the recording sources; format 6 adds the trip's quantity provenance.
-  const sourced = document.formatVersion === 4 || document.formatVersion === 5 || document.formatVersion === 6;
+  const energy = document.formatVersion === 7;
+  const quantity = energy || document.formatVersion === 6;
+  const sourced = quantity || document.formatVersion === 4 || document.formatVersion === 5;
+  const units = energy ? {...UNITS, fuel: 'sample powertrain: diesel L, electric kWh, unknown unit unavailable',
+    averageConsumption: 'sample powertrain: diesel L/100 km, electric kWh/100 km, unknown unit unavailable (SDK mean)'} : UNITS;
+  const energyUnit = (type: unknown) => type === 'electric' ? 'kWh' : type === 'diesel' ? 'L' : null;
+  const types = ['electric', 'diesel', 'unknown'];
   const topKeys = sourced ? [...TOP_KEYS.slice(0,12),'diagnostics','sources',...TOP_KEYS.slice(12)] : document.formatVersion === 3 ? [...TOP_KEYS.slice(0,12),'diagnostics',...TOP_KEYS.slice(12)] : TOP_KEYS;
   if (!sameKeys(document, topKeys)) problem('$', `keys are not ${topKeys.join(', ')} in this order`);
   if (document.format !== 'ets2telemetry.trip-export') problem('$.format', 'not ets2telemetry.trip-export');
-  if (![1, 2, 3, 4, 5, 6].includes(document.formatVersion as number)) problem('$.formatVersion', 'not 1, 2, 3, 4, 5 or 6');
+  if (![1, 2, 3, 4, 5, 6, 7].includes(document.formatVersion as number)) problem('$.formatVersion', 'not 1, 2, 3, 4, 5, 6 or 7');
 
   const header = document.header;
   if (!isObject(header) || !isObject(header.application) || header.application.name !== 'ETS2Telemetry' || typeof header.application.version !== 'string'
     || !Number.isSafeInteger(header.exportedUtcMs) || (header.exportedUtcMs as number) < 0 || !isObject(header.database)
     || !UUID.test(textOf(header.database.uuid)) || !(textOf(header.database.purpose) in ORIGIN) || !Number.isSafeInteger(header.database.schemaVersion)
     || (header.database.schemaVersion as number) < 1 || header.sessionOrigin !== ORIGIN[textOf(header.database.purpose)]) problem('$.header', 'malformed');
-  if (JSON.stringify(document.units) !== JSON.stringify(UNITS)) problem('$.units', 'not the canonical units of format version 1');
+  if (JSON.stringify(document.units) !== JSON.stringify(units)) problem('$.units', 'not the canonical units');
 
   // Availability and money shapes anywhere in the document (protocol v1).
   const walk = (value: unknown, where: string) => {
@@ -55,7 +61,8 @@ export function tripExportProblems(document: unknown): string[] {
       const keys = Object.keys(value).filter(key => key !== 'unit');
       if (value.available === true ? !(keys.length === 2 && 'value' in value) : !(value.available === false && keys.length === 2 && REASONS.includes(textOf(value.reason))))
         problem(where, 'not an availability shape');
-      if ('unit' in value && typeof value.unit !== 'string') problem(where, 'unit is not text');
+      if ('unit' in value && typeof value.unit !== 'string'
+        && !(energy && value.unit === null && (where === '$.trip.energyUsed' || where.endsWith('.fuelCapacity')))) problem(where, 'unit is not text');
     }
     if ('raw' in value && 'sdkType' in value) {
       const currency = value.currency;
@@ -69,9 +76,12 @@ export function tripExportProblems(document: unknown): string[] {
   walk(document, '$');
 
   const trip = document.trip, bounds = document.bounds;
-  const tripKeys = document.formatVersion === 6 ? [...TRIP_KEYS.slice(0, 12), 'accounting', ...TRIP_KEYS.slice(12)] : TRIP_KEYS;
+  const tripKeys = energy ? [...TRIP_KEYS.slice(0, 11), 'powertrain', 'energyUsed', 'accounting', ...TRIP_KEYS.slice(12)]
+    : quantity ? [...TRIP_KEYS.slice(0, 12), 'accounting', ...TRIP_KEYS.slice(12)] : TRIP_KEYS;
   if (!isObject(trip) || !sameKeys(trip, document.formatVersion !== 1 ? ['is_hard_mode', 'hard_mode_details', ...tripKeys] : tripKeys) || !UUID.test(textOf(trip.tripUuid)) || !UUID.test(textOf(trip.pluginSessionId))) problem('$.trip', 'malformed');
   else if ((trip.outcome === 'open') !== (trip.closeReason === null) || (trip.outcome === 'open') !== (trip.endedUtcMs === null)) problem('$.trip', 'outcome, close reason and end disagree');
+  if (energy && isObject(trip) && (!types.includes(textOf(trip.powertrain)) || !isObject(trip.energyUsed)
+    || trip.energyUsed.unit !== energyUnit(trip.powertrain) || trip.powertrain === 'unknown' && trip.energyUsed.available !== false)) problem('$.trip.energyUsed', 'invalid powertrain or unit');
   if (!isObject(bounds) || !sameKeys(bounds, [...(sourced && isObject(bounds) && bounds.projection !== undefined ? ['projection','sources','sourceTotal','accountingHead']:[]), 'committedThroughEventSeq', 'lastSampleId', 'lastIntervalId', 'snapshot']) || !U64.test(textOf(bounds.committedThroughEventSeq))
     || (bounds.lastSampleId !== null && !ROW_ID.test(textOf(bounds.lastSampleId))) || (bounds.lastIntervalId !== null && !ROW_ID.test(textOf(bounds.lastIntervalId)))
     || bounds.snapshot !== (isObject(trip) && trip.outcome === 'open')) { problem('$.bounds', 'malformed'); return problems; }
@@ -84,7 +94,7 @@ export function tripExportProblems(document: unknown): string[] {
     if (typeof trip.is_hard_mode !== 'boolean') problem('$.trip.is_hard_mode', 'not boolean');
     const audit = trip.hard_mode_details;
     const keys = ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery'];
-    if ((document.formatVersion === 5 || document.formatVersion === 6) && isObject(audit) && audit.version === 2) {
+    if ((document.formatVersion === 5 || quantity) && isObject(audit) && audit.version === 2) {
       const safe = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
       const countKeys = ['passingChecks', 'failingChecks', 'unknownChecks'];
       const codes = ['settings-changing', 'settings-unavailable', 'profile-verification', 'source-changed', 'guard-deadline', 'session-transition', 'storage-failure', 'rule-failed'];
@@ -120,7 +130,7 @@ export function tripExportProblems(document: unknown): string[] {
       if (trip.is_hard_mode && (trip.outcome !== 'delivered' || !isObject(audit) || audit.firstLoss !== null || audit.manualDelivery === false)) problem('$.trip.is_hard_mode', 'qualification lacks delivery proof');
     }
   }
-  if (document.formatVersion === 6 && isObject(trip) && trip.accounting !== null && trip.accounting !== undefined) {
+  if (quantity && isObject(trip) && trip.accounting !== null && trip.accounting !== undefined) {
     // The status agrees with the value's availability: unavailable exactly when it is unavailable, otherwise partial exactly
     // when a break is named. Names are known, each once, in the documented order.
     const names = (value: unknown, known: readonly string[]) => Array.isArray(value) && value.every((name, index) => known.includes(textOf(name))
@@ -132,7 +142,7 @@ export function tripExportProblems(document: unknown): string[] {
     const a = trip.accounting;
     if (!isObject(a) || !sameKeys(a, ['engine', 'distance', 'fuel']) || a.engine !== 1
       || !provenance(a.distance, trip.observedDistanceM, ['truck-change', 'position-jump', 'transfer', 'reading-hole', 'recording-gap', 'unsupported'], ['bridged', 'restored'])
-      || !provenance(a.fuel, trip.fuelUsedL, ['truck-change', 'reading-hole', 'transfer', 'recording-boundary', 'unsupported'], ['refuel-excluded'])) problem('$.trip.accounting', 'malformed');
+      || !provenance(a.fuel, energy ? trip.energyUsed : trip.fuelUsedL, ['truck-change', 'reading-hole', 'transfer', 'recording-boundary', 'unsupported'], ['refuel-excluded'])) problem('$.trip.accounting', 'malformed');
   }
   const window = document.window;
   if ((document.formatVersion === 3 || sourced)) {
@@ -168,6 +178,7 @@ export function tripExportProblems(document: unknown): string[] {
       const qualified = sourced && isObject(row) && row.pluginSessionId !== undefined;
       const sourceKeys = qualified ? name === 'events' ? ['id','pluginSessionId','rawTripUuid'] : name === 'samples' ? ['pluginSessionId','rawTripUuid','accountingIncluded'] : ['pluginSessionId','rawTripUuid'] : [];
       if (!isObject(row) || !sameKeys(row, [...sourceKeys,...keys])) { problem(where, 'keys differ'); return; }
+      if (energy && name === 'samples' && !types.includes(textOf(row.powertrain))) problem(where, 'invalid powertrain');
       if (qualified && (!UUID.test(textOf(row.pluginSessionId)) || !UUID.test(textOf(row.rawTripUuid)) || name==='samples' && typeof row.accountingIncluded!=='boolean')) problem(where,'invalid source provenance');
       const key = textOf(qualified && name==='events' ? row.id : id(row));
       if (!U64.test(key)) { problem(where, 'id is not decimal text'); return; }
@@ -181,7 +192,7 @@ export function tripExportProblems(document: unknown): string[] {
   };
   rows('intervals', INTERVAL_KEYS, row => row.id, bounds.lastIntervalId as string | null, true);
   rows('events', EVENT_KEYS, row => row.eventSeq, bounds.committedThroughEventSeq as string);
-  rows('samples', SAMPLE_KEYS, row => row.id, bounds.lastSampleId as string | null, true);
+  rows('samples', energy ? [...SAMPLE_KEYS.slice(0, 5), 'powertrain', ...SAMPLE_KEYS.slice(5)] : SAMPLE_KEYS, row => row.id, bounds.lastSampleId as string | null, true);
   if(sourced){
     if(!Array.isArray(document.sources)) problem('$.sources','not an array');
     else {let previous=0n;for(const source of document.sources){
