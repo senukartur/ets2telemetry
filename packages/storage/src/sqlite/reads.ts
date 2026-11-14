@@ -15,6 +15,7 @@ import {readHardModeDetails} from './hard-mode';
 import type {StorageConnection} from './connection';
 import {jobValues} from './journal';
 import {statement} from './writes';
+import {samplePowertrain} from './truck-energy';
 
 const U32 = 4_294_967_295;
 function limit(value: unknown, max: number): number {
@@ -133,19 +134,22 @@ export function listSamples(conn: StorageConnection, scope: {tripUuid: string} |
   const db = conn.reader(), max = limit(page.limit, MAX_SAMPLE_BATCH);
   if (page.afterId !== undefined && !isJournalSnapshotCursor(page.afterId) && !/^(0|[1-9][0-9]{0,18})$/.test(page.afterId)) fail('INVALID_INPUT');
   const after = BigInt(page.afterId?.startsWith('v4:') ? page.afterId.split(':')[5] : page.afterId ?? '0');
-  let logicalUuid: string | undefined;
+  let logicalUuid: string | undefined, eventBound: bigint | undefined;
+  const ledger = logicalEnabled(db)
+    ? 'LEFT JOIN logical_progress p ON p.sample_ref=s.id LEFT JOIN logical_trucks k ON k.id=p.truck_ref' : '';
+  const identity = ledger ? 'k.identity_key' : 'NULL';
   let rows: Record<string, unknown>[];
   if ('tripUuid' in scope) {
     if (!isUuid(scope.tripUuid)) fail('INVALID_INPUT');
     const trip = statement(db, 'SELECT id FROM trips WHERE trip_uuid = ?').pluck().get(scope.tripUuid); if (trip === undefined) fail('UNKNOWN_TRIP');
     if (logicalEnabled(db) && (page.afterId?.startsWith('v4:') || needsSnapshot(db,scope.tripUuid))) {
-      const {snap} = readSnapshotToken(db,scope.tripUuid,page.afterId,'s'); logicalUuid = scope.tripUuid;
-      rows = statement(db, `${ACCOUNTING_PATH} SELECT s.*,ps.plugin_session_uuid,t.trip_uuid AS raw_trip_uuid,(@head IS NULL OR ${INCLUDED_SAMPLE}) AS accounting_included
-        FROM logical_snapshot_memberships x JOIN samples s ON s.trip_ref=x.trip_ref JOIN trips t ON t.id=x.trip_ref JOIN plugin_sessions ps ON ps.id=s.plugin_session_ref
+      const {snap} = readSnapshotToken(db,scope.tripUuid,page.afterId,'s'); logicalUuid = scope.tripUuid; eventBound = snap.events;
+      rows = statement(db, `${ACCOUNTING_PATH} SELECT s.*,ps.plugin_session_uuid,ps.game,${identity} AS truck_identity,t.trip_uuid AS raw_trip_uuid,(@head IS NULL OR ${INCLUDED_SAMPLE}) AS accounting_included
+        FROM logical_snapshot_memberships x JOIN samples s ON s.trip_ref=x.trip_ref JOIN trips t ON t.id=x.trip_ref JOIN plugin_sessions ps ON ps.id=s.plugin_session_ref ${ledger}
         WHERE x.logical_ref=@logical AND x.trip_ref<=@members AND x.from_revision<@revision AND (x.through_revision IS NULL OR x.through_revision>=@revision)
         AND s.id>@after AND s.id<=@through AND (@all=1 OR @head IS NULL OR ${INCLUDED_SAMPLE}) ORDER BY s.id LIMIT @limit`).all({head:snap.head,logical:snap.logical,members:snap.members,revision:snap.revision,
           after,through:snap.samples,all: page.includeExcluded === true ? 1 : 0,limit:max}) as Record<string,unknown>[];
-    } else rows = statement(db, 'SELECT * FROM samples WHERE trip_ref = ? AND id > ? ORDER BY trip_ref, id LIMIT ?').all(trip, after, max) as Record<string, unknown>[];
+    } else rows = statement(db, `SELECT s.*,ps.game,${identity} AS truck_identity FROM samples s JOIN plugin_sessions ps ON ps.id=s.plugin_session_ref ${ledger} WHERE s.trip_ref = ? AND s.id > ? ORDER BY s.trip_ref,s.id LIMIT ?`).all(trip, after, max) as Record<string, unknown>[];
   } else rows = statement(db, 'SELECT * FROM samples WHERE plugin_session_ref = ? AND id > ? ORDER BY plugin_session_ref, id LIMIT ?').all(sessionId(db, scope.pluginSessionId), after, max) as Record<string, unknown>[];
   const clock = (ref: unknown) => String(statement(db, 'SELECT clock_uuid FROM clocks WHERE id = ?').pluck().get(ref));
   const tripUuid = (ref: unknown) => ref === null ? null : String(statement(db, 'SELECT trip_uuid FROM trips WHERE id = ?').pluck().get(ref));
@@ -155,6 +159,7 @@ export function listSamples(conn: StorageConnection, scope: {tripUuid: string} |
     const position = fromMask(r.x === null ? null : {x: toReal(r.x), y: toReal(r.y), z: toReal(r.z)}, 128, notSupported, invalid);
     const minutes = fromMask(r.game_minutes === null ? null : toSafeNumber(r.game_minutes, U32, 0), 256, notSupported, invalid);
     return {
+      ...('tripUuid' in scope ? {powertrain: samplePowertrain(db, r.game as 'ets2' | 'ats', r.truck_identity, r.plugin_session_ref, r.source_clock_ref, r.monotonic_ns as bigint, eventBound)} : {}),
       ...(logicalUuid ? {pluginSessionId:String(r.plugin_session_uuid),rawTripUuid:String(r.raw_trip_uuid),accountingIncluded:r.accounting_included===1n} : {}),
       id: String(r.id), tripUuid: logicalUuid ?? tripUuid(r.trip_ref), utcMs: toSafeNumber(r.utc_ms), sourceClockId: clock(r.source_clock_ref), monotonicNs: String(r.monotonic_ns),
       gameTime: r.game_clock_ref === null ? null : {minutes, clockId: clock(r.game_clock_ref)},

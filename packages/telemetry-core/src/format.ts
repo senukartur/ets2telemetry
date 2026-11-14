@@ -5,7 +5,7 @@ import type {GearDisplayMode} from './display-profile';
 import type {GearLabels} from './gear-labels';
 import type {MoneyValue} from './readings';
 import {
-  convertConsumption, convertDistance, convertMass, convertSpeed, convertVolume, type ConsumptionUnit, type DistanceUnit, type MassUnit,
+  convertConsumption, convertDistance, convertMass, convertSpeed, convertVolume, type TruckConsumptionUnit, type TruckAmountUnit, type DistanceUnit, type MassUnit,
   type SpeedUnit, type VolumeUnit
 } from './units';
 
@@ -27,6 +27,9 @@ export function formatVolume(liters: number, unit: VolumeUnit, decimals: 0 | 1):
   return `${fixed(convertVolume(liters, unit), decimals)} ${unit}`;
 }
 /** Tonnes with one decimal, pounds as an integer. */
+export function formatTruckAmount(value: number, unit: TruckAmountUnit, decimals: 0 | 1): string {
+  return unit === 'kWh' ? `${fixed(value, decimals)} kWh` : formatVolume(value, unit, decimals);
+}
 export function formatMass(kilograms: number, unit: MassUnit): string {
   return `${fixed(convertMass(kilograms, unit), unit === 't' ? 1 : 0)} ${unit}`;
 }
@@ -34,9 +37,9 @@ export function formatMass(kilograms: number, unit: MassUnit): string {
  * The SDK mean consumption with one decimal. Zero L/100 km has no US mpg value: the result is the reason
  * `zero-consumption`, never "Infinity" or "0.0 US mpg". A negative or non-finite input is `invalid`.
  */
-export function formatConsumption(litersPer100Km: number, unit: ConsumptionUnit): {text: string} | {reason: 'zero-consumption' | 'invalid'} {
+export function formatConsumption(litersPer100Km: number, unit: TruckConsumptionUnit, decimals: 0 | 1 = 1): {text: string} | {reason: 'zero-consumption' | 'invalid'} {
   const converted = convertConsumption(litersPer100Km, unit);
-  if (converted !== undefined) return {text: `${fixed(converted, 1)} ${unit}`};
+  if (converted !== undefined) return {text: `${fixed(converted, decimals)} ${unit}`};
   return litersPer100Km === 0 ? {reason: 'zero-consumption'} : {reason: 'invalid'};
 }
 export function formatRpm(rpm: number): string {

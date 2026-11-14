@@ -69,11 +69,12 @@ export function liveFieldValue(field: LiveField, language: AppLanguage): string 
 
 function createLiveText(language: AppLanguage) {
  const {FIELD_NOTE_TEXT, LIVE_FIELD_TEXT, LIVE_SECTION_TEXT, STRINGS, VIEW_REASON_TEXT} = copyTable(BASE_COPY, language);
-function rowText(field: LiveField, extraNote?: string): LiveRowText {
+function rowText(field: LiveField, extraNote?: string, electric = false): LiveRowText {
   const reason = (field.state === 'missing' || field.state === 'absent') && field.reason ? VIEW_REASON_TEXT[field.reason] : undefined;
   const notes = [...(field.notes ?? []).map(id => FIELD_NOTE_TEXT[id]), ...(extraNote ? [extraNote] : [])];
   const note = notes.length ? notes.join('; ') : undefined;
-  const label = LIVE_FIELD_TEXT[field.id];
+  const label = electric && field.id === 'fuel-capacity' ? t('energy.capacity', undefined, language)
+    : electric && field.id === 'fuel-level' ? t('energy.charge', undefined, language) : LIVE_FIELD_TEXT[field.id];
   // Only a current value row carries an urgency; the word and the name are the badge's text, beside its icon and tone.
   const badge = field.state === 'value' && field.urgency ? {urgency: field.urgency, text: t(field.urgency === 'due' ? 'live.breakDue' : 'live.breakSoon', undefined, language),
     name: t('live.breakBadge', {label, word: t(field.urgency === 'due' ? 'live.breakDue' : 'live.breakSoon', undefined, language)}, language)} : undefined;
@@ -100,10 +101,10 @@ function liveDashboardText(live: LiveTelemetry | undefined, units: UnitProfiles 
     for (const {id} of section.fields) {
       const field = sources.field(id);
       if (field.state === 'hidden' || LEGACY_ROW_IDS.has(id)) continue;
-      rows.push(rowText(field));
+      rows.push(rowText(field, undefined, sources.v0View.powertrain === 'electric'));
     }
     if (!rows.length && !section.missing) continue;
-    sections.push({id: section.id, testId: `live-section-${section.id}`, title: LIVE_SECTION_TEXT[section.id],
+    sections.push({id: section.id, testId: `live-section-${section.id}`, title: section.id === 'fuel' && sources.v0View.powertrain === 'electric' ? t('energy.charge', undefined, language) : LIVE_SECTION_TEXT[section.id],
       ...(section.missing ? {missing: missingSubjectText(section.missing)} : {}), rows});
   }
   if (telemetry.v1 && telemetry.v1.selection === telemetry.selection && (sources.v1Carried || !telemetry.v1.observation)) {

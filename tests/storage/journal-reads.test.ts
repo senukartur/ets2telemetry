@@ -298,7 +298,7 @@ describe('the job market and special-job flag of a list row and its detail (ET-0
 describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   it('returns the delivered trip with its job, truck, trailer, revenue, exact money totals, window, samples and export bounds', () => {
     expect(ok(storage.journalTrip(T.delivered))).toEqual({
-      database: DATABASE,
+      database: DATABASE, energyPowertrain: 'diesel',
       trip: {isHardMode: false, hardModeDetails: unobservedHardModeAudit(BASE_UTC + 4_000),
         tripUuid: T.delivered, game: 'ets2', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: BASE_UTC + 4_000, endedUtcMs: BASE_UTC + 9_000, observedDistanceM: {available: true, value: 152_000.5}, fuelUsedL: NOT_OBSERVED,
@@ -327,7 +327,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
   });
   it('keeps zero apart from unavailable for every job, outcome and sample value of the zero-values trip (REG-009)', () => {
     expect(ok(storage.journalTrip(T.zeroValues))).toEqual({
-      database: DATABASE,
+      database: DATABASE, energyPowertrain: 'diesel',
       trip: {isHardMode: false, hardModeDetails: unobservedHardModeAudit(SESSION_C_UTC + 3_000),
         tripUuid: T.zeroValues, game: 'ats', gameMode: ANCHOR_GAME_MODE, gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'complete',
         startedUtcMs: SESSION_C_UTC + 3_000, endedUtcMs: SESSION_C_UTC + 4_000, observedDistanceM: {available: true, value: 0}, fuelUsedL: NOT_OBSERVED,
@@ -349,7 +349,7 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
       exportBounds: {snapshot: expect.objectContaining({events: expect.stringMatching(/^v4:/), intervals: expect.stringMatching(/^v4:/), samples: expect.stringMatching(/^v4:/)}), sourceTotal:1,accountingHead:null,sources:[{pluginSessionId:ATS_A,committedThroughEventSeq:'5'}], committedThroughEventSeq: '5', lastSampleId: '10', lastIntervalId: null}
     });
     const [sample] = ok(storage.listSamples({tripUuid: T.zeroValues}, {limit: 300}));
-    expect(sample).toEqual({pluginSessionId:ATS_A,rawTripUuid:T.zeroValues,accountingIncluded:true,id: '10', tripUuid: T.zeroValues, utcMs: SESSION_C_UTC + 3_500, sourceClockId: '30000000-0000-4000-8000-0000000000c3', monotonicNs: '5001000000000',
+    expect(sample).toEqual({powertrain: 'diesel', pluginSessionId:ATS_A,rawTripUuid:T.zeroValues,accountingIncluded:true,id: '10', tripUuid: T.zeroValues, utcMs: SESSION_C_UTC + 3_500, sourceClockId: '30000000-0000-4000-8000-0000000000c3', monotonicNs: '5001000000000',
       gameTime: {minutes: {available: true, value: 0}, clockId: '40000000-0000-4000-8000-000000000001'},
       speed: {available: true, value: 0}, fuel: {available: true, value: 0}, averageConsumption: {available: false, reason: 'not-supported'},
       estimatedRange: {available: false, reason: 'invalid'}, engineRpm: {available: true, value: 0}, gear: {available: true, value: 0}, odometer: NOT_OBSERVED,

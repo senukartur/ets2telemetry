@@ -154,7 +154,7 @@ export function OverlaySettingsCard({settings, edit, onSaved, onRequest, showSav
           {group.sections.map(id => {
             const Icon = OVERLAY_SECTION_ICONS[id], checked = overlay.sections[id];
             return <div key={id} className="yu-overlay-section-row">
-              <Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{getOverlaySectionText(id, language)}</Label>
+              <Label htmlFor={`overlay-section-${id}`}><Icon className="size-4" aria-hidden="true" />{id === 'fuel' ? t('energy.amount', undefined, language) : getOverlaySectionText(id, language)}</Label>
               <Switch id={`overlay-section-${id}`} data-testid={`overlay-switch-${id}`} checked={checked} disabled={locked || (checked && enabled === 1)}
                 onCheckedChange={next => save(() => window.desktop.setOverlaySections({...overlay.sections, [id]: next}))} />
             </div>;

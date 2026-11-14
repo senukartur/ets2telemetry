@@ -1,5 +1,5 @@
 import type {JournalTripDetail} from '../../../../packages/contracts/src';
-import {journalDetailText, journalDurationText, journalPartialText, type JournalTextOptions} from '../journal-view';
+import {journalDetailText, journalDurationText, journalEnergyPowertrain, journalPartialText, type JournalTextOptions} from '../journal-view';
 import {t} from '../i18n';
 /** Hero text and provenance are separate typed bindings; neither digits nor currency are parsed out of formatted strings. */
 export function journalTileValues(detail: JournalTripDetail, options: JournalTextOptions = {}) {
@@ -12,6 +12,9 @@ export function journalTileValues(detail: JournalTripDetail, options: JournalTex
   // Each stored sample is one source second, the basis of the list's recorded hours; UTC labels are never a duration (J13).
   const seconds = detail.samples.count;
   const observed = field('distance', 'observedDistance'), planned = field('distance', 'plannedDistance');
+  const powertrain = journalEnergyPowertrain(detail);
+  const electric = powertrain === 'electric';
+  const energyKnown = powertrain !== 'unknown' && detail.trip.fuelUsedL.available;
   const distancePartial = journalPartialText(detail.trip.accounting?.distance, language);
   // ET-112e: a delivered trip's game distance is the tile's hero, with the odometer distance as a separate note.
   const distanceTile = delivered?.distance.available
@@ -23,13 +26,16 @@ export function journalTileValues(detail: JournalTripDetail, options: JournalTex
   return {
     distance: {value: detail.trip.observedDistanceM.available ? field('distance', 'observedDistance') : '—',
       note: detail.trip.observedDistanceM.available ? null : field('distance', 'observedDistance')},
-    fuel: {value: detail.trip.fuelUsedL.available ? field('fuel', 'fuelUsed') : '—', note: detail.trip.fuelUsedL.available ? null : field('fuel', 'fuelUsed')},
+    fuel: {value: energyKnown ? field('fuel', 'fuelUsed') : '—', note: energyKnown ? null : field('fuel', 'fuelUsed'),
+      label: t(electric ? 'energy.used' : 'tr.fuel', undefined, language),
+      basis: t(electric ? 'energy.useNote' : 'tr.fuelNote', undefined, language)},
+
     money: {value: money?.available ? `${money.value.raw}${money.value.currency.status === 'sdk-documented' ? ` ${money.value.currency.code}` : ''}` : '—',
       note: money?.available ? t(money.value.currency.status === 'sdk-documented' ? 'ui.moneyBasisKnown' : 'ui.moneyBasisUnknown', undefined, language) : field('money', kind)},
     planned,
     // The distance tile's label, hero value and notes; `distance` stays the observed value.
     distanceTile,
-    fuelPartial: journalPartialText(detail.trip.accounting?.fuel, language),
+    fuelPartial: powertrain === 'unknown' ? null : journalPartialText(detail.trip.accounting?.fuel, language),
     // Null unless the game reported a delivery: a trip without one has no game-reported distance to label.
     gameDistance: delivered ? field('distance', 'deliveredDistance') : null,
     expected: field('money', 'expectedIncome'),

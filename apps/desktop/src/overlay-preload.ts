@@ -10,7 +10,7 @@ let owner = Symbol();
 let recovery: ReturnType<typeof setTimeout> | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
 let budget = new RecoveryBudget();
-const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', status: 'waiting', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: 'L', freshness: 'unavailable',
+const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', status: 'waiting', speed: '—', fuel: '—', speedUnit: 'km/h', fuelUnit: null, freshness: 'unavailable',
   layout: 'strip', paused: false, sections: [], editing: false};
 let current = unavailable;
 /** ET-070: a present Hard Mode indicator is replaced by its validated form; a missing one stays missing (not active). */

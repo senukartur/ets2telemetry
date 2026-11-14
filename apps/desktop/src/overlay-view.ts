@@ -7,7 +7,7 @@ import {cardHeroHeightCss} from './overlay-rows';
 import {localizedMeasurement} from './screens/app-copy';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
-import {localizeDeadlineString, localizeGameTimeString, translateUnit} from './i18n';
+import {localizeDeadlineString, localizeGameTimeString, t, translateUnit} from './i18n';
 
 // Pure renderer view model. Main/telemetry-core own numeric conversion and rounding; this view arranges their text
 // and localizes known app-owned units, deadlines, clocks and provenance notes. It never reparses numbers or SDK names.
@@ -111,7 +111,7 @@ export interface OverlayView {
 
 /** What the overlay shows before main's first delivery: no signal, no sections. */
 export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: 'No game', origin: 'none', status: 'waiting', speed: '—', speedUnit: 'km/h',
-  fuel: '—', fuelUnit: 'L', freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false, language: 'en'});
+  fuel: '—', fuelUnit: null, freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false, language: 'en'});
 const DASH = '—';
 /**
  * ET-052: the longest expected break text, "00 h 00 min" in the viewer's language, in the strip's CSS reserve like the other
@@ -172,8 +172,13 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     // Speed and fuel keep the separate number and unit of the ET-008 smoke contract; the unit stays visible beside a dash.
     if (section.id === 'speed') return {...base, value: available ? presentation.speed : DASH, unit: translateUnit(presentation.speedUnit, language),
       ...(available && section.speedRing !== undefined ? {speedRing: section.speedRing} : {})};
-    if (section.id === 'fuel') return {...base, value: available ? presentation.fuel : DASH, unit: translateUnit(language === 'ru' && presentation.fuelUnit === 'US gal' ? 'gal' : presentation.fuelUnit, language),
+    if (section.id === 'fuel') {
+      const unit = presentation.fuelUnit;
+      const charge = t('energy.charge', undefined, language);
+      return {...base, ...(unit === 'kWh' ? {label: charge, short: charge} : {}), value: available ? presentation.fuel : DASH,
+        ...(unit === null ? {} : {unit: translateUnit(language === 'ru' && unit === 'US gal' ? 'gal' : unit, language)}),
       ...(available && section.detail ? {detail: section.detail, detailTestId: 'overlay-fuel-level'} : {})};
+    }
     // ET-045d (W2): the RPM number and its unit are separate like speed and fuel, so the strip can reserve the number's
     // width and the cluster can size the unit apart. Only the fixed suffix is split; no number is parsed.
     if (section.id === 'rpm') {

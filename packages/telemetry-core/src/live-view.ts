@@ -1,17 +1,18 @@
 // Pure live dashboard view model. The renderer builds it per bridge update (at most 20 Hz) from the existing
 // LiveTelemetry projection; it adds no IPC, storage or trip effect. Field `text` holds the formatted value only;
 // labels and reason texts are the application's (apps/desktop/src/strings.ts).
-import type {LiveTelemetry} from '../../contracts/src';
+import type {LiveTelemetry, TruckPowertrain} from '../../contracts/src';
 import {deadlineRemaining, fuelLevel} from './derived';
 import type {DisplayProfileId, DisplayUnits, GameId, GearDisplayMode} from './display-profile';
 import {
   formatBearing, formatBoolean, formatConsumption, formatDeadline, formatDistance, formatGameTime, formatGear, formatMass, formatMoney,
-  formatPercent, formatPosition, formatRpm, formatSpeed, formatVolume
+  formatPercent, formatPosition, formatRpm, formatSpeed, formatTruckAmount
 } from './format';
 import type {GearLabels} from './gear-labels';
 import {formatCruiseControl} from './cruise-control';
 import {formatSpeedLimit} from './speed-limit';
 import {breakUrgency, formatMandatoryBreak, type NotableBreakUrgency} from './mandatory-break';
+import {liveTruckPowertrain} from './truck-powertrain';
 import {missing, valueOf, type GameModeView, type LiveTrailer, type LiveTruck, type MissingReason, type NamedEntity, type NormalizedLiveState, type Reading} from './readings';
 
 export type ViewReason = MissingReason | 'not-current' | 'zero-consumption' | 'no-trailer';
@@ -54,7 +55,7 @@ export interface LiveConnectionView {
   /** v1 only; hidden under v0. */
   eventLoss: LiveField;
 }
-export interface LiveDashboardView {connection: LiveConnectionView; sections: LiveSection[]}
+export interface LiveDashboardView {powertrain: TruckPowertrain; connection: LiveConnectionView; sections: LiveSection[]}
 
 /**
  * Fields that protocol v0 transports. Carriage is a static property of the protocol, never inferred from nested
@@ -185,8 +186,12 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
   const cargoMarket = market?.state === 'value' && market.value === 'cargo_market';
 
   const truck = s.truck;
+  const powertrain = current ? liveTruckPowertrain(game, truck) : 'unknown';
+  const amountUnit = powertrain === 'electric' ? 'kWh' : units.volume;
+  const consumptionUnit = powertrain === 'electric' ? 'kWh/100 km' : units.consumption;
+  const withUnit = <T>(reading: Reading<T>): Reading<T> => powertrain === 'unknown' && reading.state === 'value' ? missing('not-observed') : reading;
   const trailers = trailersReading(s.trailers);
-  const averageNotes: FieldNote[] = game === 'ats' ? ['sdk-mean', 'ats-mostly-static'] : ['sdk-mean'];
+  const averageNotes: FieldNote[] = game === 'ats' && powertrain === 'diesel' ? ['sdk-mean', 'ats-mostly-static'] : ['sdk-mean'];
   const placement = s.worldPlacement;
   const sections: LiveSection[] = [
     {id: 'motion', fields: [
@@ -199,11 +204,11 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
       f('speed-limit', s.speedLimit, value => formatSpeedLimit(value, units.speed))
     ]},
     {id: 'fuel', fields: [
-      f('fuel', s.fuel, value => formatVolume(value, units.volume, 1)),
-      f('fuel-capacity', s.fuelCapacity, value => formatVolume(value, units.volume, 0)),
-      f('fuel-level', fuelLevel(s.fuel, s.fuelCapacity), formatPercent),
-      f('sdk-average-consumption', s.averageConsumption, value => {
-        const formatted = formatConsumption(value, units.consumption);
+      f('fuel', withUnit(s.fuel), value => formatTruckAmount(value, amountUnit, 1)),
+      f('fuel-capacity', withUnit(s.fuelCapacity), value => formatTruckAmount(value, amountUnit, 0)),
+      f('fuel-level', withUnit(fuelLevel(s.fuel, s.fuelCapacity)), formatPercent),
+      f('sdk-average-consumption', withUnit(s.averageConsumption), value => {
+        const formatted = formatConsumption(value, consumptionUnit);
         return 'text' in formatted ? formatted.text : formatted;
       }, averageNotes),
       f('estimated-range', s.estimatedRange, value => formatDistance(value, units.distance, 0), ['game-estimate'])
@@ -250,6 +255,7 @@ export function buildLiveView(live: LiveViewSource, state: NormalizedLiveState |
   // Rows the protocol in use does not transport are hidden by protocol, whatever their parent readings say.
   const carried = (built: LiveField): LiveField => state && !carriesField(state.protocol, built.id) ? hidden(built.id, 'not-carried', built.notes) : built;
   return {
+    powertrain,
     connection: {
       status: live.status, current, paused: current && (live.status === 'paused' || s.simulation === 'paused'),
       simulation: state?.simulation, origin, flagged: origin === 'synthetic' || origin === 'replay', game, profile: units.profile,

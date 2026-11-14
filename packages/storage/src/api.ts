@@ -55,7 +55,7 @@ export interface SampleInput {
   engineRpm: Available<number>; gear: Available<number>; odometer: Available<number>;
   position: Available<{x: number; y: number; z: number}>;
 }
-export interface SampleRecord extends Omit<SampleInput, 'recording'> {id: string; tripUuid: string | null; pluginSessionId?: string; rawTripUuid?: string; accountingIncluded?: boolean}
+export interface SampleRecord extends Omit<SampleInput, 'recording'> {powertrain?: import('../../contracts/src/truck-powertrain').TruckPowertrain; id: string; tripUuid: string | null; pluginSessionId?: string; rawTripUuid?: string; accountingIncluded?: boolean}
 /**
  * `uniqueSeconds` (ET-015b, H6): keep at most one row per plugin session, source clock and source second, where the
  * source second is floor(monotonicNs / 1e9). Inside the transaction, each row is compared with the session's latest

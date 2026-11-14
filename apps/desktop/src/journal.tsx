@@ -15,7 +15,7 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from '@/c
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '@/components/ui/table';
 import {Tabs, TabsContent, TabsList, TabsTrigger} from '@/components/ui/tabs';
 import {
-  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalExportText, journalIntervalText, journalListText, journalSampleText, type JournalTextOptions
+  journalBannerText, journalDetailText, journalEnergyPowertrain, journalErrorText, journalEventText, journalExportText, journalIntervalText, journalListText, journalSampleText, type JournalTextOptions
 } from './journal-view';
 import {getJobMarketText, JOURNAL_COMPLETENESS_TEXT, JOURNAL_EXPORT_STRINGS, JOURNAL_GAME_MODE_TEXT, JOURNAL_GAME_TEXT, JOURNAL_LABEL_TEXT, JOURNAL_OUTCOME_TEXT, JOURNAL_STRINGS} from './strings';
 import {copyTable} from './screens/app-copy';
@@ -342,7 +342,7 @@ function TripDetail({trip, site, options, onDatabase, onBack, onDeleted}: {trip:
               <TabsTrigger value="intervals" data-testid="journal-detail-tab-intervals">{t('tr.tab.completeness', undefined, language)}</TabsTrigger>
             </TabsList>
             <TabsContent value="summary"><div data-testid="journal-summary"><Samples trip={trip} options={options} onDatabase={onDatabase} /></div></TabsContent>
-            <TabsContent value="timeline"><Timeline trip={trip} options={options} onDatabase={onDatabase} intervals={detail.intervals} /></TabsContent>
+            <TabsContent value="timeline"><Timeline trip={trip} options={{...options, energyPowertrain: journalEnergyPowertrain(detail)}} onDatabase={onDatabase} intervals={detail.intervals} /></TabsContent>
             <TabsContent value="intervals"><div className="yu-trip-panel"><TripCompleteness text={journalCompletenessText(detail, language)} language={language} /><Intervals trip={trip} options={options} onDatabase={onDatabase} /></div></TabsContent>
           </Tabs>
         </section>

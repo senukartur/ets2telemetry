@@ -434,7 +434,7 @@ export function copyTable<T>(table: T, language: AppLanguage): T {
 export function localizedMeasurement(text: string, language: AppLanguage): string {
   if (language === 'en') return text;
   const localized = /^(in |late by )/.test(text) ? localizeDeadlineString(text, language) : text;
-  return localized.replace(/ (km\/h|mph|L\/100 km|US mpg|US gal|km|mi|L|rpm|t|lb)$/, (_match, unit: string) => ` ${translateUnit(unit === 'US gal' ? 'gal' : unit === 'US mpg' ? 'mpg' : unit, language)}`)
+  return localized.replace(/ (km\/h|mph|kWh\/100 km|kWh|L\/100 km|US mpg|US gal|km|mi|L|rpm|t|lb)$/, (_match, unit: string) => ` ${translateUnit(unit === 'US gal' ? 'gal' : unit === 'US mpg' ? 'mpg' : unit, language)}`)
     .replace(/\(currency unknown\)$/, '(валюта неизвестна)').replace(/\(SDK-documented\)$/, '(подтверждено SDK)')
     .replace(/^Day (\d+),/, 'День $1,');
 }

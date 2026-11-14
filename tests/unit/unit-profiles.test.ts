@@ -62,7 +62,7 @@ it('repeats no conversion constant in the desktop display projections', () => {
 it('selects the displayed game profile for the dashboard, with ATS defaulting to US customary', () => {
   const reading = (selection: LiveTelemetry['selection'], origin: 'game' | 'synthetic', game: 'ets2' | 'ats'): LiveTelemetry => ({
     ...initialLive(selection), status: 'connected', fresh: true,
-    observation: {source: {origin, game}, state: {speed: {available: true, value: 25, unit: 'm/s'}, fuel: {available: true, value: 73, unit: 'L'}}} as NonNullable<LiveTelemetry['observation']>});
+    observation: {source: {origin, game}, state: {speed: {available: true, value: 25, unit: 'm/s'}, fuel: {available: true, value: 73, unit: 'L'}, configuration: {truckId: {available: true, value: 'vehicle.fixture.diesel'}}}} as NonNullable<LiveTelemetry['observation']>});
   expect(displayProfile(reading('ats', 'game', 'ats'))).toBe('us-customary');
   expect(displayProfile(reading('synthetic', 'synthetic', 'ats'))).toBe('us-customary');
   expect(displayProfile(reading('ets2', 'game', 'ets2'))).toBe('metric');

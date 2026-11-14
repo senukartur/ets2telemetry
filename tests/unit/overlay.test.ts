@@ -275,14 +275,15 @@ it.each([
   current.selection = game; current.observation!.source.game = game;
   state.speed = {available: true, value: 25, unit: 'm/s'}; state.fuel = {available: true, value: 73, unit: 'L'};
   const before = structuredClone(current);
-  expect(overlayPresentation(current, units)).toMatchObject({source: game.toUpperCase(), speed, speedUnit, fuel, fuelUnit, freshness: 'current'});
+  const prior = overlayPresentation(current, units);
+  expect(prior).toMatchObject({source: game.toUpperCase(), speed, speedUnit, fuel, fuelUnit, freshness: 'current'});
   expect(current).toStrictEqual(before);
   current.fresh = false; current.status = 'stale';
-  expect(overlayPresentation(current, units)).toMatchObject({speed: '—', fuel: '—', speedUnit, fuelUnit, freshness: 'stale'});
+  expect(overlayPresentation(current, units, undefined, prior)).toMatchObject({speed: '—', fuel: '—', speedUnit, fuelUnit, freshness: 'stale'});
 });
 it('keeps metric without a game and the fixture game profile for synthetic sources', () => {
   const units = {ets2: 'us-customary', ats: 'us-customary'} as const;
-  expect(overlayPresentation(initialLive('game'), units)).toMatchObject({source: 'No game', speedUnit: 'km/h', fuelUnit: 'L'});
+  expect(overlayPresentation(initialLive('game'), units)).toMatchObject({source: 'No game', speedUnit: 'km/h', fuelUnit: null});
   const current = live(); current.selection = 'synthetic'; current.observation!.source.origin = 'synthetic';
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
   expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal'});

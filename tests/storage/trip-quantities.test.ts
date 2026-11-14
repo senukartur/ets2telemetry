@@ -312,7 +312,13 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     ['engine 0', 0, [s(0), s(1), s(2), s(3)], false, {distance: 'unknown', fuel: 'unknown'}]
   ] as const)('reports accounting-unavailable to the upload only for a partial or unavailable quantity: %s', async (_name, accountingEngine, readings, incomplete, accounting) => {
     gameOrigin = true;
-    const storage = await ws.open({accountingEngine, purpose: 'history'}), {members} = record(storage, readings);
+    // Dashboard accepts liters only when the recorded model establishes diesel. Keep the corpus's truck changes.
+    const dieselReadings = readings.map(reading => ({...reading, truck: JSON.stringify([
+      {state: 'value', value: 'fixture-brand'},
+      {state: 'value', value: 'vehicle.fixture.diesel'},
+      {state: 'value', value: reading.truck}
+    ])}));
+    const storage = await ws.open({accountingEngine, purpose: 'history'}), {members} = record(storage, dieselReadings);
     deliver(storage, members[0]);
     const found = upload(storage, members[0].uuid);
     expect(found.moneyIncomplete).toBe(incomplete);

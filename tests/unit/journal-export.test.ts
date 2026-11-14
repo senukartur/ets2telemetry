@@ -173,9 +173,16 @@ describe('format version 6 (J15, REG-014)', () => {
   it('writes the open anchor exactly as the hand-written document, in key order, one row per line', () => {
     const text = serialize(detail, {intervals: [[INTERVAL]], events: [[EVENT], [EVENT_4]], samples: [[SAMPLE]]});
     const document = JSON.parse(text) as Record<string, unknown>;
-    expect(document).toEqual(EXPECTED_V6);
-    expect(Object.keys(document)).toEqual(Object.keys(EXPECTED_V6));
-    expect(Object.keys(document.trip as object)).toEqual(Object.keys(EXPECTED_V6.trip));
+    const {fuelUsedL, ...v6Trip} = tripHead;
+    void fuelUsedL;
+    const expected = {...EXPECTED_V6, formatVersion: 7, units: {...EXPECTED.units,
+      fuel: 'sample powertrain: diesel L, electric kWh, unknown unit unavailable',
+      averageConsumption: 'sample powertrain: diesel L/100 km, electric kWh/100 km, unknown unit unavailable (SDK mean)'},
+      trip: {...v6Trip, powertrain: 'diesel', energyUsed: {...NO, unit: 'L'}, accounting: null, openedBy, openedEventSeq, outcomeEventSeq, closedBy},
+      samples: expectedSamples.map(sample => ({...sample, powertrain: 'unknown'}))};
+    expect(document).toEqual(expected);
+    expect(Object.keys(document)).toEqual(Object.keys(expected));
+    expect(Object.keys(document.trip as object)).toEqual(Object.keys(expected.trip));
     expect(tripExportProblems(document)).toEqual([]);
     // Fixed sections, then each row of each section on its own line, then the closing lines.
     const lines = text.split('\n');

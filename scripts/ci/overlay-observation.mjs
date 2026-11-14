@@ -20,10 +20,11 @@ export function overlayObservation(expected) {
   // speed and fuel keep their number and unit in separate elements whatever the layout.
   const root = read('overlay-root'), speed = read('overlay-speed'), fuel = read('overlay-fuel');
   const speedUnit = read('overlay-speed-unit'), fuelUnit = read('overlay-fuel-unit');
-  if (!root || !speed || !fuel || !speedUnit || !fuelUnit) return false;
+  if (!root || !speed || !fuel || !speedUnit) return false;
+  if (expected.fuelUnit === null ? globalThis.document.querySelectorAll('[data-testid="overlay-fuel-unit"]').length !== 0 : !fuelUnit) return false;
   const observation = {source: root.getAttribute('data-source'), origin: root.getAttribute('data-origin'), status: root.getAttribute('data-status'),
-    freshness: root.getAttribute('data-freshness'), speed: speed.innerText, fuel: fuel.innerText, speedUnit: speedUnit.innerText, fuelUnit: fuelUnit.innerText};
-  if (Object.values(observation).some(value => typeof value !== 'string')) return false;
+    freshness: root.getAttribute('data-freshness'), speed: speed.innerText, fuel: fuel.innerText, speedUnit: speedUnit.innerText, fuelUnit: fuelUnit?.innerText ?? null};
+  if (Object.entries(observation).some(([key, value]) => typeof value !== 'string' && !(key === 'fuelUnit' && value === null))) return false;
   return Object.entries(expected).every(([key, value]) => key === 'statuses' ? value.includes(observation.status) : observation[key] === value) ? observation : false;
 }
 
@@ -488,7 +489,7 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
     windows: await windowSecurity(application)}), source, result.dashboardStallProof);
   await dashboardReading('72', '71.0'); await observe('dashboard-credit-recovery', {speed: '72', fuel: '71'});
   assert.equal(source.statistics().connections, 1); result.dashboardCreditIndependent = true; result.dashboardStallMilliseconds = 6000;
-  await source.stop(); await observe('disconnected', {statuses: ['disconnected', 'waiting'], freshness: 'unavailable', speed: '—', fuel: '—'});
+  await source.stop(); await observe('disconnected', {statuses: ['disconnected', 'waiting'], freshness: 'unavailable', speed: '—', fuel: '—', fuelUnit: null});
   result.disconnectUnavailable = true; result.sourceAfter = source.statistics();
   assert.equal(result.sourceAfter.connections, 1); assert.equal(result.sourceAfter.activeClients, 0); assert.equal(result.sourceAfter.stopped, true);
   assert.deepEqual(result.sourceBefore.identity, result.sourceAfter.identity);

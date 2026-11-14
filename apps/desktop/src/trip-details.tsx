@@ -72,7 +72,7 @@ export function TripKpis({tiles, outcome, language}: {tiles: Tiles; outcome: Jou
     <Kpi testId="trip.tile.distance" label={tiles.distanceTile.label} value={tiles.distanceTile.value} notes={tiles.distanceTile.notes} />
     <Kpi testId="trip.tile.money" label={text(outcome === 'cancelled' ? 'tr.penalty' : 'tr.revenue')} value={tiles.money.value} notes={[tiles.money.note, text('tr.expected', {v: tiles.expected})]} />
     <Kpi testId="trip.tile.time" label={text('tr.recordedTime')} value={tiles.recorded.value} notes={[tiles.recorded.note, tiles.gameTime]} />
-    <Kpi testId="trip.tile.fuel" label={text('tr.fuel')} value={tiles.fuel.value} notes={[tiles.fuel.note, text('tr.fuelNote'), tiles.fuelPartial]} />
+    <Kpi testId="trip.tile.fuel" label={tiles.fuel.label} value={tiles.fuel.value} notes={[tiles.fuel.note, tiles.fuel.basis, tiles.fuelPartial]} />
   </section>;
 }
 

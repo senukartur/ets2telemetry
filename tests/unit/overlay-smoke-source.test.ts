@@ -100,6 +100,16 @@ describe('coherent hidden-renderer observations', () => {
     expect(runInNewContext(`(${overlayObservation.toString()})(expected)`, {expected: current, document: fakeDocument(current), innerWidth: 1280, innerHeight: 38,
       getComputedStyle: () => ({visibility: 'visible'})})).toEqual(current);
   });
+  it('accepts a disconnected overlay without a unit and rejects a stale fuel unit in that state', async () => {
+    const {overlayObservation} = await import(observationModule);
+    const disconnected = {...current, status: 'disconnected', freshness: 'unavailable', speed: '—', fuel: '—'};
+    const expected = {...disconnected, fuelUnit: null};
+    const read = (document: ReturnType<typeof fakeDocument>) => runInNewContext(`(${overlayObservation.toString()})(expected)`, {
+      expected, document, innerWidth: 1280, innerHeight: 38, getComputedStyle: () => ({visibility: 'visible'})
+    });
+    expect(read(fakeDocument(disconnected, 'missing', 'overlay-fuel-unit'))).toEqual(expected);
+    expect(read(fakeDocument(disconnected))).toBe(false);
+  });
   it.each(['missing','duplicate','hidden','zero-box','below'])('rejects %s DOM fields', async alteration => {expect(await observe(current, alteration)).toBe(false);});
   it.each(['overlay-root', 'overlay-speed', 'overlay-speed-unit', 'overlay-fuel', 'overlay-fuel-unit'])('requires exactly one visible %s', async id => {
     for (const alteration of ['missing', 'duplicate', 'hidden', 'zero-box']) expect(await observe(current, alteration, id), alteration).toBe(false);
@@ -741,7 +751,7 @@ function validReceipt() {
         if (['missing','silent-open-stale','disconnected'].includes(phase)) {row.speed = row.fuel = '—';}
         if (phase === 'zero') {row.speed = '0'; row.fuel = '0';}
         if (phase === 'silent-open-stale') {row.status = row.freshness = 'stale';}
-        if (phase === 'disconnected') {row.status = 'disconnected'; row.freshness = 'unavailable';}
+        if (phase === 'disconnected') return {...row, status: 'disconnected', freshness: 'unavailable', fuelUnit: null};
         return row;
       })}};
 }

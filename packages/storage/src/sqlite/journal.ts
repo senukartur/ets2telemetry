@@ -20,6 +20,7 @@ import {readHardModeDetails} from './hard-mode';
 import type {StorageConnection} from './connection';
 import {statement} from './writes';
 import {journalSync} from './journal-sync';
+import {tripEnergyPowertrain} from './truck-energy';
 
 const MAX_ROW_ID = 9_223_372_036_854_775_807n;
 const MONEY_TYPES: Readonly<Record<string, JournalMoneyCategory>> = {'player.fined': 'fine', 'player.tollgate.paid': 'toll', 'player.use.ferry': 'ferry', 'player.use.train': 'train'};
@@ -373,6 +374,7 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
       outcomeEventSeq: outcome === null ? null : fromU64Key(outcome.event_seq), closedBy},
     job: {source: job.source as 'event' | 'checkpoint', eventSeq: job.source === 'event' ? fromU64Key(event(job.event_ref).event_seq) : null,
       checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null, values: jobValues(job)},
+    energyPowertrain: tripEnergyPowertrain(db, trip.game as 'ets2' | 'ats', trip.truck_configuration_ref, snap?.head ?? null, id, trip.opened_event_ref, snap?.events),
     truck: truck === null ? null : {eventSeq: fromU64Key(truck.event_seq), values: valuesOf<TruckConfiguration>(payloadOf(truck).record)},
     trailers: {items: trailerRows.reverse()
       .map(r => ({...(qualifiedTrailers?{pluginSessionId:String(r.plugin_session_uuid),rawTripUuid:String(r.trip_uuid)}:{}),eventSeq: fromU64Key(r.event_seq), values: valuesOf<TrailerConfiguration>(payloadOf(r).record)})),

@@ -195,6 +195,7 @@ export type JournalCallResult<T> =
  * label only. Not observed, not supported and invalid readings stay distinct from zero.
  */
 export interface JournalSample {
+  powertrain?: import('./truck-powertrain').TruckPowertrain;
   pluginSessionId?: string; rawTripUuid?: string; accountingIncluded?: boolean;
   id: string; tripUuid: string | null; utcMs: number; sourceClockId: string; monotonicNs: Uint64;
   gameTime: {minutes: Available<number>; clockId: string} | null;
@@ -242,7 +243,7 @@ export interface OverlayPresentation {
   speed: string;
   speedUnit: 'km/h' | 'mph';
   fuel: string;
-  fuelUnit: 'L' | 'US gal';
+  fuelUnit: 'L' | 'US gal' | 'kWh' | null;
   freshness: 'current' | 'stale' | 'unavailable';
   /** The saved layout; the renderer arranges the sections with it. */
   layout: OverlayLayout;
@@ -266,6 +267,7 @@ export interface OverlayBridge {
 export * from './protocol-v0';
 export * from './app-state';
 export type {LiveObservationV1, LiveStateV1} from './protocol-v1';
+export * from './truck-powertrain';
 export * from './journal';
 export * from './journal-export';
 export * from './uninstall';

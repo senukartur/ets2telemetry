@@ -20,7 +20,7 @@
   ],
   "intervals": [
     {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "truck-change", "annotation": true, "atEventSeq": "4"}},
-    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "refuel", "annotation": true, "addedLiters": 500, "atMonotonicNs": "1000400000000"}}
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "refuel", "annotation": true, "addedLiters": 500, "powertrain": "diesel", "atMonotonicNs": "1000400000000"}}
   ],
   "coverage": {"committedThroughEventSeq": "6", "committed": 6, "duplicate": 0, "covered": 0}
 }

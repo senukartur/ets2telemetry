@@ -7,6 +7,7 @@ import {isHardModeDetails, type HardModeDetails} from './hard-mode';
 import {isDashboardOwner, type DashboardOwner} from './dashboard-upload';
 import {validateServerMessage, type Available, type Currency, type EventOccurrence, type EventRecord, type GameMode, type JobConfiguration, type Money,
   type TrailerConfiguration, type TruckConfiguration, type UnavailableReason, type Uint64} from './protocol-v1';
+import {isTruckPowertrain, type TruckPowertrain} from './truck-powertrain';
 
 /** Trips per `journalTrips` page, newest first. The page size is fixed; the caller cannot choose it. */
 export const JOURNAL_TRIP_PAGE = 50;
@@ -190,6 +191,8 @@ export interface JournalTripDetail {
   /** The job values in canonical units: from its `job.configured` event, or from a checkpoint (`checkpointNextEventSeq`). */
   job: {source: 'event' | 'checkpoint'; eventSeq: Uint64 | null; checkpointNextEventSeq: Uint64 | null; values: JobConfiguration};
   truck: {eventSeq: Uint64; values: TruckConfiguration} | null;
+  /** Powertrain of the recorded trip total, unknown when the data cannot establish one unit. */
+  energyPowertrain?: TruckPowertrain;
   /**
    * The latest JOURNAL_DETAIL_TRAILERS trailer configurations of the trip in commit order, and how many the trip holds.
    * A trip that was given more (a trailer re-sent or changed while it was open) shows only the latest ones here.
@@ -504,7 +507,9 @@ export function validateJournalIntervalPage(value: unknown, limit = Math.max(...
 }
 /** Validates a `journalTrip` answer exactly; throws JournalContractError otherwise. */
 export function validateJournalTripDetail(value: unknown): JournalTripDetail {
-  const o = exact(value, ['database', 'trip', 'job', 'truck', 'trailers', 'outcomeDetails', 'money', 'window', 'intervals', 'samples', 'exportBounds']);
+  const o = exact(value, ['database', 'trip', 'job', 'truck', 'trailers', 'outcomeDetails', 'money', 'window', 'intervals', 'samples', 'exportBounds',
+    ...(isRecord(value) && Object.hasOwn(value, 'energyPowertrain') ? ['energyPowertrain'] : [])]);
+  if (Object.hasOwn(o, 'energyPowertrain') && !isTruckPowertrain(o.energyPowertrain)) bad();
   database(o.database);
   const trip = exact(o.trip, [...listKeys(o.trip), 'pluginSessionId', 'openedBy', 'openedEventSeq', 'outcomeEventSeq', 'closedBy']);
   listItem(trip); uuid(trip.pluginSessionId); oneOf(trip.openedBy, ['event', 'checkpoint']); nullable(trip.openedEventSeq, eventSeq); nullable(trip.outcomeEventSeq, eventSeq);

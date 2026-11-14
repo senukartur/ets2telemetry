@@ -10,16 +10,18 @@ export const CONSUMPTION_HOLD_NS = 10_000_000_000n;
 
 /** Applies the hold to the v0 observation of each live update, in arrival order. One instance per live stream. */
 export class ConsumptionHold {
-  private last?: {sessionId: string; clockId: string; value: number; atNs: bigint};
+  private last?: {sessionId: string; clockId: string; modelId: string | null; value: number; atNs: bigint};
 
   apply(live: LiveTelemetry): LiveTelemetry {
     const observation = live.observation;
     if (!observation) return live;
     const reading = observation.state.averageConsumption, atNs = BigInt(observation.capture.monotonicNs);
-    const last = this.last?.sessionId === observation.source.pluginSessionId && this.last.clockId === observation.capture.clockId ? this.last : undefined;
+    const truckId = observation.state.configuration.truckId;
+    const modelId = truckId.available ? truckId.value : null;
+    const last = this.last?.sessionId === observation.source.pluginSessionId && this.last.clockId === observation.capture.clockId && this.last.modelId === modelId ? this.last : undefined;
     // An unavailable reading ends the hold: only a zero right after a non-zero value is bridged.
     if (!reading.available) {this.last = undefined; return live;}
-    if (reading.value !== 0) {this.last = {sessionId: observation.source.pluginSessionId, clockId: observation.capture.clockId, value: reading.value, atNs}; return live;}
+    if (reading.value !== 0) {this.last = {sessionId: observation.source.pluginSessionId, clockId: observation.capture.clockId, modelId, value: reading.value, atNs}; return live;}
     this.last = last;
     if (!last || atNs < last.atNs || atNs - last.atNs > CONSUMPTION_HOLD_NS) return live;
     return {...live, observation: {...observation, state: {...observation.state, averageConsumption: {...reading, value: last.value}}}};

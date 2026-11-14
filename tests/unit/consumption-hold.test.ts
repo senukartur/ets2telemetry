@@ -8,12 +8,12 @@ const SESSION = '11111111-1111-4111-8111-111111111111', OTHER_SESSION = '2222222
 const CLOCK = '33333333-3333-4333-8333-333333333333', OTHER_CLOCK = '44444444-4444-4444-8444-444444444444';
 type Consumption = LiveTelemetry['observation'] extends infer O ? O extends {state: {averageConsumption: infer C}} ? C : never : never;
 /** One live update at `ms` of capture time with the given SDK mean in L/100 km, or unavailable. */
-function update(ms: number, value: number | 'unavailable', sessionId = SESSION, clockId = CLOCK): LiveTelemetry {
+function update(ms: number, value: number | 'unavailable', sessionId = SESSION, clockId = CLOCK, modelId: string | null = 'vehicle.daf.2021'): LiveTelemetry {
   const base = initialLive('synthetic');
   const averageConsumption: Consumption = value === 'unavailable' ? {available: false, reason: 'not-observed', unit: 'L/100km'} : {available: true, value, unit: 'L/100km'};
   return {...base, status: 'connected', fresh: true, observation: {
     source: {game: 'ets2', pluginSessionId: sessionId, processInstanceId: SESSION, processId: 1, windowsSessionId: 1, origin: 'synthetic'},
-    state: {averageConsumption} as NonNullable<LiveTelemetry['observation']>['state'],
+    state: {averageConsumption, configuration: {truckId: modelId === null ? {available: false, reason: 'not-observed'} : {available: true, value: modelId}}} as NonNullable<LiveTelemetry['observation']>['state'],
     seq: String(ms), capture: {clockId, monotonicNs: (BigInt(ms) * 1_000_000n).toString()},
     receivedMonotonicMs: ms, windowReceivedMonotonicMs: ms, windowFresh: false, applied: {} as NonNullable<LiveTelemetry['observation']>['applied']
   }};
@@ -45,6 +45,13 @@ describe('SDK average consumption hold', () => {
     expect(shown(new ConsumptionHold(), [update(0, 40), update(100, 0, SESSION, OTHER_CLOCK)])).toEqual([40, 0]);
     // A capture that goes backwards is not bridged either.
     expect(shown(new ConsumptionHold(), [update(1000, 40), update(500, 0)])).toEqual([40, 0]);
+  });
+  it('does not reuse a diesel mean on an electric truck or after an unavailable model ID', () => {
+    expect(shown(new ConsumptionHold(), [
+      update(0, 40), update(100, 0, SESSION, CLOCK, 'vehicle.daf.xf_electric'),
+      update(200, 99, SESSION, CLOCK, 'vehicle.daf.xf_electric'), update(300, 0, SESSION, CLOCK, null),
+      update(400, 0, SESSION, CLOCK, 'vehicle.daf.xf_electric')
+    ])).toEqual([40, 0, 99, 0, 0]);
   });
   it('holds through a negative zero and leaves the input update unchanged', () => {
     const hold = new ConsumptionHold(); hold.apply(update(0, 40));
