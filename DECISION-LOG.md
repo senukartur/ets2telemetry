@@ -901,4 +901,4 @@ On [ET-113](https://trello.com/c/45Hq80nV) the owner decided: the distance and f
 
 ## ET-112k junction waits for the profile proof — November 14, 2026
 
-On [ET-112](https://trello.com/c/bgIyf8U2) the owner approved fixing the partial recording caused by a reload's profile proof arriving after its first reading: proofs are never backdated; instead the engine-1 junction at the latest recorded endpoint waits, at most 10 s, while the truck stays stationary there and the readings stay linked, and the first reading with the proof decides. A reload of an older save without a proof stays partial. See [logical completeness](docs/trips.md#trip-lifecycle-and-completeness).
+On [ET-112](https://trello.com/c/bgIyf8U2) the owner approved fixing the partial recording caused by a reload's profile proof arriving after its first reading: proofs are never backdated; instead the engine-1 junction waits, at most 10 s, while the truck stays stationary at the same save point and the readings stay linked, and the first reading with the proof decides. See [logical completeness](docs/trips.md#trip-lifecycle-and-completeness).
