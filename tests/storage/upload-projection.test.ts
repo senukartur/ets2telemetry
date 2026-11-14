@@ -619,7 +619,7 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     expect(result.snapshot.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
     await client.close();expect(readOnly(ws.database,db=>db.prepare('SELECT count(*) FROM trailer_baselines').pluck().get())).toBe(1);
   });
-  it.each(['none','startup-gap','startup-loss','missing-row','unknown-simulation','late-trailer','replaced-trailer','stale-after-gap','stale-after-loss'] as const)(
+  it.each(['none','startup-gap','startup-gaps','startup-loss','missing-row','unknown-simulation','late-trailer','replaced-trailer','stale-after-gap','stale-after-loss'] as const)(
     'classifies trailer evidence at the start of a menu job (%s)',async scenario=>{
     const client=await start(),s=new Script(ETS2_A);
     ok(await client.upsertSession({message:gameShaped(s.welcome())}));
@@ -629,6 +629,10 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     ok(await client.recordTrailerBaseline({message:baseline}));
     if(scenario==='startup-gap'||scenario==='stale-after-gap')
       ok(await client.commitGap({message:gameShaped(s.gap(2,'noDurableConsumer'))}));
+    if(scenario==='startup-gaps'){
+      ok(await client.commitGap({message:gameShaped(s.gap(1,'noDurableConsumer'))}));
+      ok(await client.commitGap({message:gameShaped(s.gap(1,'noDurableConsumer'))}));
+    }
     if(scenario==='missing-row')s.next++;
     const beforeJob=gameShaped(s.event(r.truckConfigured(),{simulation:'paused'}));
     ok(await client.commitEvent({message:beforeJob}));
@@ -769,7 +773,8 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
       expect(saved.ruleReplay.phase).toBe('done');expect(saved.ruleReplay.items).toHaveLength(1);
       for(const sql of ["SELECT * FROM trailer_baselines WHERE plugin_session_ref=1 AND next_event_seq<='00000000000000000007' AND (next_event_seq,id)<('00000000000000000007',9223372036854775807) ORDER BY next_event_seq DESC,id DESC LIMIT 1",
         "SELECT id FROM events WHERE plugin_session_id=1 AND event_seq>'00000000000000000007' AND event_seq<='00000000000000000230' ORDER BY event_seq LIMIT 1",
-        "SELECT id FROM event_gaps WHERE plugin_session_ref=1 AND first_event_seq<='00000000000000000230' AND (first_event_seq,id)>('00000000000000000000',0) ORDER BY first_event_seq,id LIMIT 1"]){
+        "SELECT id FROM event_gaps WHERE plugin_session_ref=1 AND first_event_seq<='00000000000000000230' AND (first_event_seq,id)>('00000000000000000000',0) ORDER BY first_event_seq,id LIMIT 1",
+        "SELECT id,last_event_seq FROM event_gaps WHERE plugin_session_ref=1 AND first_event_seq<='00000000000000000007' ORDER BY first_event_seq DESC,id DESC LIMIT 1"]){
         const details=(db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as {detail:string}[]).map(row=>row.detail).join(' ');
         expect(details).toMatch(/SEARCH .*INDEX/);expect(details).not.toMatch(/SCAN |TEMP B-TREE/);
       }

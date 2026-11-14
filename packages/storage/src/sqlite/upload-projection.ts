@@ -137,9 +137,10 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
     const next=u64Key(state.next);
     if(next<String(e.event_seq)&&String(e.event_seq)<=u64Key(state.opening)){
       // Only documented pre-opening loss can be skipped. A missing row alone is incomplete evidence.
-      const gap=get(db,`SELECT last_event_seq FROM event_gaps WHERE plugin_session_ref=? AND first_event_seq<=?
-        AND last_event_seq>=? AND id<=? ORDER BY last_event_seq DESC LIMIT 1`,session,next,next,snap.gaps);
-      if(gap){
+      // A durably stored gap must extend coverage. Check the nearest start and fail closed if it does not cover the hole.
+      const gap=get(db,`SELECT id,last_event_seq FROM event_gaps WHERE plugin_session_ref=? AND first_event_seq<=?
+        ORDER BY first_event_seq DESC,id DESC LIMIT 1`,session,next);
+      if(gap&&(gap.id as bigint)<=snap.gaps&&String(gap.last_event_seq)>=next){
         const afterGap=BigInt(fromU64Key(gap.last_event_seq))+1n;
         state.next=afterGap<BigInt(sequence)?String(afterGap):sequence;
         state.items=[];
