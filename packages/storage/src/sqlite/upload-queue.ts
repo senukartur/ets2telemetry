@@ -17,12 +17,13 @@ function hold(db:ReturnType<StorageConnection['writer']>,work:Row,reason:UploadW
   if(status==='held')db.prepare('UPDATE upload_source_bindings SET held=1,hold_reason=? WHERE root_ref=?').run(reason,work.root_ref);
   return workStatus({...work,state:status,hold_reason:reason,examined:0});
 }
-/** A changed source-loss highwater can invalidate an unfrozen pin without a recorder revision (closed session loss).
- * Refresh only the existing root/revision's material key; the next work gets a new version and pin, with no source mutation. */
-function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row):UploadWork {
+/** Refresh the existing root when a pending upload needs a new pin without a recorder revision. */
+function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row,obsoleteReplay=false):UploadWork {
   const head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref);
   const member=get(db,'SELECT logical_ref FROM logical_memberships WHERE trip_ref=?',work.root_ref);
   if(head&&head.material_version===work.material_version&&head.dirty===0n&&member?.logical_ref===work.root_ref){
+    // A replay upgrade alone only replaces this unfinished upload, not other roots' material keys.
+    if(obsoleteReplay)db.prepare('UPDATE upload_change_heads SET dirty=1 WHERE root_ref=?').run(work.root_ref);
     discoverRevision(db,work.root_ref as bigint,head.revision_ref);
   }
   return hold(db,work,'material-changed','stale');
@@ -80,7 +81,9 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     const work=required(get(db,'SELECT * FROM upload_materializations WHERE work_id=?',input.workId));if(work.state!=='complete')return workStatus(work);
     const pin=JSON.parse(String(work.pin_json)) as UploadProjection,head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref),bound=resolveBinding(db,work.root_ref);
     if(!bound||bound.registration_ref!==work.registration_ref||bound.held===1n)return hold(db,work,'reconciliation-required');
-    if(!head||head.material_version!==work.material_version||head.dirty!==0n||!recheckUploadMaterialContext(db,pin))return staleMaterial(db,work);
+    if(!head||head.material_version!==work.material_version||head.dirty!==0n)return staleMaterial(db,work);
+    const context=recheckUploadMaterialContext(db,pin);
+    if(context!=='current')return staleMaterial(db,work,context==='obsolete-replay');
     const registration=get(db,'SELECT * FROM upload_registrations WHERE registration_id=?',work.registration_ref),installation=get(db,'SELECT client_uuid FROM upload_installation WHERE id=1');
     if(!registration||!installation||registration.client_uuid!==installation.client_uuid||!get(db,'SELECT 1 FROM upload_candidates WHERE trip_ref=?',work.root_ref))return hold(db,work,'reconciliation-required');
     const owner=get(db,'SELECT r.* FROM upload_reservations r JOIN upload_candidates c ON c.ordinal=r.candidate_ref WHERE c.trip_ref=?',work.root_ref);

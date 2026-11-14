@@ -300,24 +300,26 @@ function readPinned(db: Database.Database, token: string): LogicalRow {
 }
 /** Storage-local point checks for a future atomic owner/freeze transaction. Detached true grants no publication authority. */
 export function recheckUploadProjection(db: Database.Database, projection: UploadProjection): boolean {
-  return recheckContext(db,projection,true);
+  return recheckContext(db,projection,true)==='current';
 }
 /** Material work versions independently gate changes; ordinary counter progress may advance the latest revision. */
-export function recheckUploadMaterialContext(db:Database.Database,projection:UploadProjection):boolean {
+export function recheckUploadMaterialContext(db:Database.Database,projection:UploadProjection):'current'|'stale'|'obsolete-replay' {
   return recheckContext(db,projection,false);
 }
-function recheckContext(db:Database.Database,projection:UploadProjection,latestRequired:boolean):boolean {
+function recheckContext(db:Database.Database,projection:UploadProjection,latestRequired:boolean):'current'|'stale'|'obsolete-replay' {
   if(!isUploadProjection(projection))fail('INVALID_INPUT');
   const p=uploadSnapshotParts(projection.snapshot)!;
-  if(required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid!==p[1])return false;
+  if(required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid!==p[1])return 'stale';
   const pin=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',p[2]);
-  if(!pin || pin.incarnation_uuid!==p[3] || pin.state!=='ready' || pin.metadata_json!==JSON.stringify(projection))return false;
+  if(!pin || pin.incarnation_uuid!==p[3] || pin.state!=='ready' || pin.metadata_json!==JSON.stringify(projection))return 'stale';
   const state=current(db,projection.requestedTripUuid);
   const saved=decodeRow(pin.snapshot_json);
+  if(saved.ruleReplayVersion!==RULE_REPLAY_VERSION)return 'obsolete-replay';
   const latest=get(db,'SELECT id FROM logical_revisions WHERE logical_ref=? ORDER BY id DESC LIMIT 1',pin.root_ref);
   return state.root===projection.rootTripUuid && state.readiness==='ready' && projection.rootReadiness==='ready'
-    && saved.ruleReplayVersion===RULE_REPLAY_VERSION && coverageUnchanged(db,saved.snap as LogicalSnapshot,saved,latestRequired)
-    && (!latestRequired||latest?.id===pin.revision_ref) && generation(db,pin.root_ref)===pin.evidence_generation;
+    && coverageUnchanged(db,saved.snap as LogicalSnapshot,saved,latestRequired)
+    && (!latestRequired||latest?.id===pin.revision_ref) && generation(db,pin.root_ref)===pin.evidence_generation
+    ?'current':'stale';
 }
 const copies={members:['upload_projection_members','trip_ref'],configurations:['upload_projection_configurations','event_ref'],intervals:['upload_projection_intervals','interval_ref']} as const;
 export function readUploadProjectionPage(conn: StorageConnection, query: UploadProjectionPageQuery): UploadProjectionPage {

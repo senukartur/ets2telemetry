@@ -1,5 +1,4 @@
 import {ruleLossBounds,ruleNativeBounds} from './trailer-baselines';
-import {RULE_REPLAY_VERSION} from '../upload-rule-context';
 import {validCoverage} from './logical-coverage';
 import {decisionState,identityPending} from './identity-pending';
 import type Database from 'better-sqlite3';
@@ -88,8 +87,8 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
   const coverage=validCoverage(row._coverage)?row._coverage:undefined,endpoint=coverage?.endpoint;
   const quality=[coverage?.start,coverage?.phase,coverage?.losses,coverage?.acceptancePending??false,endpoint?.distanceM.available,endpoint?(endpoint.distanceM.available?null:endpoint.distanceM.reason):null,endpoint?.fuelUsedL.available,endpoint?(endpoint.fuelUsedL.available?null:endpoint.fuelUsedL.reason):null];
   const ruleContext=Number(db.pragma('user_version',{simple:true}))>=7
-    ?JSON.stringify([RULE_REPLAY_VERSION,outcome==='open'?ruleNativeBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer)):null,ruleLossBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer))]):null;
-  // React to entering or leaving an explicitly electric model without distinguishing diesel from unknown.
+    ?JSON.stringify([outcome==='open'?ruleNativeBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer)):null,ruleLossBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer))]):null;
+  // Keep the old key for existing diesel and unknown roots. React to entering or leaving an explicitly electric model.
   const truck = row.truck_configuration_ref as {$integer: string} | null;
   const model = truck ? get(db,'SELECT model_id FROM truck_configurations WHERE id=?',BigInt(truck.$integer))?.model_id : undefined;
   const electric = truckPowertrain(row.game as 'ets2' | 'ats', typeof model === 'string' ? model : undefined) === 'electric';

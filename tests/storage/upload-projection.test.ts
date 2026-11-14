@@ -666,6 +666,43 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     expect(pin.totals.configurations).toBe(fault==='hidden-change'?16:0);expect(snapshot.trailers).toEqual({complete:false,items:[]});
     expect(snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:['trailer-context-changed']});await client.close();
   });
+  it.each([
+    ['fresh-single',[],true],['stale-single',['trailer-context-unproven'],false],
+    ['non-single',['trailer-context-unproven'],false],['multi-slot',['trailer-context-unproven'],false],
+    ['slot-one',['trailer-context-unproven'],false],
+    ['opening-overlap',['recording-intervals','trailer-context-unproven'],false],
+    ['overlapping-gap',['recording-intervals','trailer-context-unproven'],false],
+    ['unknown-bounds',['recording-intervals','trailer-context-unproven'],false],
+  ] as const)('classifies %s evidence after an early loss',async(scenario,reasons,proven)=>{
+    const client=await start(),s=new Script(ETS2_A);
+    ok(await client.upsertSession({message:gameShaped(s.welcome())}));
+    const baseline=checkpoint(s);
+    baseline.data.state.configuration.trailers.fill(absent);
+    ok(await client.recordTrailerBaseline({message:baseline}));
+    const configure=(index:number,chain='single')=>gameShaped(s.event(r.trailerConfigured(trailer(index,{
+      id:{available:true,value:index===0?'fixture-lead':'fixture-rear'},
+      chainType:{available:true,value:chain},
+    }))));
+    ok(await client.commitEvent({message:scenario==='slot-one'?gameShaped(s.event(r.truckConfigured())):configure(0)}));
+    if(scenario!=='stale-single'&&scenario!=='slot-one')
+      ok(await client.commitEvent({message:configure(0,scenario==='non-single'||scenario==='multi-slot'?'double':'single')}));
+    if(scenario==='multi-slot'||scenario==='slot-one')ok(await client.commitEvent({message:configure(1)}));
+    const first=s.next.toString();
+    if(scenario==='unknown-bounds')ok(await client.recordCompleteness(s.session,{kind:'restore-loss'}));
+    else if(scenario!=='overlapping-gap')ok(await client.recordCompleteness(s.session,{
+      kind:'restore-loss',firstEventSeq:'1',lastEventSeq:scenario==='opening-overlap'?first:'1',
+    }));
+    const root=await open(client,s);
+    if(scenario==='overlapping-gap')ok(await client.commitGap({message:gameShaped(s.gapRange(
+      BigInt(first)-1n,BigInt(first)+1n,{retentionExpired:'3'},
+    ))}));
+    if(scenario==='overlapping-gap')s.next++;
+    await close(client,s,root,'delivered');
+    const {snapshot}=await projected(client,root);
+    expect(snapshot.trailers.complete).toBe(proven);
+    expect(snapshot.evidence).toMatchObject({ruleContextComplete:proven,reasons});
+    await client.close();
+  });
   it.each(['event-loss','restore-loss','storage-unavailable','sample-loss'] as const)('classifies interval-only %s evidence, including unassigned session losses',async kind=>{
     const {client,s,root}=await setup();ok(await client.recordCompleteness(s.session,{kind,firstEventSeq:'8',lastEventSeq:'10'}));
     const {snapshot}=await projected(client,root);

@@ -10,6 +10,7 @@ import type {UploadWork} from '../../packages/storage/src/upload-sync';
 import {encodeUploadEnvelope,uploadDigest,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS} from '../../packages/storage/src/upload-sync';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
+import {discoverRevision} from '../../packages/storage/src/sqlite/upload-discovery';
 import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core/src';
 import {ETS2_A,ETS2_B,job,r,Script,trailer} from '../shared/trip-messages';
 import {failed,ok,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
@@ -19,17 +20,17 @@ beforeEach(async()=>{ws=await workspace();});afterEach(async()=>{await terminate
 const game=<T extends {source:{origin:string}}>(message:T):T=>({...message,source:{...message.source,origin:'game'}});
 const mode={mode:'unknown',method:'none',confidence:'none'} as const;
 const proof=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
-async function setup(client:Storage|StorageClient,baseline=false){
+async function setup(client:Storage|StorageClient,baseline:boolean|'menu'=false){
   const install=ok(await client.ensureUploadInstallation()),registrationId=randomUUID(),runId=randomUUID();
   ok(await client.recordUploadRegistration({registrationId,clientInstallationId:install.clientInstallationId!,origin:'https://dashboard.example',accountId:'A',companyId:'company',identityEpoch:'epoch',installationId:randomUUID(),bindingId:randomUUID()}));
   ok(await client.confirmUploadOwner({confirmationId:runId,registrationId,credentialGeneration:'generation',expectedVersion:'0'}));
   const s=new Script(ETS2_A),tripUuid=tripUuidFor(s.session,'1');ok(await client.upsertSession({message:game(s.welcome())}));
   if(baseline){
     const checkpoint=game(s.checkpoint(null));checkpoint.data.state.boundaryOrder='0';
-    checkpoint.data.state.configuration.trailers=Array.from({length:10},(_,index)=>index===0?{available:true,value:trailer(0,{bodyType:{available:true,value:'curtainsider'}})}:{available:false,reason:'not-observed'});
+    checkpoint.data.state.configuration.trailers=Array.from({length:10},(_,index)=>index===0&&baseline!=='menu'?{available:true,value:trailer(0,{bodyType:{available:true,value:'curtainsider'}})}:{available:false,reason:'not-observed'});
     ok(await client.recordTrailerBaseline({message:checkpoint}));
   }
-  ok(await client.commitEvent({message:game(s.event(r.jobConfigured())),profile:proof(s),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
+  ok(await client.commitEvent({message:game(s.event(r.jobConfigured(),{simulation:baseline==='menu'?'paused':'running'})),profile:proof(s),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
   return {s,tripUuid,registrationId,runId};
 }
 async function complete(client:Storage|StorageClient,input:{tripUuid:string;registrationId:string}){
@@ -449,22 +450,11 @@ it.each(['configured','cleared','gap','loss','prefix'] as const)('TEL-034 invali
 });
 
 
-it.each(['after-terminal','unknown','overlap','hidden-overlap','old-replay'] as const)('TEL-034 safely replaces a closed pending pin with %s evidence',async kind=>{
+it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-034 safely replaces a closed pending pin with %s evidence',async kind=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
   ok(storage.commitEvent({message:game(source.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
   const workId=await complete(storage,source),priorVersion=db.prepare('SELECT material_version FROM upload_change_heads').pluck().get();
-  if(kind==='old-replay'){
-    const saved=JSON.parse(String(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(workId)));
-    delete saved.ruleReplayVersion;
-    db.prepare('UPDATE upload_projection_pins SET snapshot_json=? WHERE pin_id=?').run(JSON.stringify(saved),workId);
-    // A previous build also computed the material key without the replay version.
-    const key=String(db.prepare('SELECT material_key FROM upload_change_heads').pluck().get());
-    const separator=key.indexOf(':');
-    const end=separator+1+Number(key.slice(0,separator));
-    const [, ...legacyRuleKey]=JSON.parse(key.slice(separator+1,end)) as unknown[];
-    const legacy=JSON.stringify(legacyRuleKey);
-    db.prepare('UPDATE upload_change_heads SET material_key=?').run(`${legacy.length}:${legacy}${key.slice(end)}`);
-  }else if(kind==='unknown')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss'}));
+  if(kind==='unknown')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss'}));
   else {
     if(kind==='overlap'||kind==='hidden-overlap')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss',firstEventSeq:'2',lastEventSeq:'2'}));
     if(kind==='after-terminal'||kind==='hidden-overlap')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss',firstEventSeq:'3',lastEventSeq:'3'}));
@@ -475,9 +465,64 @@ it.each(['after-terminal','unknown','overlap','hidden-overlap','old-replay'] as 
   expect(ok(storage.freezeUploadMaterialization({workId:replacement,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');
   const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1001}));
   expect(attempt.status).toBe('claimed');const summary=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
-  const completeContext=kind==='after-terminal'||kind==='old-replay';
+  const completeContext=kind==='after-terminal';
   expect(summary.evidence.ruleContextComplete).toBe(completeContext);
   expect(summary.evidence.reasons).toEqual(completeContext?[]:['recording-intervals','trailer-context-unproven']);
+});
+
+it.each(['preparing','ready','frozen'] as const)('TEL-034 upgrades a menu job with a legacy %s trailer proof',async state=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);
+  const source=await setup(storage,'menu'),db=conn.writer();
+  ok(storage.commitEvent({message:game(source.s.event(r.trailerConfigured(),{simulation:'paused'}))}));
+  ok(storage.commitEvent({message:game(source.s.event(r.started()))}));
+  delivered(storage,source);
+  const workId=await complete(storage,source);
+  const pin=JSON.parse(String(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(workId)));
+  expect(pin.ruleContext.status).toBe('proven');
+  const saved=JSON.parse(String(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(workId)));
+  const legacyContext={version:2,status:'changed',items:[],recordingLoss:false};
+  // The previous replay considered the first trailer a replacement. Persist that result at the relevant boundary.
+  const legacyPin=JSON.stringify({...pin,ruleContext:legacyContext});
+  if(state==='preparing'){
+    const {initializing,recovering,leadConfiguration,...cursor}=saved.ruleReplay;
+    expect([initializing,recovering,leadConfiguration]).toEqual([false,false,'2']);
+    saved.ruleReplay={...cursor,version:1,changed:true};
+    db.prepare("UPDATE upload_projection_pins SET state='preparing',metadata_json=NULL WHERE pin_id=?").run(workId);
+    db.prepare("UPDATE upload_materializations SET state='preparing',pin_json=NULL,fold_json=NULL WHERE work_id=?").run(workId);
+  }else{
+    db.prepare('UPDATE upload_projection_pins SET metadata_json=? WHERE pin_id=?').run(legacyPin,workId);
+    db.prepare('UPDATE upload_materializations SET pin_json=? WHERE work_id=?').run(legacyPin,workId);
+  }
+  const freeze=(id:string)=>ok(storage.freezeUploadMaterialization({workId:id,producerVersion:'test',createdUtcMs:1000}));
+  let original;
+  if(state==='frozen'){
+    expect(freeze(workId).status).toBe('frozen');
+    original=db.prepare('SELECT event_id,payload FROM upload_envelopes WHERE work_ref=?').get(workId);
+  }
+  delete saved.ruleReplayVersion;
+  db.prepare('UPDATE upload_projection_pins SET snapshot_json=? WHERE pin_id=?').run(JSON.stringify(saved),workId);
+  if(state==='preparing'){
+    let work=ok(storage.advanceUploadMaterialization({workId}));
+    while(work.status==='preparing'||work.status==='folding')work=ok(storage.advanceUploadMaterialization({workId}));
+    expect(work.status).toBe('complete');
+    expect(freeze(workId).status).toBe('frozen');
+  }else if(state==='ready'){
+    expect(freeze(workId).status).toBe('stale');
+    ok(storage.releaseUploadMaterialization({workId}));
+    expect(freeze(await complete(storage,source)).status).toBe('frozen');
+  }else{
+    const before=db.prepare('SELECT material_version,pending FROM upload_change_heads JOIN upload_source_bindings USING(root_ref)').get();
+    const head=db.prepare('SELECT root_ref,revision_ref FROM upload_change_heads').get() as {root_ref:bigint;revision_ref:bigint};
+    discoverRevision(db,head.root_ref,head.revision_ref);
+    expect(db.prepare('SELECT material_version,pending FROM upload_change_heads JOIN upload_source_bindings USING(root_ref)').get()).toEqual(before);
+    expect(freeze(workId).status).toBe('frozen');
+    expect(db.prepare('SELECT event_id,payload FROM upload_envelopes WHERE work_ref=?').get(workId)).toEqual(original);
+  }
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));
+  expect(attempt.status).toBe('claimed');
+  const {snapshot}=JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope;
+  expect(snapshot.trailers.complete).toBe(state!=='frozen');
+  expect(snapshot.evidence.reasons).toEqual(state==='frozen'?['trailer-context-changed']:[]);
 });
 
 
