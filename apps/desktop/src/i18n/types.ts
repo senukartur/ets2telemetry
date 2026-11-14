@@ -341,6 +341,7 @@ export type I18nKey =
   | "copy.odometer-jumped"
   | "copy.game-time-jumped"
   | "copy.position-jumped"
+  | "copy.possible-roadside-assistance"
   | "copy.refuelled"
   | "copy.samples-could-not-be-stored-in-time"
   | "copy.database-behind-the-plugin"

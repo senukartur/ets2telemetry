@@ -340,6 +340,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.odometer-jumped": "odometer jumped",
   "copy.game-time-jumped": "game time jumped",
   "copy.position-jumped": "position jumped",
+  "copy.possible-roadside-assistance": "possible roadside assistance",
   "copy.refuelled": "refuelled",
   "copy.samples-could-not-be-stored-in-time": "samples could not be stored in time",
   "copy.database-behind-the-plugin": "database behind the plugin",

@@ -14,7 +14,7 @@ import {
   GAME_TIME_JUMP_MINUTES, GAME_TIME_JUMP_RATE, MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, MAX_PLAUSIBLE_SPEED_MPS, POSITION_JUMP_MARGIN_METERS, READING_HOLE_SECONDS, initialTripState,
   dueAttach, jobKey, normalizeV1State, stepTrip, tripView, type NormalizedLiveState, type TripEffect, type TripInput, type TripSeed, type TripState
 } from '../../packages/telemetry-core/src/index';
-import {BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, Script, job, r, run, sessionInput, type Step} from '../shared/trip-messages';
+import {BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, Script, job, otherJob, r, run, sessionInput, type Step} from '../shared/trip-messages';
 
 const uuid = (session: string, eventSeq: string) => {
   const h = createHash('sha256').update(`ets2telemetry-trip-v1:${session}:${eventSeq}`, 'utf8').digest('hex');
@@ -582,6 +582,50 @@ describe('game-time and position jumps (T17)', () => {
     play([[sessionInput(s.welcome())], [reading(s, {ms: 0, odometer: 1000, fuel: 100, minutes: 1000})], [reading(s, {ms: 1000, odometer: 900, fuel: 500, minutes: 2000})],
       [s.event(r.fined()), [attr(null, 'free-driving')]]]);
   });
+});
+
+describe('REG-008 ETS2 roadside relocation', () => {
+  it.each(['30 minutes', '31 minutes', 'unbracketed', 'moving', 'odometer changed', 'fuel changed', 'large relocation', 'late reading', 'replayed resume', 'job changed'] as const)(
+    'requires a clean stopped relocation at a live pause and resume (%s)', variant => {
+      const {s, rows} = opened();
+      const event = (record: Parameters<Script['event']>[0], simulation: 'paused' | 'running', advanceMs: number) => {
+        const message = s.event(record, {simulation, advanceMs});
+        message.data.occurred.gameTime.minutes = {available: true, value: '1000'};
+        return message;
+      };
+      const before = {ms: 2200, minutes: 1000, odometer: 1_000_000, fuel: 100, speed: 0, position: {x: 0, y: 0, z: 0}};
+      const pause = event(variant === 'unbracketed' ? r.fined() : r.paused(), 'paused', 1000);
+      const resume = event(r.started(), 'running', 14_000);
+      if (variant === 'replayed resume') resume.data.redelivered = true;
+      const ms = variant === 'late reading' ? 19_050 : 17_050;
+      const minutes = variant === '30 minutes' ? 1030 : 1031;
+      const after = {...before, ms, minutes, speed: variant === 'moving' ? 1 : 0,
+        odometer: before.odometer + (variant === 'odometer changed' ? 100 : 0), fuel: variant === 'fuel changed' ? 99 : before.fuel,
+        position: {x: variant === 'large relocation' ? 51 : 37, y: 0, z: 0}};
+      const drive = Array.from({length: 43}, (_, i) => {
+        const seconds = i + 1;
+        return reading(s, {...after, ms: ms + seconds * 1000, minutes: minutes + Math.floor(seconds / 3),
+          odometer: after.odometer + seconds * 200, speed: 15, position: {...after.position, x: after.position.x + seconds * 15}});
+      });
+      const resumed = reading(s, after);
+      if (resumed.kind !== 'reading') throw new Error('Reading expected');
+      if (variant === 'job changed') resumed.currentJob = otherJob();
+      const result = run(initialTripState(), [...rows.map(([step]) => step), reading(s, before), pause,
+        reading(s, {...before, ms: 16_900, simulation: 'paused'}), resume, resumed, ...drive,
+        s.event(r.delivered(), {advanceMs: 50_000})]);
+      const notes = result.effects.flat().flatMap(effect => effect.kind === 'completeness.add' ? [effect.interval.detail] : []);
+      const qualified = variant === '30 minutes' || variant === '31 minutes';
+      if (qualified) {
+        expect(notes.filter(detail => detail?.cause === 'possible-roadside-assistance')).toEqual([
+          {annotation: true, cause: 'possible-roadside-assistance', fromMinutes: '1000', toMinutes: String(minutes), meters: 37, atMonotonicNs: ns(ms)}
+        ]);
+        expect(notes.some(detail => detail?.cause === 'game-time-jump' || detail?.cause === 'position-jump' || detail?.cause === 'reading-hole')).toBe(false);
+      } else {
+        expect(notes.some(detail => detail?.cause === 'possible-roadside-assistance')).toBe(false);
+        expect(notes).toContainEqual(expect.objectContaining({cause: 'game-time-jump', label: 'possible-sleep'}));
+      }
+    }
+  );
 });
 
 describe('fix round 2', () => {

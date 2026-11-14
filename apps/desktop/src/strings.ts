@@ -909,6 +909,7 @@ export const JOURNAL_INTERVAL_CAUSE_TEXT: Readonly<Record<string, string>> = Obj
   'configuration-cleared': 'continues a trip whose job was cleared', 'reload': 'save reloaded', 'save-load': 'save loaded', 'disconnected': 'source disconnected',
   'consumer-restart': 'telemetry service restarted', 'reading-hole': 'readings missing', 'truck-change': 'truck changed', 'utc-label-jump': 'clock label jumped back',
   'odometer-regressed': 'odometer went back', 'odometer-jump': 'odometer jumped', 'game-time-jump': 'game time jumped', 'position-jump': 'position jumped',
+  'possible-roadside-assistance': 'possible roadside assistance',
   'refuel': 'refuelled', 'sample-backlog': 'samples could not be stored in time', 'ack-ahead-of-storage': 'database behind the plugin'
 });
 export const JOURNAL_OTHER_CAUSE = 'other';

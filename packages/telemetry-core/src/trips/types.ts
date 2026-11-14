@@ -4,7 +4,7 @@
 import type {Available, Currency, GameMode, JobConfiguration, Money, ServerMessage, Uint64} from '../../../contracts/src/protocol-v1';
 import type {RecordingCompleteness, TripEffect, TripOutcome, CloseReason, CompletenessInterval} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
-import type {GameTimeWindow, ReadingPoint, RunClock, TransferMark, TripAccounting} from './accounting';
+import type {GameTimeWindow, ReadingPoint, RoadsidePause, RunClock, TransferMark, TripAccounting} from './accounting';
 
 export type {RecordingCompleteness, TripEffect};
 /** Equals storage's MAX_EFFECTS (tests/unit/trip-reducer.test.ts checks it): the most effects one commit may carry. */
@@ -164,6 +164,8 @@ export interface SessionState {
   lastTransfer: TransferMark | null;
   /** Running simulation time since the current connection's last reading, for reading holes (T17). */
   runClock: RunClock | null;
+  /** Live pause and resume evidence, consumed by the first running reading or retired by a boundary. */
+  roadsidePause?: RoadsidePause;
   /** Recent game-time readings of the current connection, for game-time jumps spread over many readings (T17). */
   gameTimeWindow: GameTimeWindow | null;
   /**
