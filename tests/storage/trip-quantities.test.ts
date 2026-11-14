@@ -800,8 +800,15 @@ describe('REG-003/005 ET-112k engine 1 junction that waits for the profile proof
   /** B only stands at A's save point; C's proven junction is there too, then C drives 20 m on 10 ml. */
   const afterStanding: Step[] = [{reading: at(0.5, {member: 'C', linked: false}), proof: true}, {reading: at(1.25, {member: 'C'}), proof: true},
     {reading: s(2.25, {member: 'C', odometerM: 1080, fuelL: 399.96, x: 80}), proof: true}];
+  /** A reload of A's older retained save point at 1020 m, a restore junction, then B drives 20 m on 10 ml. */
+  const restore = (proof: boolean): Step => ({reading: at(0.5, {odometerM: 1020, fuelL: 399.99, x: 20, linked: false}), proof});
+  const atRestore = (t: number, proof: boolean): Step => standing(t, proof, {odometerM: 1020, fuelL: 399.99, x: 20});
+  /** A stationary proof-bearing reading one game minute after the junction's (the save-point rule's one forward tick). */
+  const ticked: Step[] = [junction, standing(1.25, true, {minutes: 601}), {reading: s(2.25, {member: 'B', odometerM: 1080, fuelL: 399.96, x: 80, minutes: 601}), proof: true}];
   // A's 60 m and 0.03 L continue at the save point, then B adds 20 m and 10 ml; C adds 20 m and 10 ml more.
   const same: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'complete', flags: [], cut: false};
+  // The restore keeps A's 20 m and 0.01 L at 1020 m (a cut), then B adds 20 m and 10 ml.
+  const restored: QuantityExpectation = {distanceM: 40, distance: 'complete', fuelUsedL: 0.02, fuel: 'complete', flags: ['distanceRestored'], cut: true};
   const sameThird: QuantityExpectation = {distanceM: 100, distance: 'complete', fuelUsedL: 0.05, fuel: 'complete', flags: [], cut: false};
   interface Options {c?: readonly Step[]; accountingEngine?: 0; reopenBefore?: number; whileClosed?: (root: string) => void; end?: (storage: Storage, m: Member) => void}
   function append(storage: Storage, m: Member, step: Step) {
@@ -846,7 +853,11 @@ describe('REG-003/005 ET-112k engine 1 junction that waits for the profile proof
     // The controls of the bounds below: exactly 10 s after the junction, 4.5 s after the previous reading, 40 mm away.
     ['the proof exactly 10 s after the junction', [junction, standing(4.5, false), standing(8.5, false), standing(10.5, true), drive(11.5)], {}, same],
     ['a proof-bearing reading 4.5 s after the junction', [junction, standing(5, true), drive(6)], {}, same],
-    ['a stationary reading 40 mm from the save point', [junction, standing(1.25, true, {x: 60.04}), drive(2.25)], {}, same]
+    ['a stationary reading 40 mm from the save point', [junction, standing(1.25, true, {x: 60.04}), drive(2.25)], {}, same],
+    ['a stationary proof-bearing reading one game minute later', ticked, {}, same],
+    // The control of the restore below: the same reload of an older retained save point, with proof at its junction.
+    ['a reload of an older retained save point with proof', [restore(true), atRestore(1.25, true),
+      {reading: s(2.25, {member: 'B', odometerM: 1040, fuelL: 399.98, x: 40}), proof: true}], {}, restored]
   ] as const)('keeps the coverage complete: %s', async (_name, steps, options, expected) => {
     const {storage, root} = await waited(steps, options);
     expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe('complete');
@@ -877,8 +888,9 @@ describe('REG-003/005 ET-112k engine 1 junction that waits for the profile proof
     ['the proof-bearing reading 5.5 s after the junction (control: 4.5 s)', [junction, standing(6, true), drive(7)], {}, lost, false],
     ['the proof-bearing reading on another game clock', [junction, standing(1.25, true, {gameClock: CLOCK_B}), drive(2.25)], {}, lost, false],
     ['the proof-bearing reading without the recorder link', [junction, standing(1.25, true, {linked: false}), drive(2.25)], {}, lost, false],
-    ['a junction 25 ml of fuel away from the save point, which decides at once as before', [{reading: at(0.5, {fuelL: 399.945, linked: false}), proof: false},
-      standing(1.25, true, {fuelL: 399.945}), drive(2.25)], {}, lost, false],
+    ['the proof-bearing reading two game minutes after the junction\'s (control: one minute)', [junction, standing(1.25, true, {minutes: 602}), drive(2.25)], {}, lost, false],
+    ['the proof-bearing reading one game minute before the junction\'s (control: one minute later)', [junction, standing(1.25, true, {minutes: 599}), drive(2.25)], {}, lost, false],
+    ['an incomplete reading without an odometer while waiting', [junction, standing(1.25, false, {odometerM: null}), standing(2.25, true), drive(3.25)], {}, lost, false],
     ['a sample loss while waiting', [junction, standing(1.25, true, {}, sampleLoss), drive(2.25)], {}, {phase: 'resumed', losses: 2}, false],
     ['an event loss while waiting', [junction, standing(1.25, true, {}, eventLoss), drive(2.25)], {}, {phase: 'pending', losses: 17}, false],
     ['the proof-bearing reading fails the clean load window', [junction, standing(1.25, true, {}, gapMarker), drive(2.25)], {}, lost, false],
@@ -892,6 +904,21 @@ describe('REG-003/005 ET-112k engine 1 junction that waits for the profile proof
     const coverage = storedCoverage(root);
     expect(coverage).toMatchObject(expected);
     expect(Object.hasOwn(coverage, 'proofPending')).toBe(waiting);
+  });
+  // These junctions decide at once, as before: the stored coverage right after the junction reading alone has the loss and
+  // no flag, and the following proof-bearing reading at the same point cannot change it.
+  it.each([
+    ['a junction 25 ml of fuel away from the save point (control: the owner\'s case)', {reading: at(0.5, {fuelL: 399.945, linked: false}), proof: false},
+      standing(1.25, true, {fuelL: 399.945})],
+    ['a reload of an older retained save point without proof (control: the same reload with proof)', restore(false), atRestore(1.25, true)]
+  ] as const)('decides at once without a wait: %s', async (_name, first, next) => {
+    let after: Record<string, unknown> = {};
+    const {storage, root} = await waited([first, next], {reopenBefore: 1, whileClosed: root => { after = storedCoverage(root); }});
+    expect(after).toMatchObject(lost);
+    expect(Object.hasOwn(after, 'proofPending')).toBe(false);
+    expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe('partial');
+    ok(storage.close());
+    expect(storedCoverage(root)).toMatchObject(lost);
   });
   it('leaves an engine-0 group unchanged: no wait, and the owner\'s case stays partial', async () => {
     const {storage, root} = await waited(replica, {accountingEngine: 0});

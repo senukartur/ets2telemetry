@@ -377,7 +377,7 @@ export function projectSample(db: Database.Database, session: {game: string; pro
     // A junction waiting for its proof (ET-112k) compares the sample with the ledger's last anchor before the ledger records it.
     const coverage = latestCoverage(db, id).value, waited = proofWait(db, id, row, coverage, sample, sampleId, proof !== undefined);
     const savePoint = projectQuantitySample(db, id, row, sample, sampleId, truckRef, now);
-    const decided = coverage?.proofPending !== undefined ? waited : junctionCoverage(db, row, coverage, savePoint, proof !== undefined, sample.monotonicNs);
+    const decided = coverage?.proofPending !== undefined ? waited : junctionCoverage(db, row, coverage, savePoint, proof !== undefined, {sample, sampleId});
     if (decided) revise(db, id, decided);
     return;
   }

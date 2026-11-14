@@ -276,14 +276,19 @@ function decideJunction(db: Database.Database, row: Row, coverage: LogicalCovera
 /**
  * Engine 1 (docs/trips.md): the junction of a pending member decides its resume. The same save point with an admitted
  * proof and either a clean load window or a paused reconnect within the plugin session (pausedReconnect) resumes the
- * coverage; any other junction records an unknown loss. A live junction reading at the same save point without an
- * admitted proof, at source monotonic time `at`, waits for one instead (proofPending, proofWait), since a save load admits
- * its new proof only after its first reading. Undefined when this coverage is not pending for the member or `savePoint`
- * is not a junction's.
+ * coverage; any other junction records an unknown loss. A live junction `reading` (the stored sample `sampleId` with its
+ * input) without an admitted proof waits for one instead (proofPending, proofWait), since a save load admits its new proof
+ * only after its first reading, but only when the reading matches the coverage's frozen endpoint, the latest recorded
+ * point, by the save-point rule: a restore onto an older retained point without proof still decides at once. Undefined
+ * when this coverage is not pending for the member or `savePoint` is not a junction's.
  */
-export function junctionCoverage(db: Database.Database, row: Row, coverage: LogicalCoverage | undefined, savePoint: boolean | null, proof: boolean, at?: string): LogicalCoverage | undefined {
+export function junctionCoverage(db: Database.Database, row: Row, coverage: LogicalCoverage | undefined, savePoint: boolean | null, proof: boolean,
+  reading?: {sample: SampleInput; sampleId: bigint}): LogicalCoverage | undefined {
   if (savePoint === null || !pendingFor(row, coverage)) return undefined;
-  if (savePoint && !proof && at !== undefined && coverage.endpoint !== null) return {...coverage, sampleResumePending: false, proofPending: at};
+  if (savePoint && !proof && reading && coverage.endpoint !== null) {
+    const y = stored(db, reading.sampleId, reading.sample.recording?.truck ?? null).anchor;
+    if (completeAnchor(y) && matchesSavedEndpoint(coverage.endpoint.anchor, y, true, y.gameMinutes!)) return {...coverage, sampleResumePending: false, proofPending: y.monotonicNs};
+  }
   return decideJunction(db, row, coverage, savePoint && proof);
 }
 /** The longest wait of a junction for an admitted proof, in source monotonic time from the junction reading. */
