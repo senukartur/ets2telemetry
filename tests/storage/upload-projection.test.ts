@@ -619,6 +619,44 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     expect(result.snapshot.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
     await client.close();expect(readOnly(ws.database,db=>db.prepare('SELECT count(*) FROM trailer_baselines').pluck().get())).toBe(1);
   });
+  it.each(['none','startup-gap','startup-loss','late-trailer','replaced-trailer','stale-after-gap','stale-after-loss'] as const)(
+    'classifies trailer evidence at the start of a menu job (%s)',async scenario=>{
+    const client=await start(),s=new Script(ETS2_A);
+    ok(await client.upsertSession({message:gameShaped(s.welcome())}));
+    const baseline=checkpoint(s);
+    const stale=scenario==='stale-after-gap'||scenario==='stale-after-loss';
+    if(!stale)baseline.data.state.configuration.trailers.fill(absent);
+    ok(await client.recordTrailerBaseline({message:baseline}));
+    if(scenario==='startup-gap'||scenario==='stale-after-gap')
+      ok(await client.commitGap({message:gameShaped(s.gap(2,'noDurableConsumer'))}));
+    const beforeJob=gameShaped(s.event(r.truckConfigured(),{simulation:'paused'}));
+    ok(await client.commitEvent({message:beforeJob}));
+    if(scenario==='startup-loss'||scenario==='stale-after-loss')
+      ok(await client.recordCompleteness(s.session,{kind:'restore-loss',firstEventSeq:'1',lastEventSeq:'1'}));
+    const opening=gameShaped(s.event(r.jobConfigured(),{simulation:'paused'}));
+    const root=tripUuidFor(s.session,opening.data.eventSeq);
+    ok(await client.commitEvent({message:opening,profile:proof(s),effects:[
+      {kind:'trip.open',tripUuid:root,game:s.game,gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000},
+    ]}));
+    const configure=async(id:string)=>ok(await client.commitEvent({message:gameShaped(s.event(r.trailerConfigured(trailer(0,{
+      id:{available:true,value:id},bodyType:{available:true,value:'dumper'},
+    })),{simulation:'paused'}))}));
+    if(scenario!=='late-trailer'&&!stale)await configure('fixture-dumper');
+    if(scenario==='replaced-trailer')await configure('fixture-replacement');
+    ok(await client.commitEvent({message:gameShaped(s.event(r.started()))}));
+    if(scenario==='late-trailer'){
+      ok(await client.commitEvent({message:gameShaped(s.event(r.paused(),{simulation:'paused'}))}));
+      await configure('fixture-dumper');
+    }
+    await close(client,s,root,'delivered');
+    const {snapshot}=await projected(client,root);
+    const reason=stale?'trailer-context-unproven'
+      :scenario==='late-trailer'||scenario==='replaced-trailer'?'trailer-context-changed':null;
+    expect(snapshot.trailers.complete).toBe(reason===null);
+    if(reason===null)expect(snapshot.trailers.items).toMatchObject([{index:0,bodyType:{available:true,value:'dumper'}}]);
+    expect(snapshot.evidence).toMatchObject({ruleContextComplete:reason===null,reasons:reason?[reason]:[]});
+    await client.close();
+  });
   it.each(['changed','clear-restore','hidden-change'] as const)('observes %s even when no configuration is linked to the trip',async fault=>{
     const {client,s,root}=await setup();
     if(fault==='clear-restore')ok(await client.commitEvent({message:gameShaped(s.event(r.trailerCleared()))}));

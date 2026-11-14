@@ -449,11 +449,22 @@ it.each(['configured','cleared','gap','loss','prefix'] as const)('TEL-034 invali
 });
 
 
-it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-034 safely replaces a closed pending pin after %s session loss evidence',async kind=>{
+it.each(['after-terminal','unknown','overlap','hidden-overlap','old-replay'] as const)('TEL-034 safely replaces a closed pending pin with %s evidence',async kind=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
   ok(storage.commitEvent({message:game(source.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
   const workId=await complete(storage,source),priorVersion=db.prepare('SELECT material_version FROM upload_change_heads').pluck().get();
-  if(kind==='unknown')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss'}));
+  if(kind==='old-replay'){
+    const saved=JSON.parse(String(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(workId)));
+    delete saved.ruleReplayVersion;
+    db.prepare('UPDATE upload_projection_pins SET snapshot_json=? WHERE pin_id=?').run(JSON.stringify(saved),workId);
+    // A previous build also computed the material key without the replay version.
+    const key=String(db.prepare('SELECT material_key FROM upload_change_heads').pluck().get());
+    const separator=key.indexOf(':');
+    const end=separator+1+Number(key.slice(0,separator));
+    const [, ...legacyRuleKey]=JSON.parse(key.slice(separator+1,end)) as unknown[];
+    const legacy=JSON.stringify(legacyRuleKey);
+    db.prepare('UPDATE upload_change_heads SET material_key=?').run(`${legacy.length}:${legacy}${key.slice(end)}`);
+  }else if(kind==='unknown')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss'}));
   else {
     if(kind==='overlap'||kind==='hidden-overlap')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss',firstEventSeq:'2',lastEventSeq:'2'}));
     if(kind==='after-terminal'||kind==='hidden-overlap')ok(storage.recordCompleteness(source.s.session,{kind:'restore-loss',firstEventSeq:'3',lastEventSeq:'3'}));
@@ -464,8 +475,9 @@ it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-0
   expect(ok(storage.freezeUploadMaterialization({workId:replacement,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');
   const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1001}));
   expect(attempt.status).toBe('claimed');const summary=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
-  expect(summary.evidence.ruleContextComplete).toBe(kind==='after-terminal');
-  expect(summary.evidence.reasons).toEqual(kind==='after-terminal'?[]:['recording-intervals','trailer-context-unproven']);
+  const completeContext=kind==='after-terminal'||kind==='old-replay';
+  expect(summary.evidence.ruleContextComplete).toBe(completeContext);
+  expect(summary.evidence.reasons).toEqual(completeContext?[]:['recording-intervals','trailer-context-unproven']);
 });
 
 
