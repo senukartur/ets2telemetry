@@ -619,7 +619,7 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     expect(result.snapshot.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
     await client.close();expect(readOnly(ws.database,db=>db.prepare('SELECT count(*) FROM trailer_baselines').pluck().get())).toBe(1);
   });
-  it.each(['none','startup-gap','startup-loss','late-trailer','replaced-trailer','stale-after-gap','stale-after-loss'] as const)(
+  it.each(['none','startup-gap','startup-loss','missing-row','unknown-simulation','late-trailer','replaced-trailer','stale-after-gap','stale-after-loss'] as const)(
     'classifies trailer evidence at the start of a menu job (%s)',async scenario=>{
     const client=await start(),s=new Script(ETS2_A);
     ok(await client.upsertSession({message:gameShaped(s.welcome())}));
@@ -629,6 +629,7 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     ok(await client.recordTrailerBaseline({message:baseline}));
     if(scenario==='startup-gap'||scenario==='stale-after-gap')
       ok(await client.commitGap({message:gameShaped(s.gap(2,'noDurableConsumer'))}));
+    if(scenario==='missing-row')s.next++;
     const beforeJob=gameShaped(s.event(r.truckConfigured(),{simulation:'paused'}));
     ok(await client.commitEvent({message:beforeJob}));
     if(scenario==='startup-loss'||scenario==='stale-after-loss')
@@ -638,6 +639,8 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     ok(await client.commitEvent({message:opening,profile:proof(s),effects:[
       {kind:'trip.open',tripUuid:root,game:s.game,gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000},
     ]}));
+    if(scenario==='unknown-simulation')
+      ok(await client.commitEvent({message:gameShaped(s.event(r.truckConfigured(),{simulation:'unavailable'}))}));
     const configure=async(id:string)=>ok(await client.commitEvent({message:gameShaped(s.event(r.trailerConfigured(trailer(0,{
       id:{available:true,value:id},bodyType:{available:true,value:'dumper'},
     })),{simulation:'paused'}))}));
@@ -650,8 +653,8 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     }
     await close(client,s,root,'delivered');
     const {snapshot}=await projected(client,root);
-    const reason=stale?'trailer-context-unproven'
-      :scenario==='late-trailer'||scenario==='replaced-trailer'?'trailer-context-changed':null;
+    const reason=stale||scenario==='missing-row'?'trailer-context-unproven'
+      :scenario==='late-trailer'||scenario==='replaced-trailer'||scenario==='unknown-simulation'?'trailer-context-changed':null;
     expect(snapshot.trailers.complete).toBe(reason===null);
     if(reason===null)expect(snapshot.trailers.items).toMatchObject([{index:0,bodyType:{available:true,value:'dumper'}}]);
     expect(snapshot.evidence).toMatchObject({ruleContextComplete:reason===null,reasons:reason?[reason]:[]});
@@ -707,6 +710,15 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     const {client,s,root}=await setup();ok(await client.recordCompleteness(s.session,{kind,firstEventSeq:'8',lastEventSeq:'10'}));
     const {snapshot}=await projected(client,root);
     expect(snapshot.evidence).toMatchObject({ruleContextComplete:kind==='sample-loss',reasons:kind==='sample-loss'?[]:['recording-intervals','trailer-context-unproven']});await client.close();
+  });
+  it('retains trailer proof when a bounded loss ends before a complete baseline',async()=>{
+    const {client,s,root}=await setup();
+    ok(await client.recordCompleteness(s.session,{kind:'restore-loss',firstEventSeq:'1',lastEventSeq:'6'}));
+    await close(client,s,root,'delivered');
+    const {snapshot}=await projected(client,root);
+    expect(snapshot.trailers.complete).toBe(true);
+    expect(snapshot.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
+    await client.close();
   });
   it('keeps baseline and interval bounds pinned and rechecks new unassigned loss before publication',async()=>{
     const client=await start(),s=new Script(ETS2_A);ok(await client.upsertSession({message:gameShaped(s.welcome())}));const baseline=checkpoint(s),root=await open(client,s),pinId=randomUUID();

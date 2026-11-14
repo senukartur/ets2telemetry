@@ -133,7 +133,21 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
       if(BigInt(state.next)<=BigInt(state.end))state.unproven=true;
       state.phase='gaps';return null;
     }
-    replayRuleEvent(state,fromU64Key(e.event_seq),(JSON.parse(String(e.payload_json)) as {record:EventRecord}).record,
+    const sequence=fromU64Key(e.event_seq);
+    const next=u64Key(state.next);
+    if(next<String(e.event_seq)&&String(e.event_seq)<=u64Key(state.opening)){
+      // Only documented pre-opening loss can be skipped. A missing row alone is incomplete evidence.
+      const gap=get(db,`SELECT last_event_seq FROM event_gaps WHERE plugin_session_ref=? AND first_event_seq<=?
+        AND last_event_seq>=? AND id<=? ORDER BY last_event_seq DESC LIMIT 1`,session,next,next,snap.gaps);
+      if(gap){
+        const afterGap=BigInt(fromU64Key(gap.last_event_seq))+1n;
+        state.next=afterGap<BigInt(sequence)?String(afterGap):sequence;
+        state.items=[];
+        state.recovering=true;
+        return null;
+      }
+    }
+    replayRuleEvent(state,sequence,(JSON.parse(String(e.payload_json)) as {record:EventRecord}).record,
       String(e.clock_uuid),e.occurred_simulation as EventOccurrence['simulation']);
     return null;
   }

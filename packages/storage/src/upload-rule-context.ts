@@ -57,14 +57,7 @@ export function chainComplete(items:RuleTrailer[]):boolean {
 }
 export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRecord,clock:string,
   simulation:EventOccurrence['simulation']):void {
-  if(clock!==state.clock)state.unproven=true;
-  if(sequence!==state.next){
-    if(BigInt(sequence)<=BigInt(state.opening)){
-      // A startup gap can hide a configuration change. Require new evidence for the trailer.
-      state.items=[];
-      state.recovering=true;
-    }else state.unproven=true;
-  }
+  if(sequence!==state.next||clock!==state.clock)state.unproven=true;
   state.next=(BigInt(sequence)+1n).toString();state.eventAfter=sequence;
   if(sequence===state.opening){
     state.opened=true;
