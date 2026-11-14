@@ -1,6 +1,6 @@
 import {RULE_LOSSES,ruleLossBounds,ruleNativeBounds} from './trailer-baselines';
-import {finishRuleReplay,isRuleBaseline,isRulePrefixProof,isRuleReplay,replayRuleEvent,unresolvedRulePrefix,type RuleContext,type RuleReplay} from '../upload-rule-context';
-import type {EventRecord} from '../../../contracts/src/protocol-v1';
+import {finishRuleReplay,isRuleBaseline,isRulePrefixProof,isRuleReplay,replayRuleEvent,RULE_REPLAY_VERSION,unresolvedRulePrefix,type RuleContext,type RuleReplay} from '../upload-rule-context';
+import type {EventOccurrence, EventRecord} from '../../../contracts/src/protocol-v1';
 import {randomUUID} from 'node:crypto';
 import type Database from 'better-sqlite3';
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
@@ -90,6 +90,11 @@ const unproven=():RuleContext=>({version:2,status:'unproven',items:[],recordingL
 /** One indexed input or transition per call, including rejected baselines, events and gaps. */
 function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSnapshot,pin:LogicalRow):RuleContext|null {
   if(saved.trailerBound===undefined||saved.ruleLossBounds===undefined||!isRulePrefixProof(saved.rulePrefix))return unproven(); // Retained preparations without baseline/prefix evidence cannot establish completeness.
+  if(saved.ruleReplayVersion!==RULE_REPLAY_VERSION){
+    // Resume preparations from older builds using the original pinned bounds and the current replay rules.
+    delete saved.ruleReplay;
+    saved.ruleReplayVersion=RULE_REPLAY_VERSION;
+  }
   if(saved.ruleReplay!==undefined&&!isRuleReplay(saved.ruleReplay))fail('DATABASE_CORRUPT');
   if(!saved.ruleReplay){
     if(pin.member_count!==1n||snap.row.opened_by!=='event'||snap.row.opened_event_ref===null)return unproven();
@@ -99,10 +104,11 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
     if(closed&&get(db,'SELECT 1 FROM observation_closes WHERE trip_ref=?',snap.logical))return unproven();
     if(closed&&!get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=? AND id<=?',snap.row.closed_by_session_ref,snap.row.closed_by_event_seq,snap.events))return unproven();
     if(closed&&(snap.row.closed_by_session_ref!==snap.row.plugin_session_ref||snap.row.closed_by_event_seq===null))return unproven();
-    saved.ruleReplay={version:1,phase:'baseline',baselineBeforeSeq:(BigInt(fromU64Key(opening.event_seq))+1n).toString(),baselineBeforeId:'0',
+    saved.ruleReplay={version:RULE_REPLAY_VERSION,phase:'baseline',baselineBeforeSeq:(BigInt(fromU64Key(opening.event_seq))+1n).toString(),baselineBeforeId:'0',
       lossKind:0,lossAfter:'0',eventAfter:'0',gapAfterSeq:'0',gapAfterId:'0',next:'0',end:closed?fromU64Key(snap.row.closed_by_event_seq):String(saved.nativeCoverage),
       opening:fromU64Key(opening.event_seq),clock:String(opening.clock_uuid),openingNs:fromU64Key(opening.occurred_monotonic_ns),openingOrder:fromU64Key(opening.boundary_order),
-      items:[],opened:false,changed:false,unproven:saved.rulePrefix.unproven,recordingLoss:false} satisfies RuleReplay;
+      items:[],opened:false,changed:false,unproven:saved.rulePrefix.unproven,recordingLoss:false,
+      initializing:false,recovering:false,leadConfiguration:'0'} satisfies RuleReplay;
   }
   const state=saved.ruleReplay as RuleReplay,session=snap.row.plugin_session_ref;
   if(state.phase==='baseline'){
@@ -127,7 +133,23 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
       if(BigInt(state.next)<=BigInt(state.end))state.unproven=true;
       state.phase='gaps';return null;
     }
-    replayRuleEvent(state,fromU64Key(e.event_seq),(JSON.parse(String(e.payload_json)) as {record:EventRecord}).record,String(e.clock_uuid));
+    const sequence=fromU64Key(e.event_seq);
+    const next=u64Key(state.next);
+    if(next<String(e.event_seq)&&String(e.event_seq)<=u64Key(state.opening)){
+      // Only documented pre-opening loss can be skipped. A missing row alone is incomplete evidence.
+      // A durably stored gap must extend coverage. Check the nearest start and fail closed if it does not cover the hole.
+      const gap=get(db,`SELECT id,last_event_seq FROM event_gaps WHERE plugin_session_ref=? AND first_event_seq<=?
+        ORDER BY first_event_seq DESC,id DESC LIMIT 1`,session,next);
+      if(gap&&(gap.id as bigint)<=snap.gaps&&String(gap.last_event_seq)>=next){
+        const afterGap=BigInt(fromU64Key(gap.last_event_seq))+1n;
+        state.next=afterGap<BigInt(sequence)?String(afterGap):sequence;
+        state.items=[];
+        state.recovering=true;
+        return null;
+      }
+    }
+    replayRuleEvent(state,sequence,(JSON.parse(String(e.payload_json)) as {record:EventRecord}).record,
+      String(e.clock_uuid),e.occurred_simulation as EventOccurrence['simulation']);
     return null;
   }
   if(state.phase==='gaps'){
@@ -135,9 +157,9 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
       AND (first_event_seq,id)>(?,?) ORDER BY first_event_seq,id LIMIT 1`,session,u64Key(state.end),u64Key(state.gapAfterSeq),BigInt(state.gapAfterId));
     if(!gap){state.phase='losses';return null;}
     state.gapAfterSeq=fromU64Key(gap.first_event_seq);state.gapAfterId=String(gap.id);
-    // The baseline includes every event below its exclusive boundary. Earlier losses do not contaminate later jobs.
-    const baselineNext=BigInt(state.baselineBeforeSeq);
-    if((gap.id as bigint)<=snap.gaps&&BigInt(fromU64Key(gap.last_event_seq))>=baselineNext){state.unproven=true;state.recordingLoss=true;}
+    if((gap.id as bigint)<=snap.gaps&&String(gap.last_event_seq)>=u64Key(state.opening)){
+      state.unproven=true;state.recordingLoss=true;
+    }
     return null;
   }
   if(state.phase==='losses'){
@@ -149,7 +171,14 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
     state.lossAfter=String(interval.id);
     if(interval.trip_ref!==null&&interval.trip_ref!==snap.logical)return null;
     if(interval.detail_json!==null&&(JSON.parse(interval.detail_json as string) as {annotation?:boolean}).annotation===true)return null;
-    if(interval.last_event_seq!==null&&(interval.last_event_seq as string)<u64Key(state.baselineBeforeSeq))return null;
+    const last=interval.last_event_seq as string|null;
+    if(last!==null&&last<u64Key(state.opening)){
+      if(last>=u64Key(state.baselineBeforeSeq)){
+        state.recovering=true;
+        if(u64Key(state.leadConfiguration)<=last)state.unproven=true;
+      }
+      return null;
+    }
     if(snap.row.outcome!=='open'&&interval.first_event_seq!==null&&(interval.first_event_seq as string)>u64Key(state.end))return null;
     state.unproven=true;state.recordingLoss=true;return null;
   }
@@ -190,7 +219,8 @@ export function beginUploadProjection(conn: StorageConnection, input: UploadProj
       bounds:{members:String(snap.members),events:String(snap.events),gaps:String(snap.gaps),samples:String(snap.samples),intervals:String(snap.intervals),accountingHead:snap.head===null?null:String(snap.head)}};
     db.prepare(`INSERT INTO upload_projection_pins(pin_id,incarnation_uuid,requested_trip_uuid,root_ref,revision_ref,evidence_generation,state,phase,snapshot_json)
       VALUES(?,?,?,?,?,?,'preparing','current',?)`).run(input.pinId,incarnation,input.tripUuid,snap.logical,snap.revision,generation(db,snap.logical),encodeRow({snap,initial,rulePrefix:{version:1,unproven:false},trailerBound:get(db,'SELECT id FROM trailer_baselines ORDER BY id DESC LIMIT 1')?.id??0n,
-        ruleNativeBounds:ruleNativeBounds(db,snap.row.plugin_session_ref),ruleLossBounds:ruleLossBounds(db,snap.row.plugin_session_ref),nativeCoverage:fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)}));
+        ruleNativeBounds:ruleNativeBounds(db,snap.row.plugin_session_ref),ruleLossBounds:ruleLossBounds(db,snap.row.plugin_session_ref),ruleReplayVersion:RULE_REPLAY_VERSION,
+        nativeCoverage:fromU64Key(required(get(db,'SELECT committed_through_event_seq FROM plugin_sessions WHERE id=?',snap.row.plugin_session_ref)).committed_through_event_seq)}));
     return status(retained(db,input.pinId));
   })();
 }
@@ -285,23 +315,26 @@ function readPinned(db: Database.Database, token: string): LogicalRow {
 }
 /** Storage-local point checks for a future atomic owner/freeze transaction. Detached true grants no publication authority. */
 export function recheckUploadProjection(db: Database.Database, projection: UploadProjection): boolean {
-  return recheckContext(db,projection,true);
+  return recheckContext(db,projection,true)==='current';
 }
 /** Material work versions independently gate changes; ordinary counter progress may advance the latest revision. */
-export function recheckUploadMaterialContext(db:Database.Database,projection:UploadProjection):boolean {
+export function recheckUploadMaterialContext(db:Database.Database,projection:UploadProjection):'current'|'stale'|'obsolete-replay' {
   return recheckContext(db,projection,false);
 }
-function recheckContext(db:Database.Database,projection:UploadProjection,latestRequired:boolean):boolean {
+function recheckContext(db:Database.Database,projection:UploadProjection,latestRequired:boolean):'current'|'stale'|'obsolete-replay' {
   if(!isUploadProjection(projection))fail('INVALID_INPUT');
   const p=uploadSnapshotParts(projection.snapshot)!;
-  if(required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid!==p[1])return false;
+  if(required(get(db,'SELECT database_uuid FROM database_info WHERE id=1')).database_uuid!==p[1])return 'stale';
   const pin=get(db,'SELECT * FROM upload_projection_pins WHERE pin_id=?',p[2]);
-  if(!pin || pin.incarnation_uuid!==p[3] || pin.state!=='ready' || pin.metadata_json!==JSON.stringify(projection))return false;
+  if(!pin || pin.incarnation_uuid!==p[3] || pin.state!=='ready' || pin.metadata_json!==JSON.stringify(projection))return 'stale';
   const state=current(db,projection.requestedTripUuid);
+  const saved=decodeRow(pin.snapshot_json);
+  if(saved.ruleReplayVersion!==RULE_REPLAY_VERSION)return 'obsolete-replay';
   const latest=get(db,'SELECT id FROM logical_revisions WHERE logical_ref=? ORDER BY id DESC LIMIT 1',pin.root_ref);
   return state.root===projection.rootTripUuid && state.readiness==='ready' && projection.rootReadiness==='ready'
-    && coverageUnchanged(db,(decodeRow(pin.snapshot_json).snap as LogicalSnapshot),decodeRow(pin.snapshot_json),latestRequired)
-    && (!latestRequired||latest?.id===pin.revision_ref) && generation(db,pin.root_ref)===pin.evidence_generation;
+    && coverageUnchanged(db,saved.snap as LogicalSnapshot,saved,latestRequired)
+    && (!latestRequired||latest?.id===pin.revision_ref) && generation(db,pin.root_ref)===pin.evidence_generation
+    ?'current':'stale';
 }
 const copies={members:['upload_projection_members','trip_ref'],configurations:['upload_projection_configurations','event_ref'],intervals:['upload_projection_intervals','interval_ref']} as const;
 export function readUploadProjectionPage(conn: StorageConnection, query: UploadProjectionPageQuery): UploadProjectionPage {

@@ -73,7 +73,7 @@ export function resolveBinding(db:Database.Database,root:unknown):Row|undefined 
   return required(get(db,'SELECT * FROM upload_source_bindings WHERE root_ref=?',root));
 }
 /** Called by revise inside the recorder transaction. No projection fold, payload serialization or history walk. */
-export function discoverRevision(db:Database.Database,root:bigint,revision:unknown,delivery?:{mode:'backfill';runId:string}):void {
+export function discoverRevision(db:Database.Database,root:bigint,revision:unknown,delivery?:{mode:'backfill'|'live';runId:string}):void {
   if(!syncEnabled(db)||!candidate(db,root))return;
   const r=required(get(db,`SELECT r.state_ref,r.progress_head,l.retired,m.proof_json,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref
     JOIN logical_trips l ON l.id=r.logical_ref JOIN logical_memberships m ON m.trip_ref=l.id WHERE r.id=?`,revision));

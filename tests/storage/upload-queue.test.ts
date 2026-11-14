@@ -10,6 +10,7 @@ import type {UploadWork} from '../../packages/storage/src/upload-sync';
 import {encodeUploadEnvelope,uploadDigest,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS} from '../../packages/storage/src/upload-sync';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
+import {discoverRevision} from '../../packages/storage/src/sqlite/upload-discovery';
 import {tripUuidFor,type ProfileObservation} from '../../packages/telemetry-core/src';
 import {ETS2_A,ETS2_B,job,r,Script,trailer} from '../shared/trip-messages';
 import {failed,ok,TEST_CLOSE_GRACE_MS,workspace} from './helpers';
@@ -19,18 +20,25 @@ beforeEach(async()=>{ws=await workspace();});afterEach(async()=>{await terminate
 const game=<T extends {source:{origin:string}}>(message:T):T=>({...message,source:{...message.source,origin:'game'}});
 const mode={mode:'unknown',method:'none',confidence:'none'} as const;
 const proof=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
-async function setup(client:Storage|StorageClient,baseline=false){
+async function connectOwner(client:Storage|StorageClient){
   const install=ok(await client.ensureUploadInstallation()),registrationId=randomUUID(),runId=randomUUID();
   ok(await client.recordUploadRegistration({registrationId,clientInstallationId:install.clientInstallationId!,origin:'https://dashboard.example',accountId:'A',companyId:'company',identityEpoch:'epoch',installationId:randomUUID(),bindingId:randomUUID()}));
   ok(await client.confirmUploadOwner({confirmationId:runId,registrationId,credentialGeneration:'generation',expectedVersion:'0'}));
+  return {registrationId,runId};
+}
+async function recordOpening(client:Storage|StorageClient,baseline:boolean|'menu'){
   const s=new Script(ETS2_A),tripUuid=tripUuidFor(s.session,'1');ok(await client.upsertSession({message:game(s.welcome())}));
   if(baseline){
     const checkpoint=game(s.checkpoint(null));checkpoint.data.state.boundaryOrder='0';
-    checkpoint.data.state.configuration.trailers=Array.from({length:10},(_,index)=>index===0?{available:true,value:trailer(0,{bodyType:{available:true,value:'curtainsider'}})}:{available:false,reason:'not-observed'});
+    checkpoint.data.state.configuration.trailers=Array.from({length:10},(_,index)=>index===0&&baseline!=='menu'?{available:true,value:trailer(0,{bodyType:{available:true,value:'curtainsider'}})}:{available:false,reason:'not-observed'});
     ok(await client.recordTrailerBaseline({message:checkpoint}));
   }
-  ok(await client.commitEvent({message:game(s.event(r.jobConfigured())),profile:proof(s),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
-  return {s,tripUuid,registrationId,runId};
+  ok(await client.commitEvent({message:game(s.event(r.jobConfigured(),{simulation:baseline==='menu'?'paused':'running'})),profile:proof(s),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
+  return {s,tripUuid};
+}
+async function setup(client:Storage|StorageClient,baseline:boolean|'menu'=false){
+  const owner=await connectOwner(client);
+  return {...await recordOpening(client,baseline),...owner};
 }
 async function complete(client:Storage|StorageClient,input:{tripUuid:string;registrationId:string}){
   const workId=randomUUID();let work=ok(await client.beginUploadMaterialization({tripUuid:input.tripUuid,registrationId:input.registrationId,workId}));
@@ -449,7 +457,7 @@ it.each(['configured','cleared','gap','loss','prefix'] as const)('TEL-034 invali
 });
 
 
-it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-034 safely replaces a closed pending pin after %s session loss evidence',async kind=>{
+it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-034 safely replaces a closed pending pin with %s evidence',async kind=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage,true),db=conn.writer();
   ok(storage.commitEvent({message:game(source.s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
   const workId=await complete(storage,source),priorVersion=db.prepare('SELECT material_version FROM upload_change_heads').pluck().get();
@@ -464,8 +472,71 @@ it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-0
   expect(ok(storage.freezeUploadMaterialization({workId:replacement,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');
   const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1001}));
   expect(attempt.status).toBe('claimed');const summary=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
-  expect(summary.evidence.ruleContextComplete).toBe(kind==='after-terminal');
-  expect(summary.evidence.reasons).toEqual(kind==='after-terminal'?[]:['recording-intervals','trailer-context-unproven']);
+  const completeContext=kind==='after-terminal';
+  expect(summary.evidence.ruleContextComplete).toBe(completeContext);
+  expect(summary.evidence.reasons).toEqual(completeContext?[]:['recording-intervals','trailer-context-unproven']);
+});
+
+it.each([
+  ['preparing','live'],['ready','live'],['ready','backfill'],['frozen','live'],
+] as const)('TEL-034 upgrades a menu job with a legacy %s trailer proof (%s)',async(state,deliveryMode)=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);
+  const liveOwner=deliveryMode==='live'?await connectOwner(storage):null;
+  const opening=await recordOpening(storage,'menu'),db=conn.writer();
+  ok(storage.commitEvent({message:game(opening.s.event(r.trailerConfigured(),{simulation:'paused'}))}));
+  ok(storage.commitEvent({message:game(opening.s.event(r.started()))}));
+  delivered(storage,opening);
+  const source={...opening,...(liveOwner??await connectOwner(storage))};
+  if(deliveryMode==='backfill')
+    expect(ok(storage.advanceUploadScan({runId:source.runId,registrationId:source.registrationId})).phase).toBe('complete');
+  const workId=await complete(storage,source);
+  const pin=JSON.parse(String(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(workId)));
+  expect(pin.ruleContext.status).toBe('proven');
+  const saved=JSON.parse(String(db.prepare('SELECT snapshot_json FROM upload_projection_pins WHERE pin_id=?').pluck().get(workId)));
+  const legacyContext={version:2,status:'changed',items:[],recordingLoss:false};
+  // The previous replay considered the first trailer a replacement. Persist that result at the relevant boundary.
+  const legacyPin=JSON.stringify({...pin,ruleContext:legacyContext});
+  if(state==='preparing'){
+    const {initializing,recovering,leadConfiguration,...cursor}=saved.ruleReplay;
+    expect([initializing,recovering,leadConfiguration]).toEqual([false,false,'2']);
+    saved.ruleReplay={...cursor,version:1,changed:true};
+    db.prepare("UPDATE upload_projection_pins SET state='preparing',metadata_json=NULL WHERE pin_id=?").run(workId);
+    db.prepare("UPDATE upload_materializations SET state='preparing',pin_json=NULL,fold_json=NULL WHERE work_id=?").run(workId);
+  }else{
+    db.prepare('UPDATE upload_projection_pins SET metadata_json=? WHERE pin_id=?').run(legacyPin,workId);
+    db.prepare('UPDATE upload_materializations SET pin_json=? WHERE work_id=?').run(legacyPin,workId);
+  }
+  const freeze=(id:string)=>ok(storage.freezeUploadMaterialization({workId:id,producerVersion:'test',createdUtcMs:1000}));
+  let original;
+  if(state==='frozen'){
+    expect(freeze(workId).status).toBe('frozen');
+    original=db.prepare('SELECT event_id,payload FROM upload_envelopes WHERE work_ref=?').get(workId);
+  }
+  delete saved.ruleReplayVersion;
+  db.prepare('UPDATE upload_projection_pins SET snapshot_json=? WHERE pin_id=?').run(JSON.stringify(saved),workId);
+  if(state==='preparing'){
+    let work=ok(storage.advanceUploadMaterialization({workId}));
+    while(work.status==='preparing'||work.status==='folding')work=ok(storage.advanceUploadMaterialization({workId}));
+    expect(work.status).toBe('complete');
+    expect(freeze(workId).status).toBe('frozen');
+  }else if(state==='ready'){
+    expect(freeze(workId).status).toBe('stale');
+    ok(storage.releaseUploadMaterialization({workId}));
+    expect(freeze(await complete(storage,source)).status).toBe('frozen');
+  }else{
+    const before=db.prepare('SELECT material_version,pending FROM upload_change_heads JOIN upload_source_bindings USING(root_ref)').get();
+    const head=db.prepare('SELECT root_ref,revision_ref FROM upload_change_heads').get() as {root_ref:bigint;revision_ref:bigint};
+    discoverRevision(db,head.root_ref,head.revision_ref);
+    expect(db.prepare('SELECT material_version,pending FROM upload_change_heads JOIN upload_source_bindings USING(root_ref)').get()).toEqual(before);
+    expect(freeze(workId).status).toBe('frozen');
+    expect(db.prepare('SELECT event_id,payload FROM upload_envelopes WHERE work_ref=?').get(workId)).toEqual(original);
+  }
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));
+  expect(attempt.status).toBe('claimed');
+  const {snapshot,delivery}=JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope;
+  expect(delivery).toEqual({mode:deliveryMode,syncRunId:source.runId});
+  expect(snapshot.trailers.complete).toBe(state!=='frozen');
+  expect(snapshot.evidence.reasons).toEqual(state==='frozen'?['trailer-context-changed']:[]);
 });
 
 
@@ -498,7 +569,7 @@ function engineOneSamples(storage:Storage,source:Awaited<ReturnType<typeof setup
       ...(at>1?{previous:{tripUuid:source.tripUuid,sourceClockId:s.clockId,monotonicNs:String(BigInt(at-1)*1_000_000_000n)}}:{})}});
   ok(storage.appendSamples(s.session,[point(1,1_000_000,100,20),point(2,1_000_020,99.99,20),point(3,1_000_040,99.98,0)],{uniqueSeconds:true}));
 }
-const delivered=(storage:Storage,source:Awaited<ReturnType<typeof setup>>)=>ok(storage.commitEvent({message:game(source.s.event(r.delivered())),
+const delivered=(storage:Storage,source:Awaited<ReturnType<typeof recordOpening>>)=>ok(storage.commitEvent({message:game(source.s.event(r.delivered())),
   effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
 // ET-113: the negotiated minor fixes the frozen shape. v1.0 has neither field, v1.1 adds hardModeResult, v1.2 also adds
 // the accounting status of the engine-1 ledger head; every shape validates and is claimed with its exact bytes.

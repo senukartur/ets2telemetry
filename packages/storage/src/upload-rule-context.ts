@@ -1,11 +1,13 @@
-import type {Available, EventRecord} from '../../contracts/src/protocol-v1';
+import type {Available, EventOccurrence, EventRecord} from '../../contracts/src/protocol-v1';
 
+export const RULE_REPLAY_VERSION = 2;
 export interface RuleTrailer {index:number;id:Available<string>;bodyType:Available<string>;chainType:Available<string>}
 export interface RuleContext {version:1|2;status:'proven'|'changed'|'unavailable'|'unproven';items:RuleTrailer[];recordingLoss:boolean}
 export interface RuleReplay {
-  version:1;phase:'baseline'|'events'|'gaps'|'losses'|'done';baselineBeforeSeq:string;baselineBeforeId:string;
+  version:typeof RULE_REPLAY_VERSION;phase:'baseline'|'events'|'gaps'|'losses'|'done';baselineBeforeSeq:string;baselineBeforeId:string;
   lossKind:number;lossAfter:string;eventAfter:string;gapAfterSeq:string;gapAfterId:string;next:string;end:string;opening:string;
   clock:string;openingNs:string;openingOrder:string;items:RuleTrailer[];opened:boolean;changed:boolean;unproven:boolean;recordingLoss:boolean;
+  initializing:boolean;recovering:boolean;leadConfiguration:string;
 }
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const exact=(v:unknown,keys:string[]):v is Record<string,unknown>=>object(v)&&Object.keys(v).sort().join(',')===[...keys].sort().join(',');
@@ -45,23 +47,32 @@ export function isRuleContext(v:unknown):v is RuleContext {
     &&isRuleItems(v.items)&&typeof v.recordingLoss==='boolean'&&(v.status!=='proven'||!v.recordingLoss&&v.items.length>0&&v.items[0].index===0&&usable(v.items[0].bodyType)&&v.items.every(item=>usable(item.id)));
 }
 export function isRuleReplay(v:unknown):v is RuleReplay {
-  const numbers=['baselineBeforeSeq','baselineBeforeId','eventAfter','gapAfterSeq','gapAfterId','next','end','opening','openingNs','openingOrder','lossAfter'];
-  return exact(v,['version','phase',...numbers,'lossKind','clock','items','opened','changed','unproven','recordingLoss'])&&v.version===1
+  const numbers=['baselineBeforeSeq','baselineBeforeId','eventAfter','gapAfterSeq','gapAfterId','next','end','opening','openingNs','openingOrder','lossAfter','leadConfiguration'];
+  return exact(v,['version','phase',...numbers,'lossKind','clock','items','opened','changed','unproven','recordingLoss','initializing','recovering'])&&v.version===RULE_REPLAY_VERSION
     &&['baseline','events','gaps','losses','done'].includes(String(v.phase))&&numbers.every(k=>uint(v[k]))&&Number.isInteger(v.lossKind)&&Number(v.lossKind)>=0&&Number(v.lossKind)<=3&&uuid(v.clock)&&isRuleItems(v.items)
-    &&['opened','changed','unproven','recordingLoss'].every(k=>typeof v[k]==='boolean');
+    &&['opened','changed','unproven','recordingLoss','initializing','recovering'].every(k=>typeof v[k]==='boolean');
 }
 export function chainComplete(items:RuleTrailer[]):boolean {
   return items.length>0&&items[0].index===0&&usable(items[0].bodyType)&&items.every((item,index)=>item.index===index&&usable(item.id));
 }
-export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRecord,clock:string):void {
+export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRecord,clock:string,
+  simulation:EventOccurrence['simulation']):void {
   if(sequence!==state.next||clock!==state.clock)state.unproven=true;
   state.next=(BigInt(sequence)+1n).toString();state.eventAfter=sequence;
-  if(sequence===state.opening)state.opened=true;
+  if(sequence===state.opening){
+    state.opened=true;
+    state.initializing=state.items.length===0;
+  }
+  if(state.opened&&(simulation!=='paused'||record.type==='simulation.started'))state.initializing=false;
   if(record.type==='trailer.configured'){
     const item={index:record.index,id:record.id,bodyType:record.bodyType,chainType:record.chainType};
+    if(item.index===0)state.leadConfiguration=sequence;
     const prior=state.items.find(i=>i.index===item.index);
     const equal=(a:Available<string>,b:Available<string>)=>a.available?b.available&&a.value===b.value:!b.available&&a.reason===b.reason;
-    if(state.opened&&(!prior||!equal(prior.id,item.id)||!equal(prior.bodyType,item.bodyType)||!equal(prior.chainType,item.chainType)))state.changed=true;
+    // The SDK can fill empty slots after accepting a job in the menu, before driving starts.
+    if(state.opened&&(prior
+      ? !equal(prior.id,item.id)||!equal(prior.bodyType,item.bodyType)||!equal(prior.chainType,item.chainType)
+      : !state.initializing))state.changed=true;
     state.items=state.items.filter(i=>i.index!==item.index);state.items.push(item);state.items.sort((a,b)=>a.index-b.index);
   }else if(record.type==='trailer.cleared'){
     if(state.opened)state.changed=true;
@@ -69,6 +80,10 @@ export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRec
   }
 }
 export function finishRuleReplay(state:RuleReplay):RuleContext {
-  const status=state.changed?'changed':state.unproven||!state.opened?'unproven':chainComplete(state.items)?'proven':'unavailable';
+  const lead=state.items[0];
+  // After a startup loss only a freshly observed single chain proves there are no missing slots.
+  const recovered=state.items.length===1&&lead.chainType.available&&lead.chainType.value==='single';
+  const status=state.changed?'changed':state.unproven||!state.opened||state.recovering&&!recovered
+    ?'unproven':chainComplete(state.items)?'proven':'unavailable';
   return {version:2,status,items:state.changed?[]:state.items,recordingLoss:state.recordingLoss};
 }
