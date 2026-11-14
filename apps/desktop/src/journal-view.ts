@@ -307,7 +307,7 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
   const {trip, job: {values: job}} = detail, language = options.language ?? 'en';
   const units = unitsFor(trip.game, options), zone = options.timeZone;
   const truck = detail.truck?.values, truckType = truckPowertrain(trip.game, truck?.id.available ? truck.id.value : undefined);
-  const powertrain = detail.energyPowertrain ?? truckType;
+  const powertrain = journalEnergyPowertrain(detail);
   const electric = powertrain === 'electric';
   const record = detail.outcomeDetails?.record ?? null;
   const delivered = record?.type === 'job.delivered' ? record : null, cancelled = record?.type === 'job.cancelled' ? record : null;
@@ -490,7 +490,7 @@ function intervalItem(interval: JournalInterval, options: JournalTextOptions, ga
     eventSeq: interval.firstEventSeq !== null && interval.lastEventSeq !== null ? fill(JOURNAL_STRINGS.eventRange, {first: interval.firstEventSeq, last: interval.lastEventSeq}) : '—', attribution: '—'};
   if (interval.annotation) {
     const added = interval.detail?.addedLiters, type = interval.detail?.powertrain;
-    const powertrain = isTruckPowertrain(type) ? type : options.energyPowertrain ?? 'diesel';
+    const powertrain = isTruckPowertrain(type) ? type : options.energyPowertrain ?? 'unknown';
     return {...shared, kind: 'refuel', tone: 'ok', type: t(powertrain === 'electric' ? 'energy.increased' : powertrain === 'diesel' ? 'ev.refuel' : 'energy.unknownIncrease', undefined, language),
       detail: powertrain !== 'unknown' && typeof added === 'number' && Number.isFinite(added) ? amount(unitsFor(game, options), powertrain)(added) : '—'};
   }
@@ -576,21 +576,23 @@ const sourceSecond = (sample: JournalSample) => BigInt(sample.monotonicNs) / 1_0
 function journalSampleText(page: JournalSamplePage, game: JournalGame, options: JournalTextOptions = {}): JournalSampleText {
   const units = unitsFor(game, options), rows: JournalSampleRow[] = [], language = options.language ?? 'en';
   let previous: JournalSample | undefined;
+  const powertrains = new Set<TruckPowertrain>();
   for (const sample of page.samples) {
+    const powertrain = sample.powertrain ?? options.energyPowertrain ?? 'unknown';
+    powertrains.add(powertrain);
     if (previous && (previous.pluginSessionId !== sample.pluginSessionId || previous.sourceClockId !== sample.sourceClockId)) rows.push({kind: 'restart', key: `restart-${sample.id}`, text: JOURNAL_STRINGS.sourceRestarted});
     else if (previous) {
       const missing = sourceSecond(sample) - sourceSecond(previous) - 1n;
       if (missing > 0n) rows.push({kind: 'gap', key: `gap-${sample.id}`, text: fill(JOURNAL_STRINGS.sampleGap, {seconds: missing.toString()})});
     }
     rows.push({kind: 'sample', key: sample.id, time: localTime(sample.utcMs, options.timeZone), speed: show(sample.speed, value => formatSpeed(value, units.speed)),
-      fuel: show(sample.fuel, amount(units, sample.powertrain ?? options.energyPowertrain ?? 'diesel')),
-      consumption: show(sample.averageConsumption, value => consumptionText(value, units, sample.powertrain ?? options.energyPowertrain ?? 'diesel')),
+      fuel: show(sample.fuel, amount(units, powertrain)),
+      consumption: show(sample.averageConsumption, value => consumptionText(value, units, powertrain)),
       range: show(sample.estimatedRange, distance(units)), rpm: show(sample.engineRpm, formatRpm), gear: show(sample.gear, formatGear),
       odometer: show(sample.odometer, distance(units)), gameTime: sampleGameTime(sample, language), position: show(sample.position, formatPosition)});
     previous = sample;
   }
   const L = JOURNAL_LABEL_TEXT;
-  const powertrains = new Set(page.samples.map(sample => sample.powertrain ?? options.energyPowertrain ?? 'diesel'));
   const amountLabel = powertrains.size === 1 && powertrains.has('electric') ? t('energy.charge', undefined, language)
     : powertrains.has('electric') ? t('energy.amount', undefined, language) : L.fuel;
   const columns: JournalColumn[] = [{label: L.time}, {label: L.speed}, {label: amountLabel}, {label: L.gear}, {label: L.rpm}, {label: L.odometer}, {label: L.range},
@@ -618,6 +620,10 @@ export const outcomeText = (trip: Pick<JournalTripListItem, 'outcome' | 'closeRe
 export const completenessBadge = (completeness: JournalTripListItem['recordingCompleteness'], language: AppLanguage = 'en'): ReturnType<typeof texts.en.completenessBadge> => texts[language].completenessBadge(completeness);
 export const localTime = texts.en.localTime;
 /** `partial: <reasons>` for a partial engine-1 quantity, null otherwise (the trip tiles, ET-112e). */
+export function journalEnergyPowertrain(detail: JournalTripDetail): TruckPowertrain {
+  const id = detail.truck?.values.id;
+  return detail.energyPowertrain ?? truckPowertrain(detail.trip.game, id?.available ? id.value : undefined);
+}
 export const journalPartialText = (p: JournalAccounting['distance'] | JournalAccounting['fuel'] | undefined, language: AppLanguage = 'en'): string | null => texts[language].partialText(p);
 export const gameModeText = (mode: JournalGameMode, ambiguous: boolean, language: AppLanguage = 'en'): string => texts[language].gameModeText(mode, ambiguous);
 

@@ -1,5 +1,5 @@
 import type {JournalTripDetail} from '../../../../packages/contracts/src';
-import {journalDetailText, journalDurationText, journalPartialText, type JournalTextOptions} from '../journal-view';
+import {journalDetailText, journalDurationText, journalEnergyPowertrain, journalPartialText, type JournalTextOptions} from '../journal-view';
 import {t} from '../i18n';
 /** Hero text and provenance are separate typed bindings; neither digits nor currency are parsed out of formatted strings. */
 export function journalTileValues(detail: JournalTripDetail, options: JournalTextOptions = {}) {
@@ -12,8 +12,9 @@ export function journalTileValues(detail: JournalTripDetail, options: JournalTex
   // Each stored sample is one source second, the basis of the list's recorded hours; UTC labels are never a duration (J13).
   const seconds = detail.samples.count;
   const observed = field('distance', 'observedDistance'), planned = field('distance', 'plannedDistance');
-  const electric = detail.energyPowertrain === 'electric';
-  const energyKnown = detail.energyPowertrain !== 'unknown' && detail.trip.fuelUsedL.available;
+  const powertrain = journalEnergyPowertrain(detail);
+  const electric = powertrain === 'electric';
+  const energyKnown = powertrain !== 'unknown' && detail.trip.fuelUsedL.available;
   const distancePartial = journalPartialText(detail.trip.accounting?.distance, language);
   // ET-112e: a delivered trip's game distance is the tile's hero, with the odometer distance as a separate note.
   const distanceTile = delivered?.distance.available
@@ -34,7 +35,7 @@ export function journalTileValues(detail: JournalTripDetail, options: JournalTex
     planned,
     // The distance tile's label, hero value and notes; `distance` stays the observed value.
     distanceTile,
-    fuelPartial: detail.energyPowertrain === 'unknown' ? null : journalPartialText(detail.trip.accounting?.fuel, language),
+    fuelPartial: powertrain === 'unknown' ? null : journalPartialText(detail.trip.accounting?.fuel, language),
     // Null unless the game reported a delivery: a trip without one has no game-reported distance to label.
     gameDistance: delivered ? field('distance', 'deliveredDistance') : null,
     expected: field('money', 'expectedIncome'),

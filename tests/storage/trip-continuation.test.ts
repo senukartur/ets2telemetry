@@ -2014,7 +2014,7 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     const document=await reads.exported(root);
     expect(document.formatVersion).toBe(7);
     expect(document.trip).toMatchObject({outcome:values.outcome,recordingCompleteness:values.recordingCompleteness,observedDistanceM:values.observedDistanceM,
-      powertrain:'unknown',energyUsed:{available:false,unit:null},accounting:{...accounting,fuel:{...accounting.fuel,status:'unavailable'}},
+      powertrain:'unknown',energyUsed:{available:false,unit:null,reason:'unit-unknown'},accounting:{...accounting,fuel:{...accounting.fuel,status:'unavailable'}},
       is_hard_mode:true,hard_mode_details:hardMode});
     const keys=Object.keys(document.trip),energyAt=keys.indexOf('energyUsed');
     expect(keys.slice(energyAt,energyAt+2)).toEqual(['energyUsed','accounting']);

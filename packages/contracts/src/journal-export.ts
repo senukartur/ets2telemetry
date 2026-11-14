@@ -62,7 +62,7 @@ export type TripExportTruck = Omit<TruckConfiguration, 'fuelCapacity'> & {
  * page-time membership hint is not exported.
  */
 export type TripExportTrip = Omit<JournalTripDetail['trip'], 'job' | 'isHardMode' | 'hardModeDetails' | 'accounting' | 'membership' | 'fuelUsedL'>
-  & {is_hard_mode: boolean; hard_mode_details: HardModeDetails | null; accounting: JournalAccounting | null; powertrain: TruckPowertrain; energyUsed: Available<number> & {unit: TruckEnergyUnit | null}};
+  & {is_hard_mode: boolean; hard_mode_details: HardModeDetails | null; accounting: JournalAccounting | null; powertrain: TruckPowertrain; energyUsed: (Available<number> | {available: false; reason: 'unit-unknown'}) & {unit: TruckEnergyUnit | null}};
 
 /** Best-effort evidence from retained logs at export, never a claim that every disconnect was observed. */
 export interface TripExportDiagnostics {

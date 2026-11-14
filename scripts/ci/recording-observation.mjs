@@ -532,7 +532,7 @@ const DELIVERED_RECORD = {type: 'job.delivered', revenue: unknownMoney('12000', 
  */
 const exportTripSection = (session, trip, audit) => ({is_hard_mode: false, hard_mode_details: audit, tripUuid: trip, pluginSessionId: session, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'},
   gameModeAmbiguous: false, outcome: 'delivered', closeReason: 'outcome', recordingCompleteness: 'partial', startedUtcMs: labelAt(30), endedUtcMs: labelAt(600),
-  observedDistanceM: {available: false, reason: 'not-observed'}, powertrain: 'unknown', energyUsed: {available: false, reason: 'not-observed', unit: null},
+  observedDistanceM: {available: false, reason: 'not-observed'}, powertrain: 'diesel', energyUsed: {available: false, reason: 'not-observed', unit: 'L'},
   accounting: {engine: 1, distance: {status: 'unavailable', breaks: [], quality: []}, fuel: {status: 'unavailable', breaks: [], quality: []}}, openedBy: 'event', openedEventSeq: '3', outcomeEventSeq: '8',
   closedBy: {pluginSessionId: session, eventSeq: '8'}});
 /** Independent oracle: no Hard Mode fixture is enabled, so the normal reader refuses this synthetic source before
@@ -580,7 +580,7 @@ async function reconcileExport({config, record, raw, session, restartMainEvents}
   const document = JSON.parse(await readFile(path.join(config.output, 'recording-export', 'trip.json'), 'utf8'));
   const problemsOf = await exportValidator(config);
   journal.exportProblems = problemsOf(document);
-  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 6 document');
+  assert.deepEqual(journal.exportProblems, [], 'The export is not a valid format version 7 document');
   journal.exportValidated = true;
 
   // Hand-written sections.

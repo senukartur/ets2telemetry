@@ -407,6 +407,20 @@ describe('immutable private upload projections through the SQLite worker', () =>
       expect(ok(await prepare(client, tripUuid)).facts.fuelUsed).toEqual({...absent, unit: 'L'});
       await client.close();
     });
+  it('withholds the total unit when a retained run has an unreadable truck identity', async () => {
+    const client = await start(), s = new Script(ETS2_A), tripUuid = await open(client, s);
+    const message = gameShaped(s.event(r.truckConfigured(truck({id: {available: true, value: 'vehicle.daf.xf_electric'}}))));
+    ok(await client.commitEvent({message, effects: [{kind: 'trip.update', tripUuid, set: {truckConfiguration: 'this-event'}}]}));
+    await appendSample(client, s, tripUuid, 2, 1_000_000);
+    await appendSample(client, s, tripUuid, 3, 1_000_050);
+
+    const detail = ok(await client.journalTrip(tripUuid));
+    expect(detail.trip.fuelUsedL.available).toBe(true);
+    expect(detail.energyPowertrain).toBe('unknown');
+    expect(ok(await prepare(client, tripUuid)).facts.fuelUsed).toEqual({...absent, unit: 'L'});
+    await client.close();
+  });
+
   it('preserves selected save accounting and unavailable fuel instead of summing member totals', async () => {
     // Its subject is the engine-0 save rollback against a raw total (ET-112c).
     const client=await start('history',storageWorker(ENGINE_0)),s=new Script(ETS2_A),uuid=await open(client,s);

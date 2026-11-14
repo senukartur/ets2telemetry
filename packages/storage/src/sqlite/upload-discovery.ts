@@ -3,6 +3,7 @@ import {validCoverage} from './logical-coverage';
 import {decisionState,identityPending} from './identity-pending';
 import type Database from 'better-sqlite3';
 import {fail} from '../errors';
+import {truckPowertrain} from '../../../telemetry-core/src/truck-powertrain';
 export type Row=Record<string,unknown>;
 export const get=(db:Database.Database,sql:string,...args:unknown[])=>db.prepare(sql).get(...args) as Row|undefined;
 export const all=(db:Database.Database,sql:string,...args:unknown[])=>db.prepare(sql).all(...args) as Row[];
@@ -78,7 +79,7 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
     JOIN logical_trips l ON l.id=r.logical_ref JOIN logical_memberships m ON m.trip_ref=l.id WHERE r.id=?`,revision));
   const row=JSON.parse(String(r.row_json)) as Row,outcome=String(row.outcome),head=r.progress_head===null?undefined:get(db,'SELECT distance_m,fuel_used_l FROM logical_progress WHERE id=?',r.progress_head);
   const evidence=get(db,'SELECT generation FROM upload_projection_evidence_versions WHERE root_ref=?',root)?.generation??0n;
-  const fields=['game','game_mode','game_mode_method','game_mode_confidence','game_mode_ambiguous','truck_configuration_ref','job_configuration_ref','opened_by','opened_event_ref',
+  const fields=['game','game_mode','game_mode_method','game_mode_confidence','game_mode_ambiguous','job_configuration_ref','opened_by','opened_event_ref',
     'outcome','outcome_event_ref','close_reason','recording_completeness','started_utc_ms','ended_utc_ms','closed_by_session_ref','closed_by_event_seq',
     'observed_distance_m_state','fuel_used_l_state','is_hard_mode','hard_mode_details','_moneyIncomplete','_rawDistance','_rawFuel','_currentProgress'];
   // Separate material context/availability from ordinary OPEN counter values and update labels.
@@ -87,8 +88,12 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
   const quality=[coverage?.start,coverage?.phase,coverage?.losses,coverage?.acceptancePending??false,endpoint?.distanceM.available,endpoint?(endpoint.distanceM.available?null:endpoint.distanceM.reason):null,endpoint?.fuelUsedL.available,endpoint?(endpoint.fuelUsedL.available?null:endpoint.fuelUsedL.reason):null];
   const ruleContext=Number(db.pragma('user_version',{simple:true}))>=7
     ?JSON.stringify([outcome==='open'?ruleNativeBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer)):null,ruleLossBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer))]):null;
+  // Keep the old key for existing diesel and unknown roots. React to entering or leaving an explicitly electric model.
+  const truck = row.truck_configuration_ref as {$integer: string} | null;
+  const model = truck ? get(db,'SELECT model_id FROM truck_configurations WHERE id=?',BigInt(truck.$integer))?.model_id : undefined;
+  const electric = truckPowertrain(row.game as 'ets2' | 'ats', typeof model === 'string' ? model : undefined) === 'electric';
   const materialKey=[ruleContext,...fields.map(field=>row[field]),...quality,evidence,r.retired,r.proof_json===null?0:1,head?.distance_m===null?'distance-unknown':'distance-supported',
-    head?.fuel_used_l===null?'fuel-unknown':'fuel-supported',...(outcome==='open'?[]:[r.progress_head,row.observed_distance_m,row.fuel_used_l,endpoint?.distanceM.available?endpoint.distanceM.value:null,endpoint?.fuelUsedL.available?endpoint.fuelUsedL.value:null])].map(atom).join('|');
+    head?.fuel_used_l===null?'fuel-unknown':'fuel-supported',...(outcome==='open'?[]:[r.progress_head,row.observed_distance_m,row.fuel_used_l,endpoint?.distanceM.available?endpoint.distanceM.value:null,endpoint?.fuelUsedL.available?endpoint.fuelUsedL.value:null]),...(electric?['electric-truck']:[])].map(atom).join('|');
   const prior=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',root),material=!prior||prior.material_key!==materialKey||prior.dirty===1n;
   const position=connection(db).next_change;
   db.prepare('UPDATE upload_connection SET next_change=next_change+1 WHERE id=1').run();

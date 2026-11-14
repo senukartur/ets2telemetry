@@ -90,3 +90,17 @@ it('uses recorded units in Journal and in the version 7 export, including a mixe
   expect(exported.trip).not.toHaveProperty('fuelUsedL');
   expect(exported.intervals[0].detail).not.toHaveProperty('addedLiters');
 });
+
+it('preserves the export availability reason when the energy unit is unknown', () => {
+  const detail = structuredClone(DETAIL) as unknown as JournalTripDetail;
+  detail.energyPowertrain = 'unknown';
+  const header = tripExportHeader({uuid: 'f0000000-0000-4000-8000-000000000001', ...detail.database}, 'test', 0);
+  const energy = () => {
+    const serializer = new TripExportSerializer(detail, header);
+    return JSON.parse(serializer.begin() + serializer.end()).trip.energyUsed;
+  };
+  detail.trip.fuelUsedL = value(12);
+  expect(energy()).toEqual({available: false, reason: 'unit-unknown', unit: null});
+  detail.trip.fuelUsedL = {available: false, reason: 'invalid'};
+  expect(energy()).toEqual({available: false, reason: 'invalid', unit: null});
+});

@@ -494,7 +494,7 @@ function engineOneSamples(storage:Storage,source:Awaited<ReturnType<typeof setup
   const point=(at:number,odo:number,fuel:number,speed:number):SampleInput=>({tripUuid:source.tripUuid,utcMs:1000+at*1000,sourceClockId:s.clockId,
     monotonicNs:String(BigInt(at)*1_000_000_000n),gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},speed:{available:true,value:speed},
     fuel:{available:true,value:fuel},averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:{available:true,value:{x:odo-1_000_000,y:0,z:0}},
-    odometer:{available:true,value:odo},recording:{profile:proof(s),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
+    odometer:{available:true,value:odo},recording:{profile:proof(s),job:job(),truck:JSON.stringify([{state:'value',value:'synthetic_brand'},{state:'value',value:'vehicle.synthetic_truck'},{state:'value',value:'SYN 0001'}]),processInstanceId:s.welcome().source.processInstanceId,
       ...(at>1?{previous:{tripUuid:source.tripUuid,sourceClockId:s.clockId,monotonicNs:String(BigInt(at-1)*1_000_000_000n)}}:{})}});
   ok(storage.appendSamples(s.session,[point(1,1_000_000,100,20),point(2,1_000_020,99.99,20),point(3,1_000_040,99.98,0)],{uniqueSeconds:true}));
 }
@@ -575,7 +575,7 @@ it.each([['a forward gap',1_000_100,true],['the same save point',1_000_040,false
   const point=(s:Script,uuid:string,at:number,odo:number,fuel:number,speed:number,withProof:boolean):SampleInput=>({tripUuid:uuid,utcMs:1000+at*1000,sourceClockId:s.clockId,
     monotonicNs:String(BigInt(at)*1_000_000_000n),gameTime:{minutes:{available:true,value:500},clockId:'40000000-0000-4000-8000-000000000001'},speed:{available:true,value:speed},
     fuel:{available:true,value:fuel},averageConsumption:absent,estimatedRange:absent,engineRpm:absent,gear:absent,position:{available:true,value:{x:odo-1_000_000,y:0,z:0}},
-    odometer:{available:true,value:odo},recording:{...(withProof?{profile:proof(s)}:{}),job:job(),truck:'verified-truck',processInstanceId:s.welcome().source.processInstanceId,
+    odometer:{available:true,value:odo},recording:{...(withProof?{profile:proof(s)}:{}),job:job(),truck:JSON.stringify([{state:'value',value:'synthetic_brand'},{state:'value',value:'vehicle.synthetic_truck'},{state:'value',value:'SYN 0001'}]),processInstanceId:s.welcome().source.processInstanceId,
       ...(at>1?{previous:{tripUuid:uuid,sourceClockId:s.clockId,monotonicNs:String(BigInt(at-1)*1_000_000_000n)}}:{})}});
   const payload=(id:string|null)=>db.prepare('SELECT payload FROM upload_envelopes WHERE event_id=?').pluck().get(id) as Uint8Array;
   const wire=(id:string|null)=>JSON.parse(Buffer.from(payload(id)).toString()) as UploadEnvelope;

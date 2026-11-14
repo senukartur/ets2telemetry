@@ -157,6 +157,8 @@ The ET-014 reducer that computes these effects, and its caller contract for ET-0
 
 **Fuel used (ET-016b PR-6).** `trip.update` accepts `fuelUsedL`, an availability object in litres, on open and closed trips, with the same validation as `observedDistanceM`: exactly `{available: true, value}` with a finite value of at least zero, or exactly `{available: false, reason}` with a known reason. Anything else, including a negative value, is `INVALID_INPUT` and rolls back the commit. It writes `fuel_used_l` and `fuel_used_l_state`. `TripRecord.fuelUsedL` reads the pair back as an availability object, `not-observed` until the trip's first fuel update; zero is a value. The reducer never sends a negative value: it sends `invalid` for a negative total ([trips](trips.md#readings-accounting-t16-t17)). Cold-start seeds pass an available stored value as `TripSeed.fuelUsedL`.
 
+The historical fuel columns store the SDK's reading and retain their original numeric representation. Journal reads derive the amount unit from the recorded model ID, using the sample's stored recorder identity when present and time-qualified truck configuration evidence for older samples. Totals require a single supported unit across the recorded evidence. Dashboard projections only use the stored number as liters when the evidence establishes diesel.
+
 ### Late-attach trips (ET-016b PR-7)
 
 `openAttachedTrip({pluginSessionId, nextEventSeq, job, effects})` stores the trip that a checkpoint job opens when the recorder attached after the job started (J9, [trips](trips.md#late-attach-trips-j9)). In one `BEGIN IMMEDIATE` transaction it:
@@ -451,8 +453,6 @@ Both event-sequence columns hold the 20-digit key of `events.event_seq`. The row
 `schema-v8-representative.{sql,sqlite,expected.json}` freezes a schema 8 history for this migration: a proof-bearing two-member group closed by restarts, a proof-less delivered trip, a proof-less open trip and a complete delivered trip. It was written through the schema 8 storage commands, dumped to the SQL file and rebuilt from it.
 
 ## Schema version 10 (ET-112)
-
-The historical fuel columns store the SDK's reading and retain their original numeric representation. Journal reads derive the amount unit from the recorded model ID, using the sample's stored recorder identity when present and time-qualified truck configuration evidence for older samples. Totals require a single supported unit across the recorded evidence. Dashboard projections only use the stored number as liters when the evidence establishes diesel.
 
 Migration `0010-quantity-engine` ([schema-v10.ts](../packages/storage/src/sqlite/schema-v10.ts)) adds two columns, without a backfill, a rebuild or a new index; the verified backup, the integrity checks and the `SCHEMA_NEWER` refusal of a schema 9 build apply unchanged.
 

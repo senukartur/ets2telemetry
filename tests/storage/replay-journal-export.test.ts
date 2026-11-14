@@ -309,7 +309,9 @@ async function expectExports(journal: JournalService, s: Scenario, trips: TripEx
     const detail = parseJournalReply({kind: 'trip', tripUuid: uuidOf(t.label, seed)}, result);
     if (!detail?.ok) throw new Error('Expected journal trip');
     const type = (detail.value as JournalTripDetail).energyPowertrain;
-    const energyUsed = type === 'diesel' ? {...fuelUsedL as Json, unit: 'L'} : {available: false, reason: 'not-observed', unit: null};
+    const storedEnergy = fuelUsedL as Json;
+    const energyUsed = type === 'diesel' ? {...storedEnergy, unit: 'L'}
+      : {available: false, reason: storedEnergy.available === true ? 'unit-unknown' : storedEnergy.reason, unit: null};
     const original = trip.accounting as JournalAccounting | null;
     const accounting = type === 'unknown' && original ? {...original, fuel: {...original.fuel, status: 'unavailable'}} : original;
     expect(document.trip, t.label).toEqual({is_hard_mode: isHardMode, hard_mode_details: hardModeDetails, ...trip, powertrain: type, energyUsed, accounting});

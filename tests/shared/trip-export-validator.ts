@@ -59,7 +59,9 @@ export function tripExportProblems(document: unknown): string[] {
     if (!isObject(value)) return;
     if ('available' in value) {
       const keys = Object.keys(value).filter(key => key !== 'unit');
-      if (value.available === true ? !(keys.length === 2 && 'value' in value) : !(value.available === false && keys.length === 2 && REASONS.includes(textOf(value.reason))))
+      const reason = REASONS.includes(textOf(value.reason))
+        || (energy && where === '$.trip.energyUsed' && value.unit === null && value.reason === 'unit-unknown');
+      if (value.available === true ? !(keys.length === 2 && 'value' in value) : !(value.available === false && keys.length === 2 && reason))
         problem(where, 'not an availability shape');
       if ('unit' in value && typeof value.unit !== 'string'
         && !(energy && value.unit === null && (where === '$.trip.energyUsed' || where.endsWith('.fuelCapacity')))) problem(where, 'unit is not text');

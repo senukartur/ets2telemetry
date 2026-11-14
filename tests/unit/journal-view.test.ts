@@ -495,7 +495,7 @@ describe('one-second samples (J14; REG-009, REG-017)', () => {
   const COLUMNS = [{label: 'Time'}, {label: 'Speed'}, {label: 'Fuel'}, {label: 'Gear'}, {label: 'Engine RPM'}, {label: 'Odometer'}, {label: 'Estimated range'},
     {label: 'SDK average consumption', note: 'SDK mean, not a trip average'}, {label: 'Game time'}, {label: 'World position', note: 'game-world coordinates, not GPS'}];
   const OTHER_CLOCK = '2c000000-0000-4000-8000-00000000000b';
-  const sample = (id: string, second: number, rest: Partial<JournalSample> = {}, clock = CLOCK): JournalSample => ({id, tripUuid: T.delivered, utcMs: BASE_UTC + 4_000 + second * 1_000,
+  const sample = (id: string, second: number, rest: Partial<JournalSample> = {}, clock = CLOCK): JournalSample => ({powertrain: 'diesel', id, tripUuid: T.delivered, utcMs: BASE_UTC + 4_000 + second * 1_000,
     sourceClockId: clock, monotonicNs: (5_000_000_000_000n + BigInt(second) * 1_000_000_000n + 250_000_000n).toString(), gameTime: null, speed: NO, fuel: NO,
     averageConsumption: NO, estimatedRange: NO, engineRpm: NO, gear: NO, odometer: NO, position: NO, ...rest});
   // The delivered anchor's samples (seconds 1, 2 and 4), then a restarted source on another clock.
@@ -724,12 +724,12 @@ describe('the compact trip page (ET-077; REG-003, REG-009, REG-014)', () => {
     const gap = interval('1', null, {startUtcMs: BASE_UTC, endUtcMs: BASE_UTC + 3_600_000, startMonotonicNs: '1000000000', endMonotonicNs: '47000000000'});
     const utcOnly = interval('2', null, {startUtcMs: BASE_UTC, endUtcMs: BASE_UTC + 3_600_000});
     const source = page([], null), text = journalEventText(source, trip);
-    const items = journalTimelineItems(source, text, [gap, utcOnly, interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286}}), interval('4', 2, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 'many'}})], {after: null, through: null}, 'ets2', {units: DEFAULT, timeZone: ZONE});
+    const items = journalTimelineItems(source, text, [gap, utcOnly, interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286, powertrain: 'diesel'}}), interval('4', 2, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 'many'}})], {after: null, through: null}, 'ets2', {units: DEFAULT, timeZone: ZONE});
     expect(items.find(item => item.key === 'interval-1')?.detail).toBe('Missing one-second samples · 46 s');
     expect(items.find(item => item.key === 'interval-2')?.detail).toBe('Missing one-second samples · duration unknown');
     expect(items.find(item => item.key === 'interval-3')).toMatchObject({kind: 'refuel', tone: 'ok', type: 'Refuelled', detail: '286.0 L', time: '1970-01-01 01:00:00'});
     expect(items.find(item => item.key === 'interval-4')).toMatchObject({kind: 'refuel', detail: '—'});
-    expect(journalTimelineItems(source, text, [interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286}})], {after: null, through: null}, 'ats', {units: DEFAULT, timeZone: ZONE})[0].detail).toBe('75.6 US gal');
+    expect(journalTimelineItems(source, text, [interval('3', 1, {annotation: true, cause: 'refuel', kind: 'discontinuity', detail: {addedLiters: 286, powertrain: 'diesel'}})], {after: null, through: null}, 'ats', {units: DEFAULT, timeZone: ZONE})[0].detail).toBe('75.6 US gal');
   });
 
   it('adds gap lengths as a union of monotonic spans and counts the unknown ones apart', () => {

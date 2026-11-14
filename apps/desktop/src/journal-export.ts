@@ -53,7 +53,7 @@ const provenance = <B extends string, Q extends string>(p: JournalQuantityProven
  */
 function trip(t: JournalTripDetail['trip'], powertrain: TruckPowertrain): TripExportTrip {
   const unit = truckEnergyUnit(powertrain);
-  const energyUsed = unit === null ? {available: false, reason: 'not-observed'} as const : t.fuelUsedL;
+  const energyUsed = unit === null && t.fuelUsedL.available ? {available: false, reason: 'unit-unknown'} as const : t.fuelUsedL;
   const accounting = t.accounting;
   return {is_hard_mode: t.isHardMode, hard_mode_details: t.hardModeDetails, tripUuid: t.tripUuid, pluginSessionId: t.pluginSessionId, game: t.game, gameMode: {mode: t.gameMode.mode, method: t.gameMode.method, confidence: t.gameMode.confidence},
     gameModeAmbiguous: t.gameModeAmbiguous, outcome: t.outcome, closeReason: t.closeReason, recordingCompleteness: t.recordingCompleteness,

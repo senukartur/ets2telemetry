@@ -44,7 +44,7 @@ export function tripEnergyPowertrain(db: Database.Database, game: JournalGame, t
       LEFT JOIN logical_trucks t ON t.id=coalesce(a.truck_ref,p.truck_ref)`).pluck(false).all({head}) as {identity_key: string | null; truncated: bigint}[];
     if (runs.some(run => run.truncated === 1n)) return 'unknown';
     const types = new Set(runs.map(run => recordedPowertrain(game, run.identity_key)));
-    if (unitType !== 'unknown') types.delete('unknown');
+    if (types.has('unknown')) return 'unknown';
     if (types.size > 1 || types.size === 1 && unitType !== 'unknown' && !types.has(unitType)) return 'unknown';
     if (unitType === 'unknown' && types.size === 1) unitType = [...types][0];
   }

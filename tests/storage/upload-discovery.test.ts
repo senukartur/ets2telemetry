@@ -4,7 +4,7 @@ import {Storage,MIGRATIONS,type SampleInput} from '../../packages/storage/src';
 import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import {attachTripUuidFor} from '../../packages/telemetry-core/src';
 import {unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
-import {job,r,Script} from '../shared/trip-messages';
+import {job,r,Script,truck} from '../shared/trip-messages';
 import {failed,ok,uploadGame,uploadProof,uploadTestSource,uploadTestOwner,workspace} from './helpers';
 let ws:Awaited<ReturnType<typeof workspace>>,opened:Storage[]=[];
 beforeEach(async()=>{ws=await workspace();});afterEach(async()=>{for(const storage of opened)storage.close();opened=[];await ws.dispose();});
@@ -33,6 +33,25 @@ describe('REG-003/004/005/006/007/008/009/012/014 same-commit discovery',()=>{
     expect(db.prepare('SELECT count(*) FROM upload_source_transitions t LEFT JOIN logical_revisions r ON r.id=t.revision_ref WHERE r.id IS NULL').pluck().get()).toBe(0n);
     const before=head(),bad=uploadGame(script.event(r.paused()));failed(storage.commitEvent({message:bad,effects:[{kind:'trip.update',tripUuid,set:{observedDistanceM:{available:true,value:123}}}]},{testHooks:{beforeCommit:()=>{throw Error('rollback');}}}),'INTERNAL');expect(head()).toEqual(before);
   });
+  it('keeps the material version stable for diesel configuration changes and detects entry to or exit from electric', async () => {
+    const {storage, db} = await direct(0);
+    const {script, tripUuid} = await uploadTestSource(storage);
+    const version = () => db.prepare('SELECT material_version FROM upload_change_heads').pluck().get();
+    const configure = (value: string) => ok(storage.commitEvent({
+      message: uploadGame(script.event(r.truckConfigured(truck({id: {available: true, value}})))),
+      effects: [{kind: 'trip.update', tripUuid, set: {truckConfiguration: 'this-event'}}]
+    }));
+    configure('vehicle.diesel.one');
+    const diesel = version();
+    configure('vehicle.diesel.two');
+    expect(version()).toBe(diesel);
+    configure('vehicle.daf.xf_electric');
+    const electric = version();
+    expect(electric).not.toBe(diesel);
+    configure('vehicle.diesel.two');
+    expect(version()).not.toBe(electric);
+  });
+
   it('persists hand-derived scan cursor milestones, overlaps live discovery and examines rejected owners before filtering',async()=>{
     const old=await ws.open({purpose:'history',migrations:MIGRATIONS.slice(0,5)}),s=new Script('10000000-0000-4000-8000-000000000001');ok(old.upsertSession({message:uploadGame(s.welcome())}));
     for(let i=1;i<=151;i++){const tripUuid=`70000000-0000-4000-8000-${String(i).padStart(12,'0')}`;ok(old.commitEvent({message:uploadGame(s.event(r.jobConfigured())),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));ok(old.commitEvent({message:uploadGame(s.event(r.delivered())),effects:[{kind:'trip.close',tripUuid,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',recordingCompleteness:'complete',endedUtcMs:2000}]}));}old.close();
