@@ -23,8 +23,11 @@ function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row,obsol
   const member=get(db,'SELECT logical_ref FROM logical_memberships WHERE trip_ref=?',work.root_ref);
   if(head&&head.material_version===work.material_version&&head.dirty===0n&&member?.logical_ref===work.root_ref){
     // A replay upgrade alone only replaces this unfinished upload, not other roots' material keys.
-    if(obsoleteReplay)db.prepare('UPDATE upload_change_heads SET dirty=1 WHERE root_ref=?').run(work.root_ref);
-    discoverRevision(db,work.root_ref as bigint,head.revision_ref);
+    if(obsoleteReplay){
+      db.prepare('UPDATE upload_change_heads SET dirty=1 WHERE root_ref=?').run(work.root_ref);
+      // This is the same pending upload, including its original delivery class and scan run.
+      discoverRevision(db,work.root_ref as bigint,head.revision_ref,{mode:work.mode==='backfill'?'backfill':'live',runId:String(work.run_ref)});
+    }else discoverRevision(db,work.root_ref as bigint,head.revision_ref);
   }
   return hold(db,work,'material-changed','stale');
 }

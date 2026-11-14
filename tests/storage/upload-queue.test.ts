@@ -20,10 +20,13 @@ beforeEach(async()=>{ws=await workspace();});afterEach(async()=>{await terminate
 const game=<T extends {source:{origin:string}}>(message:T):T=>({...message,source:{...message.source,origin:'game'}});
 const mode={mode:'unknown',method:'none',confidence:'none'} as const;
 const proof=(s:Script):ProfileObservation=>({version:1,scope:'a'.repeat(64),binding:'b'.repeat(64),game:'ets2',pluginSessionId:s.session,processInstanceId:s.welcome().source.processInstanceId,sourceClockId:s.clockId,afterMonotonicNs:'0',loadGeneration:1});
-async function setup(client:Storage|StorageClient,baseline:boolean|'menu'=false){
+async function connectOwner(client:Storage|StorageClient){
   const install=ok(await client.ensureUploadInstallation()),registrationId=randomUUID(),runId=randomUUID();
   ok(await client.recordUploadRegistration({registrationId,clientInstallationId:install.clientInstallationId!,origin:'https://dashboard.example',accountId:'A',companyId:'company',identityEpoch:'epoch',installationId:randomUUID(),bindingId:randomUUID()}));
   ok(await client.confirmUploadOwner({confirmationId:runId,registrationId,credentialGeneration:'generation',expectedVersion:'0'}));
+  return {registrationId,runId};
+}
+async function recordOpening(client:Storage|StorageClient,baseline:boolean|'menu'){
   const s=new Script(ETS2_A),tripUuid=tripUuidFor(s.session,'1');ok(await client.upsertSession({message:game(s.welcome())}));
   if(baseline){
     const checkpoint=game(s.checkpoint(null));checkpoint.data.state.boundaryOrder='0';
@@ -31,7 +34,11 @@ async function setup(client:Storage|StorageClient,baseline:boolean|'menu'=false)
     ok(await client.recordTrailerBaseline({message:checkpoint}));
   }
   ok(await client.commitEvent({message:game(s.event(r.jobConfigured(),{simulation:baseline==='menu'?'paused':'running'})),profile:proof(s),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
-  return {s,tripUuid,registrationId,runId};
+  return {s,tripUuid};
+}
+async function setup(client:Storage|StorageClient,baseline:boolean|'menu'=false){
+  const owner=await connectOwner(client);
+  return {...await recordOpening(client,baseline),...owner};
 }
 async function complete(client:Storage|StorageClient,input:{tripUuid:string;registrationId:string}){
   const workId=randomUUID();let work=ok(await client.beginUploadMaterialization({tripUuid:input.tripUuid,registrationId:input.registrationId,workId}));
@@ -470,12 +477,18 @@ it.each(['after-terminal','unknown','overlap','hidden-overlap'] as const)('TEL-0
   expect(summary.evidence.reasons).toEqual(completeContext?[]:['recording-intervals','trailer-context-unproven']);
 });
 
-it.each(['preparing','ready','frozen'] as const)('TEL-034 upgrades a menu job with a legacy %s trailer proof',async state=>{
+it.each([
+  ['preparing','live'],['ready','live'],['ready','backfill'],['frozen','live'],
+] as const)('TEL-034 upgrades a menu job with a legacy %s trailer proof (%s)',async(state,deliveryMode)=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);
-  const source=await setup(storage,'menu'),db=conn.writer();
-  ok(storage.commitEvent({message:game(source.s.event(r.trailerConfigured(),{simulation:'paused'}))}));
-  ok(storage.commitEvent({message:game(source.s.event(r.started()))}));
-  delivered(storage,source);
+  const liveOwner=deliveryMode==='live'?await connectOwner(storage):null;
+  const opening=await recordOpening(storage,'menu'),db=conn.writer();
+  ok(storage.commitEvent({message:game(opening.s.event(r.trailerConfigured(),{simulation:'paused'}))}));
+  ok(storage.commitEvent({message:game(opening.s.event(r.started()))}));
+  delivered(storage,opening);
+  const source={...opening,...(liveOwner??await connectOwner(storage))};
+  if(deliveryMode==='backfill')
+    expect(ok(storage.advanceUploadScan({runId:source.runId,registrationId:source.registrationId})).phase).toBe('complete');
   const workId=await complete(storage,source);
   const pin=JSON.parse(String(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(workId)));
   expect(pin.ruleContext.status).toBe('proven');
@@ -520,7 +533,8 @@ it.each(['preparing','ready','frozen'] as const)('TEL-034 upgrades a menu job wi
   }
   const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));
   expect(attempt.status).toBe('claimed');
-  const {snapshot}=JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope;
+  const {snapshot,delivery}=JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope;
+  expect(delivery).toEqual({mode:deliveryMode,syncRunId:source.runId});
   expect(snapshot.trailers.complete).toBe(state!=='frozen');
   expect(snapshot.evidence.reasons).toEqual(state==='frozen'?['trailer-context-changed']:[]);
 });
@@ -555,7 +569,7 @@ function engineOneSamples(storage:Storage,source:Awaited<ReturnType<typeof setup
       ...(at>1?{previous:{tripUuid:source.tripUuid,sourceClockId:s.clockId,monotonicNs:String(BigInt(at-1)*1_000_000_000n)}}:{})}});
   ok(storage.appendSamples(s.session,[point(1,1_000_000,100,20),point(2,1_000_020,99.99,20),point(3,1_000_040,99.98,0)],{uniqueSeconds:true}));
 }
-const delivered=(storage:Storage,source:Awaited<ReturnType<typeof setup>>)=>ok(storage.commitEvent({message:game(source.s.event(r.delivered())),
+const delivered=(storage:Storage,source:Awaited<ReturnType<typeof recordOpening>>)=>ok(storage.commitEvent({message:game(source.s.event(r.delivered())),
   effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
 // ET-113: the negotiated minor fixes the frozen shape. v1.0 has neither field, v1.1 adds hardModeResult, v1.2 also adds
 // the accounting status of the engine-1 ledger head; every shape validates and is claimed with its exact bytes.
