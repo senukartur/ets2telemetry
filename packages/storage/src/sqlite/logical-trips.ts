@@ -13,7 +13,7 @@ import {jobValues} from './journal';
 import {advanceHardMode, hardModeLoss, emptyHardModeCounts, qualifiesHardMode} from '../../../telemetry-core/src/hard-mode';
 import {readHardModeDetails} from './hard-mode';
 import {rootBound} from './identity-pending';
-import {applyQuantities, chargeRetroactiveSplice, defaultEngine, junctionCoverage, projectQuantitySample, quantitiesEnabled, spliceMember} from './quantities';
+import {applyQuantities, chargeRetroactiveSplice, defaultEngine, junctionCoverage, projectQuantitySample, proofWait, quantitiesEnabled, spliceMember} from './quantities';
 
 export type LogicalRow = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as LogicalRow | undefined;
@@ -128,7 +128,9 @@ export function associate(db: Database.Database, row: LogicalRow, proof: Profile
 
     db.prepare('UPDATE logical_trips SET latest_trip_ref = ?, member_count = member_count + 1, accounting_rebased=1,canonical_constraints=? WHERE id = ?').run(row.id,JSON.stringify(combined), id);
     revise(db,abandonedGroup);
-    if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), sampleResumePending:false, member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
+    // A previous member's junction still waiting for its proof (ET-112k) never got it: an unknown loss.
+    if (coverage) pendingCoverage = {...coverage,...(ownAcceptancePending?{acceptancePending:true}:{}), sampleResumePending:false, proofPending: undefined,
+      losses: coverage.losses | (coverage.proofPending === undefined ? 0 : COVERAGE_LOSS.unknown), member: String(row.id), phase: 'pending', endpoint: latestEndpoint(db, coverage.endpoint, candidate.progress_head, candidate.latest_trip_ref),
       window: {session: String(row.plugin_session_ref), opened: row.opened_event_ref === null ? null : (row.opened_event_ref as bigint).toString()}};
   } else if (decision.interrupt) {
     // Complete verified evidence of another, conflicting or ambiguous job replaces the other unresolved trips of the profile
@@ -372,7 +374,10 @@ export function projectSample(db: Database.Database, session: {game: string; pro
   if(sample.recording.truck!==null){db.prepare('INSERT OR IGNORE INTO logical_trucks(identity_key) VALUES(?)').run(sample.recording.truck);truckRef=get(db,'SELECT id FROM logical_trucks WHERE identity_key=?',sample.recording.truck)!.id;}
   const group = get(db, 'SELECT * FROM logical_trips WHERE id = ?', id)!;
   if (group.accounting_engine === 1n) {
-    const decided = junctionCoverage(db, row, latestCoverage(db, id).value, projectQuantitySample(db, id, row, sample, sampleId, truckRef, now), proof !== undefined);
+    // A junction waiting for its proof (ET-112k) compares the sample with the ledger's last anchor before the ledger records it.
+    const coverage = latestCoverage(db, id).value, waited = proofWait(db, id, row, coverage, sample, sampleId, proof !== undefined);
+    const savePoint = projectQuantitySample(db, id, row, sample, sampleId, truckRef, now);
+    const decided = coverage?.proofPending !== undefined ? waited : junctionCoverage(db, row, coverage, savePoint, proof !== undefined, sample.monotonicNs);
     if (decided) revise(db, id, decided);
     return;
   }

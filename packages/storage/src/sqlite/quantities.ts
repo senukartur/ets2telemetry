@@ -7,6 +7,8 @@
 import type Database from 'better-sqlite3';
 import {advanceQuantities, completeAnchor, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAGS, memoryPath, QUANTITY_FLAGS, QUANTITY_POINT_LIMIT, QUANTITY_RUN_LIMIT, quantityStatus,
   type QuantityAdvance, type QuantityAnchor, type QuantityPath, type QuantityPoint, type QuantityRun, type QuantityStep} from '../../../telemetry-core/src/trips/quantities';
+import {READING_HOLE_SECONDS} from '../../../telemetry-core/src/trips/accounting';
+import {matchesSavedEndpoint} from '../../../telemetry-core/src/trips/saved-endpoint';
 import {JOURNAL_DISTANCE_BREAKS, JOURNAL_DISTANCE_QUALITY, JOURNAL_FUEL_BREAKS, JOURNAL_FUEL_QUALITY, type JournalAccounting, type JournalQuantityStatus} from '../../../contracts/src/journal';
 import {MAX_RESOLVE_MEMBERSHIPS, MAX_SAMPLE_BATCH, type SampleInput} from '../api';
 import type {UploadAccounting} from '../upload-projection';
@@ -182,10 +184,13 @@ function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Sto
  * recorded predecessor is the ledger's last complete anchor of the same raw trip. Returns the savePoint of a member junction.
  */
 export function projectQuantitySample(db: Database.Database, logical: bigint, row: Row, sample: SampleInput, sampleId: bigint, truckRef: unknown, now: number): boolean | null {
+  return advanceLedger(db, logical, row, stored(db, sampleId, sample.recording?.truck ?? null), truckRef, recorderLink(row, sample), null, now).decided ?? null;
+}
+/** The recorder link of a live sample of raw trip `row`: its recorded predecessor is the anchor `a` of the same raw trip. */
+function recorderLink(row: Row, sample: SampleInput): (a: Stored) => boolean {
   const previous = sample.recording?.previous;
-  const link = (a: Stored) => !!previous && previous.tripUuid === sample.tripUuid && a.trip === row.id && previous.sourceClockId === a.anchor.sourceClockId
+  return a => !!previous && previous.tripUuid === sample.tripUuid && a.trip === row.id && previous.sourceClockId === a.anchor.sourceClockId
     && previous.monotonicNs === a.anchor.monotonicNs;
-  return advanceLedger(db, logical, row, stored(db, sampleId, sample.recording?.truck ?? null), truckRef, link, null, now).decided ?? null;
 }
 
 const OWN_ROWS = 'FROM samples s JOIN logical_progress p ON p.sample_ref=s.id WHERE s.trip_ref=? AND p.logical_ref=?';
@@ -260,16 +265,48 @@ export function spliceMember(db: Database.Database, target: bigint, member: Row,
   return junction;
 }
 
+/** Whether `coverage` is pending for raw member `row` in its own plugin session. */
+const pendingFor = (row: Row, coverage: LogicalCoverage | undefined): coverage is LogicalCoverage => coverage?.phase === 'pending'
+  && coverage.member === String(row.id) && coverage.window?.session === String(row.plugin_session_ref);
+/** A junction decision: `resume` with a clean load window or a paused reconnect within the plugin session resumes, else an unknown loss. */
+function decideJunction(db: Database.Database, row: Row, coverage: LogicalCoverage, resume: boolean): LogicalCoverage {
+  return resume && (cleanLoadWindow(db, row) || pausedReconnect(db, row) !== null) ? {...coverage, phase: 'resumed', window: null, sampleResumePending: false, proofPending: undefined}
+    : {...coverage, sampleResumePending: false, proofPending: undefined, losses: coverage.losses | COVERAGE_LOSS.unknown};
+}
 /**
  * Engine 1 (docs/trips.md): the junction of a pending member decides its resume. The same save point with an admitted
  * proof and either a clean load window or a paused reconnect within the plugin session (pausedReconnect) resumes the
- * coverage; any other junction records an unknown loss. Undefined when this coverage is not pending for the member or
- * `savePoint` is not a junction's.
+ * coverage; any other junction records an unknown loss. A live junction reading at the same save point without an
+ * admitted proof, at source monotonic time `at`, waits for one instead (proofPending, proofWait), since a save load admits
+ * its new proof only after its first reading. Undefined when this coverage is not pending for the member or `savePoint`
+ * is not a junction's.
  */
-export function junctionCoverage(db: Database.Database, row: Row, coverage: LogicalCoverage | undefined, savePoint: boolean | null, proof: boolean): LogicalCoverage | undefined {
-  if (savePoint === null || coverage?.phase !== 'pending' || coverage.member !== String(row.id) || coverage.window?.session !== String(row.plugin_session_ref)) return undefined;
-  return savePoint && proof && (cleanLoadWindow(db, row) || pausedReconnect(db, row) !== null) ? {...coverage, phase: 'resumed', window: null, sampleResumePending: false}
-    : {...coverage, sampleResumePending: false, losses: coverage.losses | COVERAGE_LOSS.unknown};
+export function junctionCoverage(db: Database.Database, row: Row, coverage: LogicalCoverage | undefined, savePoint: boolean | null, proof: boolean, at?: string): LogicalCoverage | undefined {
+  if (savePoint === null || !pendingFor(row, coverage)) return undefined;
+  if (savePoint && !proof && at !== undefined && coverage.endpoint !== null) return {...coverage, sampleResumePending: false, proofPending: at};
+  return decideJunction(db, row, coverage, savePoint && proof);
+}
+/** The longest wait of a junction for an admitted proof, in source monotonic time from the junction reading. */
+export const PROOF_WAIT_NS = 10_000_000_000n;
+const LINK_NS = BigInt(READING_HOLE_SECONDS) * 1_000_000_000n;
+/**
+ * Engine 1 (ET-112k): a live sample of raw member `row` while its junction waits for an admitted proof, read before the
+ * ledger records it. The sample must stand at the coverage's saved endpoint by the junction's save-point rule
+ * (matchesSavedEndpoint), at most PROOF_WAIT_NS after the junction reading, and the recorder must link it to the ledger's
+ * last complete anchor of the same member, on the same plugin session, capture and game clock, less than 5 s later, with
+ * both stationary (at most 0.05 m/s). Such a sample with an admitted proof decides as the junction would have with it;
+ * without one the wait goes on. Any other sample records an unknown loss. Undefined while waiting, and when not waiting.
+ */
+export function proofWait(db: Database.Database, logical: bigint, row: Row, coverage: LogicalCoverage | undefined, sample: SampleInput, sampleId: bigint, proof: boolean): LogicalCoverage | undefined {
+  if (coverage?.proofPending === undefined) return undefined;
+  const a = anchorOf(db, headRow(db, logical)), y = stored(db, sampleId, sample.recording?.truck ?? null).anchor, x = a?.anchor;
+  const still = (v: QuantityAnchor) => v.speedMps !== null && Math.abs(v.speedMps) <= 0.05;
+  const standing = pendingFor(row, coverage) && coverage.endpoint !== null && !!a && !!x && recorderLink(row, sample)(a) && x.pluginSessionId === y.pluginSessionId
+    && x.sourceClockId === y.sourceClockId && x.gameClockId === y.gameClockId && BigInt(y.monotonicNs) > BigInt(x.monotonicNs)
+    && BigInt(y.monotonicNs) - BigInt(x.monotonicNs) < LINK_NS && BigInt(y.monotonicNs) - BigInt(coverage.proofPending) <= PROOF_WAIT_NS
+    && still(x) && still(y) && completeAnchor(y) && matchesSavedEndpoint(coverage.endpoint.anchor, y, true, y.gameMinutes!);
+  if (!standing) return decideJunction(db, row, coverage, false);
+  return proof ? decideJunction(db, row, coverage, true) : undefined;
 }
 
 /** The head row when it is an engine-1 row; SELECT * because below schema 10 the flags column is absent. */
