@@ -9,6 +9,11 @@ export interface CoverageEndpoint extends ProgressCheckpoint {trip: string; head
 export interface LogicalCoverage {
   acceptancePending?: boolean;
   sampleResumePending?: boolean;
+  /**
+   * Engine 1 (ET-112k): the decimal source monotonic time of a junction reading at the same save point that waits for an
+   * admitted profile proof (quantities.ts, proofWait); absent otherwise.
+   */
+  proofPending?: string;
   version: 1; start: 'observed' | 'unproven'; losses: number; member: string;
   phase: 'active' | 'pending' | 'resumed'; endpoint: CoverageEndpoint | null;
   window: {session: string; opened: string | null} | null;
@@ -102,14 +107,15 @@ function validEndpoint(v: unknown): v is CoverageEndpoint {
       && BigInt(c.running.profile.afterMonotonicNs)<=BigInt(c.running.monotonicNs));
 }
 export function validCoverage(v: unknown): v is LogicalCoverage {
-  if (!v || typeof v !== 'object' || Object.keys(v).filter(key=>key!=='acceptancePending'&&key!=='sampleResumePending').sort().join(',')!=='endpoint,losses,member,phase,start,version,window') return false;
+  if (!v || typeof v !== 'object' || Object.keys(v).filter(key=>key!=='acceptancePending'&&key!=='sampleResumePending'&&key!=='proofPending').sort().join(',')!=='endpoint,losses,member,phase,start,version,window') return false;
   const c = v as LogicalCoverage;
   return (!Object.hasOwn(c,'acceptancePending') || typeof c.acceptancePending==='boolean')
     && (!Object.hasOwn(c,'sampleResumePending') || typeof c.sampleResumePending==='boolean') && c.version === 1 && ['observed', 'unproven'].includes(c.start) && Number.isInteger(c.losses) && c.losses >= 0 && c.losses <= 31
     && reference(c.member) && ['active', 'pending', 'resumed'].includes(c.phase) && (c.endpoint === null || validEndpoint(c.endpoint))
     && (c.window === null || typeof c.window === 'object' && keys(c.window, 'opened,session') && reference(c.window.session) && (c.window.opened === null || reference(c.window.opened)))
     && (c.phase === 'pending' || c.window === null)
-    && (c.sampleResumePending !== true || c.phase === 'pending' && c.window !== null && c.endpoint !== null);
+    && (c.sampleResumePending !== true || c.phase === 'pending' && c.window !== null && c.endpoint !== null)
+    && (c.proofPending === undefined || unsigned(c.proofPending) && c.phase === 'pending' && c.window !== null && c.endpoint !== null);
 }
 export function latestCoverage(db: Database.Database, id: unknown): {revision?: Row; present: boolean; value?: LogicalCoverage} {
   const revision = get(db, 'SELECT r.*,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref WHERE r.logical_ref=? ORDER BY r.id DESC LIMIT 1', id);
@@ -252,7 +258,7 @@ export function advanceCoverage(db: Database.Database, id: unknown, group: Row, 
     else if (interval.kind === 'not-connected') coverage.losses |= COVERAGE_LOSS.unknown;
     else if (detail.annotation !== true || ['odometer-jump', 'position-jump', 'game-time-jump'].includes(String(detail.cause))) coverage.losses |= COVERAGE_LOSS.discontinuity;
   }
-  if (coverage.phase === 'pending' && coverage.endpoint?.trip === coverage.member && cleanLoadWindow(db,row)) {coverage.phase='resumed';coverage.window=null;coverage.sampleResumePending=false;}
+  if (coverage.phase === 'pending' && coverage.endpoint?.trip === coverage.member && cleanLoadWindow(db,row)) {coverage.phase='resumed';coverage.window=null;coverage.sampleResumePending=false;delete coverage.proofPending;}
   return coverage;
 }
 export function applyCoverage(row: Row, group: Row, coverage: LogicalCoverage | undefined, present: boolean): void {

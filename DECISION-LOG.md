@@ -898,3 +898,7 @@ On [ET-112](https://trello.com/c/bgIyf8U2), on November 11, the owner accepted t
 ## ET-113 accounting status in event v1.2 — November 13, 2026
 
 On [ET-113](https://trello.com/c/45Hq80nV) the owner decided: the distance and fuel accounting status travels as a new field in event v1.2, not through the existing `accounting-unavailable` reason; it carries both distance and fuel, each `complete`, `partial` or `unknown`; `unknown` is for trips without engine-1 accounting, for which the Dashboard keeps its old rule; existing trips are not repaired, with no reupload and no new revisions for already frozen events. See [the upload specification](docs/dashboard-upload.md).
+
+## ET-112k junction waits for the profile proof — November 14, 2026
+
+On [ET-112](https://trello.com/c/bgIyf8U2) the owner approved fixing the partial recording caused by a reload's profile proof arriving after its first reading: proofs are never backdated; instead the engine-1 junction waits, at most 10 s, while the truck stays stationary at the same save point and the readings stay linked, and the first reading with the proof decides. See [logical completeness](docs/trips.md#trip-lifecycle-and-completeness).
