@@ -70,8 +70,8 @@ export function confirmRuleTrailer(state:RuleReplay,chain:RuleTrailer[],confirme
     state.changed=true;return confirmed;
   }
   if(record.index===0&&!usable(record.bodyType)){state.unproven=true;return confirmed;}
-  if(!expected.bodyType.available&&usable(record.bodyType))expected.bodyType=record.bodyType;
-  if(!expected.chainType.available&&usable(record.chainType))expected.chainType=record.chainType;
+  if(!expected.bodyType.available&&record.bodyType.available)expected.bodyType=record.bodyType;
+  if(!expected.chainType.available&&record.chainType.available)expected.chainType=record.chainType;
   return confirmed|(1<<record.index);
 }
 export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRecord,clock:string,

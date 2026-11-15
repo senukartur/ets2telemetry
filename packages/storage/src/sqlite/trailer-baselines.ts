@@ -47,7 +47,7 @@ export function ruleNativeBounds(db:Database.Database,session:unknown,joined=fal
     ...(joined?{job:JOINED_JOB_EVENTS.map(event)}:{})};
 }
 
-export const JOINED_RULE_VERSION=1;
+export const JOINED_RULE_VERSION=2;
 export interface JoinedRuleFence {
   version:typeof JOINED_RULE_VERSION;
   game:string;lastMember:string;lastSession:string;terminalSeq:string|null;terminalClock:string|null;terminalNs:string|null;

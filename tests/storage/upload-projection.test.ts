@@ -148,7 +148,8 @@ describe('immutable private upload projections through the SQLite worker', () =>
       'SELECT trip_ref FROM logical_memberships WHERE logical_ref=1 AND trip_ref>0 ORDER BY trip_ref LIMIT 1',
       'SELECT trip_ref FROM logical_memberships WHERE previous_logical_ref=1 AND trip_ref>0 ORDER BY trip_ref LIMIT 1',
       'SELECT trailer_configuration_ref FROM trip_trailers WHERE trip_ref=1 AND trailer_configuration_ref>0 ORDER BY trailer_configuration_ref LIMIT 1',
-      'SELECT id FROM completeness_intervals WHERE trip_ref=1 AND id>0 ORDER BY id LIMIT 1']){
+      'SELECT id FROM completeness_intervals WHERE trip_ref=1 AND id>0 ORDER BY id LIMIT 1',
+      "SELECT trip_ref FROM upload_projection_members WHERE pin_ref='fixture' AND trip_ref>0 ORDER BY trip_ref LIMIT 1"]){
       const plan=db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as {detail:string}[];
       expect(plan.some(p=>/SEARCH .* (?:COVERING )?INDEX/.test(p.detail)),sql).toBe(true);
       expect(plan.some(p=>/TEMP B-TREE|SCAN /.test(p.detail)),sql).toBe(false);
@@ -162,12 +163,16 @@ describe('immutable private upload projections through the SQLite worker', () =>
       const prepare=connection.prepare.bind(connection);
       return ()=>({
         cursor:prepare('SELECT phase,member_after,item_after,source_after FROM upload_projection_pins WHERE pin_id=?').get(pinId),
+        replayMember:prepare("SELECT json_extract(snapshot_json,'$.joinedRule.replay.after.$integer') FROM upload_projection_pins WHERE pin_id=?").pluck().get(pinId),
         copies:Object.fromEntries(['members','configurations','intervals'].map(kind=>[kind,Number(prepare(`SELECT count(*) FROM upload_projection_${kind} WHERE pin_ref=?`).pluck().get(pinId))])) as Record<'members'|'configurations'|'intervals',number>
       });
     };
     // From the fixture: 252 current rows, 151 rejected previous rows, and one phase-end transition each.
     // Each member then costs entry + one link/interval + empty end; each stream adds one phase-end.
-    // Total: 252+1+151+1 + (252*3+1)*2 + finalization = 1920 units, or 19 full turns and 20 units.
+    // Finalization examines losses despite unsupported sources: each member costs entry, gap end, rejected loss row,
+    // four loss transitions, one linked sample interval, interval end and member end. Only the 251 nonfinal raw
+    // windows include the retained gap (after the pinned terminal), and the replay adds one member-stream end.
+    const expectedInputs=252+1+151+1+(252*3+1)*2+252*10+251+1;
     const milestones={
       1:{cursor:{phase:'current',member_after:216n,item_after:0n,source_after:0n},copies:{members:100,configurations:0,intervals:0}},
       2:{cursor:{phase:'current',member_after:416n,item_after:0n,source_after:0n},copies:{members:200,configurations:0,intervals:0}},
@@ -182,7 +187,7 @@ describe('immutable private upload projections through the SQLite worker', () =>
     let state=ok(storage.beginUploadProjection({pinId,tripUuid:root}));expect(state).toMatchObject({state:'preparing',examined:0,projection:null});
     failed(storage.readUploadProjectionPage({snapshot:`u2:${storage.summary.databaseUuid}:${pinId}:80000000-0000-4000-8000-000000000001:${root}:1`,kind:'members',limit:1}),'INVALID_INPUT');
     state=ok(storage.advanceUploadProjection(pinId));expect(state).toMatchObject({state:'preparing',examined:100,projection:null});
-    let previous=initialProgress();expect(previous).toEqual(milestones[1]);
+    let previous=initialProgress();expect(previous).toEqual({...milestones[1],replayMember:null});
     storage.close();const reopenedConn=await openConnection(ws.options({path:file}));
     const reopened=tracked(reopenedConn),writer=reopenedConn.writer(),resumedProgress=observe(writer);
     expect(resumedProgress()).toEqual(previous);
@@ -195,11 +200,12 @@ describe('immutable private upload projections through the SQLite worker', () =>
       const current=resumedProgress();
       const deltas=Object.entries(current.copies).map(([kind,count])=>count-previous.copies[kind as keyof typeof previous.copies]);
       expect(deltas.every(delta=>delta>=0)).toBe(true);expect(deltas.reduce((sum,delta)=>sum+delta,0)).toBeLessThanOrEqual(100);
-      expect(current.cursor).not.toEqual(previous.cursor);
-      if(Object.hasOwn(milestones,turns))expect(current).toEqual(milestones[turns as keyof typeof milestones]);
+      expect([current.cursor,current.replayMember]).not.toEqual([previous.cursor,previous.replayMember]);
+      if(Object.hasOwn(milestones,turns))expect({cursor:current.cursor,copies:current.copies}).toEqual(milestones[turns as keyof typeof milestones]);
       previous=current;
     }
-    expect(turns).toBe(20);expect(totalExamined).toBe(1920);expect(state).toMatchObject({state:'ready',examined:20});
+    expect(turns).toBe(Math.ceil(expectedInputs/100));expect(totalExamined).toBe(expectedInputs);
+    expect(state).toMatchObject({state:'ready',examined:expectedInputs%100});
     expect(state.projection!.totals).toEqual({members:252,configurations:1,intervals:252});
     expect(ok(reopened.readUploadProjectionPage({snapshot:state.projection!.snapshot,kind:'members',limit:100})).rows).toHaveLength(100);
     expect(ok(reopened.readUploadProjectionPage({snapshot:state.projection!.snapshot,kind:'configurations',limit:100})).rows[0]).toMatchObject({occurrence:{rawTripUuid:root}});
@@ -508,7 +514,8 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
   const coupledLead={...lowbed,chainType:available('double')};
   const dolly=trailer(1,{id:available('fixture-dolly'),bodyType:absent,chainType:absent});
   type RestartFault='different-id'|'different-body'|'different-chain'|'reverse-slots'|'extra-slot'|'change-and-restore'|'clear-and-restore'|'missing-slot'
-    |'startup-gap'|'in-window-gap'|'tail-hole'|'prior-loss'|'linked-loss'|'root-prefix'|'same-process'|'checkpoint-opening'|'after-terminal'|'sample-loss';
+    |'startup-gap'|'in-window-gap'|'tail-hole'|'prior-loss'|'linked-loss'|'root-prefix'|'same-process'|'checkpoint-opening'|'after-terminal'|'sample-loss'
+    |'startup-regression'|'unqualified-load-note'|'second-regression'|'empty-body-type'|'empty-chain-type'|'changed-before-loss'|'changed-before-gap';
   async function recordRestarted(client:StorageClient,{resumes=1,coupling=false,fault,unordered=false}:{resumes?:number;coupling?:boolean;fault?:RestartFault;unordered?:boolean}={}){
     const a=new Script(ETS2_A),scripts=Array.from({length:resumes},(_,index)=>new Script(index===0?ETS2_B:`10000000-0000-4000-8000-${String(index).padStart(12,'0')}`));
     const last=scripts.at(-1)!,lead=coupling?coupledLead:lowbed;
@@ -543,14 +550,25 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     let prior=a;
     for(const s of scripts){
       await openSource(s);
-      if(fault==='startup-gap')accepted(await sink.commit(shaped(s,s.gap(2,'noDurableConsumer')),context));
+      if(fault==='startup-gap'||fault==='changed-before-gap'&&s===last)accepted(await sink.commit(shaped(s,s.gap(2,'noDurableConsumer')),context));
       await feed(s,r.timersRestart(),'paused');
       if(fault==='in-window-gap')accepted(await sink.commit(shaped(s,s.gap(1)),context));
       await feed(s,r.trailerCleared(9),'paused');
-      const resumedLead=fault==='different-id'?{...lead,id:available('other-lowbed')}:fault==='different-body'?{...lead,bodyType:available('flatbed')}
+      const changedBeforeLast=(fault==='changed-before-loss'||fault==='changed-before-gap')&&s!==last;
+      const resumedLead=fault==='different-id'||changedBeforeLast?{...lead,id:available('other-lowbed')}:fault==='different-body'?{...lead,bodyType:available('flatbed')}
         :fault==='different-chain'?{...lead,chainType:available('single')}:fault==='reverse-slots'?{...dolly,index:0}:lead;
       await feed(s,r.trailerConfigured(resumedLead),'paused');
-      if(coupling&&fault!=='missing-slot')await feed(s,r.trailerConfigured(fault==='reverse-slots'?{...lead,index:1}:dolly),'paused');
+      if(coupling&&fault!=='missing-slot'){
+        const repeated=fault==='empty-body-type'?{...dolly,bodyType:available('dolly')}:{...dolly,chainType:available('double')};
+        let rear=dolly;
+        if(fault==='reverse-slots')rear={...lead,index:1};
+        if(fault==='empty-body-type'||fault==='empty-chain-type'){
+          const first=fault==='empty-body-type'?{...dolly,bodyType:available('')}:{...dolly,chainType:available('')};
+          rear=s===scripts[0]?first:repeated;
+        }
+        await feed(s,r.trailerConfigured(rear),'paused');
+        if(fault==='empty-body-type'&&scripts.length===1)await feed(s,r.trailerConfigured(repeated),'paused');
+      }
       if(fault==='extra-slot')await feed(s,r.trailerConfigured({...dolly,index:2}),'paused');
       if(fault==='missing-slot'){
         // The actual resumed checkpoint lists both trailers, but only slot zero has a native callback.
@@ -559,15 +577,32 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
         observed.data.state.configuration.trailers[1]={available:true,value:dolly};
         accepted(await sink.checkpoint(shaped(s,observed)));
       }
+      let opened:string|undefined;
       if(fault==='checkpoint-opening'){
         // J9 can join from a checkpoint, but these retained callbacks do not include the job opening that produced it.
         const attached=shaped(s,s.checkpoint(job(),0,{simulation:'paused'}));
         accepted(await sink.checkpoint(attached));accepted(sink.observe(attached,context));
         expect(sink.attach.due()).toBe(true);accepted(await sink.attach.open(context));
       }else{
-        await feed(s,r.jobConfigured(),'paused');await verify(s,'paused');
+        const message=await feed(s,r.jobConfigured(),'paused');opened=tripUuidFor(s.session,message.data.eventSeq);await verify(s,'paused');
       }
       await feed(s,r.started());
+      if(fault==='startup-regression'||fault==='unqualified-load-note'||fault==='second-regression'){
+        await feed(s,r.gameMode({mode:'unknown',method:'none',confidence:'none'}));
+        const regression=await feed(s,r.regression('12345','950'));
+        if(fault==='second-regression'){
+          // Leave this callback unlinked so the recorder's subsequent close cannot disguise the out-of-window reset.
+          ok(await client.commitEvent({message:shaped(s,s.event(r.regression('950','750',s.gameTime.clockId,'40000000-0000-4000-8000-000000000003')))}));
+          const message=shaped(s,s.event(r.delivered()));
+          ok(await client.commitEvent({message,effects:[{kind:'trip.close',tripUuid:opened!,outcome:'delivered',closeReason:'outcome',
+            outcomeEvent:'this-event',recordingCompleteness:'partial',
+            endedUtcMs:message.data.occurred.utcUnixMs.available?Number(message.data.occurred.utcUnixMs.value):2000}]}));
+          return {root,terminal:message,last,items:[]};
+        }
+        if(fault==='unqualified-load-note')ok(await client.recordCompleteness(s.session,{tripUuid:opened!,kind:'discontinuity',
+          sourceClockId:a.clockId,detail:{cause:'save-load',atEventSeq:regression.data.eventSeq,
+            fromClockId:'40000000-0000-4000-8000-000000000001',toClockId:'40000000-0000-4000-8000-000000000002'}}));
+      }
       if(fault==='change-and-restore'){
         await feed(s,r.trailerConfigured({...lead,id:available('other-lowbed')}));await feed(s,r.trailerConfigured(lead));
       }
@@ -583,6 +618,7 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     if(fault==='prior-loss'||fault==='linked-loss')ok(await client.recordCompleteness(a.session,{kind:'restore-loss',
       ...(fault==='linked-loss'?{tripUuid:root}:{}),firstEventSeq:opening.data.eventSeq,lastEventSeq:opening.data.eventSeq}));
     if(fault==='sample-loss')ok(await client.recordCompleteness(a.session,{kind:'sample-loss',firstEventSeq:opening.data.eventSeq,lastEventSeq:opening.data.eventSeq}));
+    if(fault==='changed-before-loss')ok(await client.recordCompleteness(last.session,{kind:'restore-loss',firstEventSeq:'1',lastEventSeq:'1'}));
     if(fault==='after-terminal'){
       ok(await client.commitEvent({message:shaped(last,last.event(r.trailerCleared()))}));
       ok(await client.commitGap({message:shaped(last,last.gap(1))}));
@@ -616,6 +652,28 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     if(status==='proven')expect(snapshot.trailers.items).toEqual(items);
     expect(snapshot.evidence.reasons.filter(reason=>reason.startsWith('trailer-context'))).toEqual(status==='proven'?[]:[`trailer-context-${status}`]);
     if(['prior-loss','linked-loss','in-window-gap'].includes(fault))expect(snapshot.evidence.reasons).toContain('recording-intervals');
+    await client.close();
+  });
+  it.each([
+    ['startup-regression',1,true,[]],
+    ['unqualified-load-note',1,false,['trailer-context-unproven']],
+    ['second-regression',1,false,['trailer-context-unproven']],
+    ['empty-body-type',1,false,['trailer-context-changed']],
+    ['empty-chain-type',2,false,['trailer-context-changed']],
+    ['changed-before-loss',2,false,['recording-intervals','trailer-context-changed']],
+    ['changed-before-gap',2,false,['recording-intervals','trailer-context-changed']],
+  ] as const)('preserves independent proof and loss findings for %s',async(fault,resumes,complete,reasons)=>{
+    const client=await start(),{root,items}=await recordRestarted(client,{fault,resumes,coupling:true});
+    const {pin,snapshot}=await projected(client,root);
+    expect(pin.totals.members).toBe(resumes+1);
+    if(fault==='startup-regression'){
+      const notes=ok(await client.journalIntervals(root,{limit:100}));
+      expect(JSON.stringify(notes)).toContain('"cause":"save-load"');
+      expect(snapshot.trailers.items).toEqual(items);
+      expect(snapshot.recordingCompleteness).toBe('partial');
+    }
+    expect(snapshot.trailers.complete).toBe(complete);
+    expect(snapshot.evidence.reasons).toEqual(reasons);
     await client.close();
   });
   it('continues bounded replay of fourteen raw members after a worker restart',async()=>{

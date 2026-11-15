@@ -94,17 +94,20 @@ const maxId=(db:Database.Database,table:string)=>(get(db,`SELECT id FROM ${table
 function ruleOpening(db:Database.Database,ref:unknown):LogicalRow|undefined {
   return get(db,'SELECT e.*,c.clock_uuid,c.plugin_session_ref AS clock_session,c.kind AS clock_kind FROM events e JOIN clocks c ON c.id=e.source_clock_ref WHERE e.id=?',ref);
 }
-function startRuleReplay(opening:LogicalRow,end:string,original:boolean,prefixUnproven:boolean):RuleReplay {
-  const sequence=fromU64Key(opening.event_seq);
+function startRuleReplay(opening:LogicalRow|undefined,end:string,original:boolean,prefixUnproven:boolean,fallbackClock=''):RuleReplay {
+  const sequence=opening?fromU64Key(opening.event_seq):'0';
   return {version:RULE_REPLAY_VERSION,phase:original?'baseline':'events',baselineBeforeSeq:original?(BigInt(sequence)+1n).toString():'0',baselineBeforeId:'0',
     lossKind:0,lossAfter:'0',eventAfter:'0',gapAfterSeq:'0',gapAfterId:'0',next:original?'0':'1',end,opening:sequence,
-    clock:String(opening.clock_uuid),openingNs:fromU64Key(opening.occurred_monotonic_ns),openingOrder:fromU64Key(opening.boundary_order),
+    clock:opening?String(opening.clock_uuid):fallbackClock,openingNs:opening?fromU64Key(opening.occurred_monotonic_ns):'0',openingOrder:opening?fromU64Key(opening.boundary_order):'0',
     items:[],opened:false,changed:false,unproven:prefixUnproven,recordingLoss:false,initializing:false,recovering:false,leadConfiguration:'0'};
+}
+interface JoinedSource {
+  member:bigint;session:bigint;replay:RuleReplay;confirmed:number;pastPin:boolean;prefixAfter:bigint|null;tail:RuleTail;
+  jobKey:string;jobCleared:boolean;loadWindow:'before-start'|'after-start'|null;lastLoadRegression:string|null;
 }
 interface JoinedReplay {
   after:bigint; scope:string|null; items:RuleTrailer[]; comparison:RuleTrailer[];
-  source?:{member:bigint;session:bigint;replay:RuleReplay;confirmed:number;pastPin:boolean;prefixAfter:bigint|null;tail:RuleTail;
-    jobKey:string;jobCleared:boolean;loadWindow:'before-start'|'after-start'|null};
+  source?:JoinedSource; failure?:RuleContext; recordingLoss:boolean;
 }
 interface RuleTail {eventSeq:string;gapSeq:string}
 interface JoinedRule extends JoinedRuleFence {
@@ -119,52 +122,72 @@ const qualified=(event:LogicalRow|undefined,session:unknown,bound:bigint):event 
   !!event&&(event.id as bigint)<=bound&&event.plugin_session_id===session&&event.clock_session===session&&event.clock_kind==='source-monotonic'
   &&event.occurred_monotonic_ns_state==='available';
 
-function startJoinedSource(db:Database.Database,replay:JoinedReplay,joined:JoinedRule,snap:LogicalSnapshot,saved:LogicalRow,member:bigint):JoinedReplay['source'] {
-  const raw=required(get(db,'SELECT * FROM trips WHERE id=?',member)),session=raw.plugin_session_ref as bigint;
-  const src=required(get(db,'SELECT * FROM plugin_sessions WHERE id=?',session));
-  const membership=required(get(db,'SELECT * FROM logical_memberships WHERE trip_ref=?',member));
-  const opening=ruleOpening(db,raw.opened_event_ref);
+function verifiedJoinedMember(db:Database.Database,replay:JoinedReplay,joined:JoinedRule,snap:LogicalSnapshot,raw:LogicalRow,src:LogicalRow,opening:LogicalRow):boolean {
+  const session=raw.plugin_session_ref;
+  const membership=required(get(db,'SELECT * FROM logical_memberships WHERE trip_ref=?',raw.id));
   if(src.origin!=='game'||src.game!==joined.game||raw.game!==joined.game||src.gameplay_events!=='registered'
-    ||raw.opened_by!=='event'||!qualified(opening,session,joined.events)||opening.type!=='job.configured'
+    ||raw.opened_by!=='event'||opening.type!=='job.configured'
     ||get(db,'SELECT event_ref FROM job_configurations WHERE id=?',raw.job_configuration_ref)?.event_ref!==opening.id
-    ||membership.logical_ref!==snap.logical||typeof membership.proof_json!=='string')return;
+    ||membership.logical_ref!==snap.logical||typeof membership.proof_json!=='string')return false;
   const proof=admittedProfile(JSON.parse(membership.proof_json) as ProfileObservation,
     {game:joined.game,pluginSessionId:String(src.plugin_session_uuid),processInstanceId:String(src.process_instance_uuid)},
     String(opening.clock_uuid),'18446744073709551615');
-  if(!proof)return;
+  if(!proof)return false;
   if(replay.after===0n){
-    if(member!==snap.logical)return;
+    if(raw.id!==snap.logical)return false;
     replay.scope=proof.scope;
-  }else{
-    if(!decisionsEnabled(db)||proof.scope!==replay.scope)return;
-    const decision=get(db,'SELECT * FROM logical_membership_decisions WHERE trip_ref=?',member);
-    if(decision?.state!=='joined'||decision.reason!=='matched'||decision.target_logical_ref!==snap.logical
-      ||decision.game!==joined.game||decision.plugin_session_ref!==session||typeof decision.decided_revision!=='bigint'
-      ||decision.decided_revision>=snap.revision)return;
-    const prior=required(get(db,'SELECT * FROM trips WHERE id=?',replay.after));
-    const predecessor=required(get(db,'SELECT process_instance_uuid FROM plugin_sessions WHERE id=?',prior.plugin_session_ref));
-    if(prior.plugin_session_ref===session||predecessor.process_instance_uuid===src.process_instance_uuid||prior.outcome!=='none'
-      ||prior.close_reason!=='restart'||prior.outcome_event_ref!==null||prior.closed_by_session_ref!==session||prior.closed_by_event_seq===null
-      ||get(db,'SELECT 1 FROM observation_closes WHERE trip_ref=?',prior.id))return;
-    const carrierRef=get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=?',session,prior.closed_by_event_seq)?.id;
-    const carrier=ruleOpening(db,carrierRef??null);
-    if(!qualified(carrier,session,joined.events)||carrier.clock_uuid!==opening.clock_uuid
-      ||String(carrier.event_seq)>String(opening.event_seq)||String(carrier.occurred_monotonic_ns)>String(opening.occurred_monotonic_ns))return;
+    return true;
   }
+  if(!decisionsEnabled(db)||proof.scope!==replay.scope)return false;
+  const decision=get(db,'SELECT * FROM logical_membership_decisions WHERE trip_ref=?',raw.id);
+  if(decision?.state!=='joined'||decision.reason!=='matched'||decision.target_logical_ref!==snap.logical
+    ||decision.game!==joined.game||decision.plugin_session_ref!==session||typeof decision.decided_revision!=='bigint'
+    ||decision.decided_revision>=snap.revision)return false;
+  const prior=required(get(db,'SELECT * FROM trips WHERE id=?',replay.after));
+  const predecessor=required(get(db,'SELECT process_instance_uuid FROM plugin_sessions WHERE id=?',prior.plugin_session_ref));
+  if(prior.plugin_session_ref===session||predecessor.process_instance_uuid===src.process_instance_uuid||prior.outcome!=='none'
+    ||prior.close_reason!=='restart'||prior.outcome_event_ref!==null||prior.closed_by_session_ref!==session||prior.closed_by_event_seq===null
+    ||get(db,'SELECT 1 FROM observation_closes WHERE trip_ref=?',prior.id))return false;
+  const carrierRef=get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=?',session,prior.closed_by_event_seq)?.id;
+  const carrier=ruleOpening(db,carrierRef??null);
+  return qualified(carrier,session,joined.events)&&carrier.clock_uuid===opening.clock_uuid
+    &&String(carrier.event_seq)<=String(opening.event_seq)&&String(carrier.occurred_monotonic_ns)<=String(opening.occurred_monotonic_ns);
+}
+
+function startJoinedSource(db:Database.Database,replay:JoinedReplay,joined:JoinedRule,snap:LogicalSnapshot,saved:LogicalRow,member:bigint):JoinedSource {
+  const raw=required(get(db,'SELECT * FROM trips WHERE id=?',member)),session=raw.plugin_session_ref as bigint;
+  const src=required(get(db,'SELECT * FROM plugin_sessions WHERE id=?',session));
+  const candidate=ruleOpening(db,raw.opened_event_ref);
+  const opening=qualified(candidate,session,joined.events)?candidate:undefined;
   const final=String(member)===joined.lastMember;
   const end=final&&joined.terminalSeq!==null?fromU64Key(joined.terminalSeq)
     :final?String(saved.nativeCoverage):fromU64Key(src.committed_through_event_seq);
-  if(BigInt(end)<BigInt(fromU64Key(opening.event_seq))||final&&joined.terminalSeq!==null&&joined.terminalClock!==String(opening.source_clock_ref)
-    ||final&&snap.row.outcome!=='open'&&joined.terminalSeq===null)return;
+  const verified=opening&&BigInt(end)>=BigInt(fromU64Key(opening.event_seq))
+    &&!(final&&snap.row.outcome!=='open'&&joined.terminalClock!==String(opening.source_clock_ref))
+    &&verifiedJoinedMember(db,replay,joined,snap,raw,src,opening);
   // An engine may retain a declared missing suffix even when its last visible event is contiguous.
   const missingEnd=!(final&&joined.terminalSeq!==null)&&typeof src.end_next_event_seq==='string'&&BigInt(src.end_next_event_seq)>BigInt(end)+1n;
-  const openingJob=(JSON.parse(String(opening.payload_json)) as {record:Extract<EventRecord,{type:'job.configured'}>}).record;
-  return {member,session,replay:startRuleReplay(opening,end,replay.after===0n,missingEnd),confirmed:0,pastPin:false,prefixAfter:0n,
-    tail:final?joined.lastTail:ruleTail(db,session),jobKey:jobKey(openingJob),jobCleared:false,
-    loadWindow:opening.occurred_simulation==='paused'?'before-start':null};
+  const state=startRuleReplay(opening,end,replay.after===0n,!verified||missingEnd,String(src.plugin_session_uuid));
+  // A failed bridge cannot prove trailers, but its independently retained gaps and losses still matter.
+  if(!verified)state.phase='gaps';
+  const openingJob=verified?(JSON.parse(String(opening.payload_json)) as {record:Extract<EventRecord,{type:'job.configured'}>}).record:null;
+  return {member,session,replay:state,confirmed:0,pastPin:false,prefixAfter:0n,tail:final?joined.lastTail:ruleTail(db,session),
+    jobKey:openingJob?jobKey(openingJob):'',jobCleared:false,loadWindow:opening?.occurred_simulation==='paused'?'before-start':null,lastLoadRegression:null};
 }
 
-function resumedPrefix(db:Database.Database,interval:LogicalRow,source:NonNullable<JoinedReplay['source']>,prior:bigint,joined:JoinedRule):boolean {
+function isStartupRegression(db:Database.Database,source:JoinedSource,joined:JoinedRule,interval:LogicalRow,detail:Record<string,unknown>):boolean {
+  const at=detail.atEventSeq;
+  if(typeof at!=='string'||!/^[1-9][0-9]{0,19}$/.test(at)||source.lastLoadRegression===null)return false;
+  if(BigInt(at)<=BigInt(source.replay.opening)||BigInt(at)>BigInt(source.lastLoadRegression))return false;
+  const ref=get(db,'SELECT id FROM events WHERE plugin_session_id=? AND event_seq=?',source.session,u64Key(at))?.id;
+  const e=ruleOpening(db,ref??null);
+  if(!qualified(e,source.session,joined.events)||e.type!=='gameTime.regression'||e.clock_uuid!==source.replay.clock
+    ||interval.source_clock_ref!==null&&interval.source_clock_ref!==e.source_clock_ref)return false;
+  const {record}=JSON.parse(String(e.payload_json)) as {record:Extract<EventRecord,{type:'gameTime.regression'}>};
+  return detail.fromClockId===record.from.clockId&&detail.toClockId===record.to.clockId;
+}
+
+function resumedPrefix(db:Database.Database,interval:LogicalRow,source:JoinedSource,prior:bigint,joined:JoinedRule):boolean {
   const detail=interval.detail_json===null?{}:JSON.parse(interval.detail_json as string) as Record<string,unknown>;
   const cause=String(detail.cause);
   const sameSource=interval.plugin_session_ref===source.session,opening=detail.atEventSeq===source.replay.opening;
@@ -184,6 +207,7 @@ function resumedPrefix(db:Database.Database,interval:LogicalRow,source:NonNullab
   if(cause==='menu-job-acceptance'&&interval.kind==='discontinuity')return !(sameSource&&opening&&detail.annotation===true);
   if(cause==='observed-acceptance'&&interval.kind==='discontinuity')
     return !(sameSource&&validAcceptanceDetail(detail)&&BigInt(detail.throughEventSeq as string)<BigInt(source.replay.opening));
+  if(cause==='save-load'&&interval.kind==='discontinuity')return !(sameSource&&isStartupRegression(db,source,joined,interval,detail));
   // A load that could not corroborate distance/time does not invalidate independent, gap-free trailer replay.
   if(['loaded-job-unverified','loaded-job-coverage-confirmed'].includes(cause)&&interval.kind==='discontinuity')
     return !(sameSource&&String(source.member)===joined.lastMember&&joined.terminalSeq!==null&&detail.atEventSeq===fromU64Key(joined.terminalSeq));
@@ -192,16 +216,32 @@ function resumedPrefix(db:Database.Database,interval:LogicalRow,source:NonNullab
 
 /** Walk copied raw member IDs in order, retaining just the original chain and the active source cursor. */
 function advanceJoinedRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSnapshot,pin:LogicalRow,joined:JoinedRule):RuleContext|null {
-  const replay=joined.replay??={after:0n,scope:null,items:[],comparison:[]};
+  const replay=joined.replay??={after:0n,scope:null,items:[],comparison:[],recordingLoss:false};
   if(!isRuleItems(replay.items)||!isRuleItems(replay.comparison))fail('DATABASE_CORRUPT');
   if(!replay.source){
     const next=get(db,'SELECT trip_ref FROM upload_projection_members WHERE pin_ref=? AND trip_ref>? ORDER BY trip_ref LIMIT 1',pin.pin_id,replay.after);
-    if(!next)return String(replay.after)===joined.lastMember&&replay.items.length?{version:2,status:'proven',items:replay.items,recordingLoss:false}:unproven();
+    if(!next){
+      if(replay.failure)return {...replay.failure,recordingLoss:replay.recordingLoss};
+      return String(replay.after)===joined.lastMember&&replay.items.length
+        ?{version:2,status:'proven',items:replay.items,recordingLoss:false}:unproven(replay.recordingLoss);
+    }
     replay.source=startJoinedSource(db,replay,joined,snap,saved,next.trip_ref as bigint);
-    return replay.source?null:unproven();
+    return null;
   }
   const source=replay.source,state=source.replay,original=replay.after===0n;
   if(!isRuleReplay(state))fail('DATABASE_CORRUPT');
+  const cursor={joined,source,replay,original};
+  if(state.phase!=='done'){
+    const context=replayRuleSource(db,saved,state,source.session,joined,source.member,
+      String(source.member)===joined.lastMember&&joined.terminalSeq!==null,cursor);
+    if(context&&state.phase==='baseline'){
+      // Missing original baseline. Keep the failure and continue gathering independent loss evidence.
+      state.unproven=true;
+      state.phase='gaps';
+    }
+    return null;
+  }
+  // Load annotations can only be interpreted after the native event scan has qualified their startup window.
   if(source.prefixAfter!==null){
     const interval=get(db,'SELECT * FROM completeness_intervals WHERE trip_ref=? AND id>? AND id<=? ORDER BY id LIMIT 1',source.member,source.prefixAfter,joined.intervals);
     if(!interval)source.prefixAfter=null;
@@ -215,16 +255,15 @@ function advanceJoinedRuleContext(db:Database.Database,saved:LogicalRow,snap:Log
     }
     return null;
   }
-  const context=replayRuleSource(db,saved,state,source.session,{events:joined.events,gaps:joined.gaps,intervals:joined.intervals},
-    source.member,String(source.member)===joined.lastMember&&joined.terminalSeq!==null,{joined,source,replay,original});
-  if(!context)return null;
-  if(context.status!=='proven')return context;
-  if(original){replay.items=context.items;replay.comparison=context.items.map(item=>({...item}));}
+  const context=finishRuleSource(state,cursor);
+  replay.recordingLoss||=context.recordingLoss;
+  if(context.status!=='proven')replay.failure??=context;
+  else if(original){replay.items=context.items;replay.comparison=context.items.map(item=>({...item}));}
   replay.after=source.member;delete replay.source;
   return null;
 }
 
-function checkJoinedJob(source:NonNullable<JoinedReplay['source']>,sequence:string,record:EventRecord,terminal:boolean,original:boolean):void {
+function checkJoinedJob(source:JoinedSource,sequence:string,record:EventRecord,terminal:boolean,original:boolean):void {
   const state=source.replay,afterOpening=BigInt(sequence)>BigInt(state.opening);
   if(record.type==='job.configured'&&sequence!==state.opening&&(!original||afterOpening)
     &&(!state.opened||source.jobCleared||jobKey(record)!==source.jobKey))state.unproven=true;
@@ -235,7 +274,12 @@ function checkJoinedJob(source:NonNullable<JoinedReplay['source']>,sequence:stri
   if(!afterOpening)return;
   // The first start can still be followed by its load's regression, as in the recorder's startup window.
   if(source.loadWindow==='after-start'&&record.type!=='source.gameMode'&&record.type!=='gameTime.regression')source.loadWindow=null;
-  if((record.type==='timers.restart'||record.type==='gameTime.regression')&&source.loadWindow===null)state.unproven=true;
+  if(record.type==='gameTime.regression'){
+    if(source.loadWindow===null||source.jobCleared)state.unproven=true;
+    else source.lastLoadRegression=sequence;
+    if(source.loadWindow==='after-start')source.loadWindow=null;
+  }
+  if(record.type==='timers.restart'&&source.loadWindow===null)state.unproven=true;
   if(record.type==='simulation.started'&&source.loadWindow==='before-start')source.loadWindow='after-start';
 }
 
@@ -265,8 +309,15 @@ function advanceRuleContext(db:Database.Database,saved:LogicalRow,snap:LogicalSn
   return replayRuleSource(db,saved,saved.ruleReplay as RuleReplay,snap.row.plugin_session_ref,snap,snap.logical,snap.row.outcome!=='open');
 }
 
+interface JoinedCursor {joined:JoinedRule;source:JoinedSource;replay:JoinedReplay;original:boolean}
+function finishRuleSource(state:RuleReplay,joined?:JoinedCursor):RuleContext {
+  if(!joined||joined.original)return finishRuleReplay(state);
+  if(state.changed)return {version:2,status:'changed',items:[],recordingLoss:state.recordingLoss};
+  if(state.unproven||!state.opened||joined.source.confirmed!==(1<<joined.replay.items.length)-1)return unproven(state.recordingLoss);
+  return {version:2,status:'proven',items:joined.replay.items,recordingLoss:false};
+}
 function replayRuleSource(db:Database.Database,saved:LogicalRow,state:RuleReplay,session:unknown,bounds:{events:bigint;gaps:bigint;intervals:bigint},
-  member:unknown,terminal:boolean,joined?:{joined:JoinedRule;source:NonNullable<JoinedReplay['source']>;replay:JoinedReplay;original:boolean}):RuleContext|null {
+  member:unknown,terminal:boolean,joined?:JoinedCursor):RuleContext|null {
   if(state.phase==='baseline'){
     const b=get(db,`SELECT * FROM trailer_baselines WHERE plugin_session_ref=? AND next_event_seq<=?
       AND (next_event_seq,id)<(?,?) ORDER BY next_event_seq DESC,id DESC LIMIT 1`,session,u64Key(state.opening),u64Key(state.baselineBeforeSeq),BigInt(state.baselineBeforeId));
@@ -336,6 +387,7 @@ function replayRuleSource(db:Database.Database,saved:LogicalRow,state:RuleReplay
       AND (first_event_seq,id)>(?,?) ORDER BY first_event_seq,id LIMIT 1`,session,joined&&!terminal?joined.source.tail.gapSeq:u64Key(state.end),u64Key(state.gapAfterSeq),BigInt(state.gapAfterId));
     if(!gap){state.phase='losses';return null;}
     state.gapAfterSeq=fromU64Key(gap.first_event_seq);state.gapAfterId=String(gap.id);
+    if(joined&&beyondRuleTerminal(joined.joined,session,gap.first_event_seq))return null;
     if((gap.id as bigint)<=bounds.gaps&&(joined&&!joined.original||String(gap.last_event_seq)>=u64Key(state.opening))){
       state.unproven=true;state.recordingLoss=true;
     }
@@ -345,10 +397,7 @@ function replayRuleSource(db:Database.Database,saved:LogicalRow,state:RuleReplay
     const kind=RULE_LOSSES[state.lossKind];
     if(!kind){
       state.phase='done';
-      if(!joined||joined.original)return finishRuleReplay(state);
-      if(state.changed)return {version:2,status:'changed',items:[],recordingLoss:state.recordingLoss};
-      return state.unproven||!state.opened||joined.source.confirmed!==(1<<joined.replay.items.length)-1
-        ?unproven(state.recordingLoss):{version:2,status:'proven',items:joined.replay.items,recordingLoss:false};
+      return finishRuleSource(state,joined);
     }
     const sessionBounds=saved.ruleLossBounds as Record<string,string>;
     const interval=get(db,'SELECT * FROM completeness_intervals WHERE plugin_session_ref=? AND kind=? AND id>? AND id<=? ORDER BY id LIMIT 1',session,kind,BigInt(state.lossAfter),joined?bounds.intervals:BigInt(sessionBounds[kind]));
@@ -368,7 +417,7 @@ function replayRuleSource(db:Database.Database,saved:LogicalRow,state:RuleReplay
     if(terminal&&interval.first_event_seq!==null&&(interval.first_event_seq as string)>u64Key(state.end))return null;
     state.unproven=true;state.recordingLoss=true;return null;
   }
-  return finishRuleReplay(state);
+  return finishRuleSource(state,joined);
 }
 function coverageUnchanged(db:Database.Database,snap:LogicalSnapshot,saved:LogicalRow,strict=false):boolean {
   const joined=saved.joinedRule as JoinedRule|undefined,session=joined?BigInt(joined.lastSession):snap.row.plugin_session_ref;
