@@ -75,7 +75,7 @@ export function resolveBinding(db:Database.Database,root:unknown):Row|undefined 
 /** Called by revise inside the recorder transaction. No projection fold, payload serialization or history walk. */
 export function discoverRevision(db:Database.Database,root:bigint,revision:unknown,delivery?:{mode:'backfill'|'live';runId:string}):void {
   if(!syncEnabled(db)||!candidate(db,root))return;
-  const r=required(get(db,`SELECT r.state_ref,r.progress_head,l.retired,m.proof_json,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref
+  const r=required(get(db,`SELECT r.state_ref,r.progress_head,l.retired,l.member_count,l.latest_trip_ref,m.proof_json,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref
     JOIN logical_trips l ON l.id=r.logical_ref JOIN logical_memberships m ON m.trip_ref=l.id WHERE r.id=?`,revision));
   const row=JSON.parse(String(r.row_json)) as Row,outcome=String(row.outcome),head=r.progress_head===null?undefined:get(db,'SELECT distance_m,fuel_used_l FROM logical_progress WHERE id=?',r.progress_head);
   const evidence=get(db,'SELECT generation FROM upload_projection_evidence_versions WHERE root_ref=?',root)?.generation??0n;
@@ -86,8 +86,11 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
   const atom=(value:unknown)=>{const s=String(value&&typeof value==='object'&&'$integer' in value?value.$integer:value);return `${s.length}:${s}`;};
   const coverage=validCoverage(row._coverage)?row._coverage:undefined,endpoint=coverage?.endpoint;
   const quality=[coverage?.start,coverage?.phase,coverage?.losses,coverage?.acceptancePending??false,endpoint?.distanceM.available,endpoint?(endpoint.distanceM.available?null:endpoint.distanceM.reason):null,endpoint?.fuelUsedL.available,endpoint?(endpoint.fuelUsedL.available?null:endpoint.fuelUsedL.reason):null];
+  const joinedOpen=outcome==='open'&&(r.member_count as bigint)>1n;
+  const session=joinedOpen?required(get(db,'SELECT plugin_session_ref FROM trips WHERE id=?',r.latest_trip_ref)).plugin_session_ref
+    :BigInt((row.plugin_session_ref as {$integer:string}).$integer);
   const ruleContext=Number(db.pragma('user_version',{simple:true}))>=7
-    ?JSON.stringify([outcome==='open'?ruleNativeBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer)):null,ruleLossBounds(db,BigInt((row.plugin_session_ref as {$integer:string}).$integer))]):null;
+    ?JSON.stringify([outcome==='open'?ruleNativeBounds(db,session,joinedOpen):null,ruleLossBounds(db,session)]):null;
   // Keep the old key for existing diesel and unknown roots. React to entering or leaving an explicitly electric model.
   const truck = row.truck_configuration_ref as {$integer: string} | null;
   const model = truck ? get(db,'SELECT model_id FROM truck_configurations WHERE id=?',BigInt(truck.$integer))?.model_id : undefined;

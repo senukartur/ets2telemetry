@@ -4,7 +4,7 @@ export const RULE_REPLAY_VERSION = 2;
 export interface RuleTrailer {index:number;id:Available<string>;bodyType:Available<string>;chainType:Available<string>}
 export interface RuleContext {version:1|2;status:'proven'|'changed'|'unavailable'|'unproven';items:RuleTrailer[];recordingLoss:boolean}
 export interface RuleReplay {
-  version:typeof RULE_REPLAY_VERSION;phase:'baseline'|'events'|'gaps'|'losses'|'done';baselineBeforeSeq:string;baselineBeforeId:string;
+  version:typeof RULE_REPLAY_VERSION;phase:'baseline'|'events'|'suffix'|'gaps'|'losses'|'done';baselineBeforeSeq:string;baselineBeforeId:string;
   lossKind:number;lossAfter:string;eventAfter:string;gapAfterSeq:string;gapAfterId:string;next:string;end:string;opening:string;
   clock:string;openingNs:string;openingOrder:string;items:RuleTrailer[];opened:boolean;changed:boolean;unproven:boolean;recordingLoss:boolean;
   initializing:boolean;recovering:boolean;leadConfiguration:string;
@@ -49,11 +49,30 @@ export function isRuleContext(v:unknown):v is RuleContext {
 export function isRuleReplay(v:unknown):v is RuleReplay {
   const numbers=['baselineBeforeSeq','baselineBeforeId','eventAfter','gapAfterSeq','gapAfterId','next','end','opening','openingNs','openingOrder','lossAfter','leadConfiguration'];
   return exact(v,['version','phase',...numbers,'lossKind','clock','items','opened','changed','unproven','recordingLoss','initializing','recovering'])&&v.version===RULE_REPLAY_VERSION
-    &&['baseline','events','gaps','losses','done'].includes(String(v.phase))&&numbers.every(k=>uint(v[k]))&&Number.isInteger(v.lossKind)&&Number(v.lossKind)>=0&&Number(v.lossKind)<=3&&uuid(v.clock)&&isRuleItems(v.items)
+    &&['baseline','events','suffix','gaps','losses','done'].includes(String(v.phase))&&numbers.every(k=>uint(v[k]))&&Number.isInteger(v.lossKind)&&Number(v.lossKind)>=0&&Number(v.lossKind)<=3&&uuid(v.clock)&&isRuleItems(v.items)
     &&['opened','changed','unproven','recordingLoss','initializing','recovering'].every(k=>typeof v[k]==='boolean');
 }
 export function chainComplete(items:RuleTrailer[]):boolean {
   return items.length>0&&items[0].index===0&&usable(items[0].bodyType)&&items.every((item,index)=>item.index===index&&usable(item.id));
+}
+/** A resumed session must positively observe every carried slot. Contradictions survive later restoration. */
+export function confirmRuleTrailer(state:RuleReplay,chain:RuleTrailer[],confirmed:number,record:EventRecord):number {
+  if(record.type!=='trailer.configured'&&record.type!=='trailer.cleared')return confirmed;
+  const expected=chain[record.index];
+  if(record.type==='trailer.cleared'){
+    if(expected)state.changed=true;
+    return confirmed;
+  }
+  if(!expected){state.changed=true;return confirmed;}
+  if(!usable(record.id)){state.unproven=true;return confirmed;}
+  const conflicts=(a:Available<string>,b:Available<string>)=>a.available&&b.available&&a.value!==b.value;
+  if(conflicts(expected.id,record.id)||conflicts(expected.bodyType,record.bodyType)||conflicts(expected.chainType,record.chainType)){
+    state.changed=true;return confirmed;
+  }
+  if(record.index===0&&!usable(record.bodyType)){state.unproven=true;return confirmed;}
+  if(!expected.bodyType.available&&usable(record.bodyType))expected.bodyType=record.bodyType;
+  if(!expected.chainType.available&&usable(record.chainType))expected.chainType=record.chainType;
+  return confirmed|(1<<record.index);
 }
 export function replayRuleEvent(state:RuleReplay,sequence:string,record:EventRecord,clock:string,
   simulation:EventOccurrence['simulation']):void {

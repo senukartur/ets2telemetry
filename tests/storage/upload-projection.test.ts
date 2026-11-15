@@ -503,6 +503,140 @@ describe('immutable private upload projections through the SQLite worker', () =>
 
 
 describe('TEL-034 checkpoint-bound trailer context',()=>{
+  const available=(value:string)=>({available:true,value} as const);
+  const lowbed=trailer(0,{id:available('fixture-lowbed'),bodyType:available('lowbed'),chainType:available('single')});
+  const coupledLead={...lowbed,chainType:available('double')};
+  const dolly=trailer(1,{id:available('fixture-dolly'),bodyType:absent,chainType:absent});
+  type RestartFault='different-id'|'different-body'|'different-chain'|'reverse-slots'|'extra-slot'|'change-and-restore'|'clear-and-restore'|'missing-slot'
+    |'startup-gap'|'in-window-gap'|'tail-hole'|'prior-loss'|'linked-loss'|'root-prefix'|'same-process'|'checkpoint-opening'|'after-terminal'|'sample-loss';
+  async function recordRestarted(client:StorageClient,{resumes=1,coupling=false,fault,unordered=false}:{resumes?:number;coupling?:boolean;fault?:RestartFault;unordered?:boolean}={}){
+    const a=new Script(ETS2_A),scripts=Array.from({length:resumes},(_,index)=>new Script(index===0?ETS2_B:`10000000-0000-4000-8000-${String(index).padStart(12,'0')}`));
+    const last=scripts.at(-1)!,lead=coupling?coupledLead:lowbed;
+    function shaped<T extends {source:{origin:string;processInstanceId:string}}>(s:Script,message:T):T {
+      const copy=gameShaped(message);
+      if(fault==='same-process'&&s!==a)copy.source.processInstanceId=proof(a).processInstanceId;
+      return copy;
+    }
+    let currentProof=proof(a);
+    const sink=new TripRecorderSink(client,{profileEvidence:()=>currentProof});
+    const accepted=<T>(result:SinkResult<T>):T=>{if(!result.ok)throw new Error(result.error.code);return result.value;};
+    const context={receivedUtcMs:2000};
+    async function feed(s:Script,record:EventRecord,simulation:'running'|'paused'='running'){
+      const message=shaped(s,s.event(record,{simulation}));accepted(await sink.commit(message,context));return message;
+    }
+    async function openSource(s:Script){
+      currentProof={...proof(s),processInstanceId:shaped(s,s.welcome()).source.processInstanceId};
+      accepted(await sink.openSession(shaped(s,s.welcome())));
+      const baseline=checkpoint(s);baseline.data.state.configuration.trailers.fill(absent);
+      accepted(await sink.checkpoint(shaped(s,baseline)));accepted(sink.observe(shaped(s,baseline),context));
+    }
+    async function verify(s:Script,simulation:'running'|'paused'){
+      accepted(sink.observe(shaped(s,s.snapshot({simulation,configuration:s.checkpoint(job()).data.state.configuration})),context));
+      expect(sink.attach.due()).toBe(true);accepted(await sink.attach.open(context));
+    }
+    if(unordered)ok(await client.upsertSession({message:shaped(last,last.welcome())}));
+    await openSource(a);await feed(a,r.started());await feed(a,r.trailerConfigured(lead));
+    if(coupling)await feed(a,r.trailerConfigured(dolly));
+    const opening=await feed(a,r.jobConfigured()),root=tripUuidFor(a.session,opening.data.eventSeq);
+    await verify(a,'running');
+    if(fault==='root-prefix')ok(await client.recordCompleteness(a.session,{tripUuid:root,kind:'not-connected',detail:{cause:'opened-before-attach'}}));
+    let prior=a;
+    for(const s of scripts){
+      await openSource(s);
+      if(fault==='startup-gap')accepted(await sink.commit(shaped(s,s.gap(2,'noDurableConsumer')),context));
+      await feed(s,r.timersRestart(),'paused');
+      if(fault==='in-window-gap')accepted(await sink.commit(shaped(s,s.gap(1)),context));
+      await feed(s,r.trailerCleared(9),'paused');
+      const resumedLead=fault==='different-id'?{...lead,id:available('other-lowbed')}:fault==='different-body'?{...lead,bodyType:available('flatbed')}
+        :fault==='different-chain'?{...lead,chainType:available('single')}:fault==='reverse-slots'?{...dolly,index:0}:lead;
+      await feed(s,r.trailerConfigured(resumedLead),'paused');
+      if(coupling&&fault!=='missing-slot')await feed(s,r.trailerConfigured(fault==='reverse-slots'?{...lead,index:1}:dolly),'paused');
+      if(fault==='extra-slot')await feed(s,r.trailerConfigured({...dolly,index:2}),'paused');
+      if(fault==='missing-slot'){
+        // The actual resumed checkpoint lists both trailers, but only slot zero has a native callback.
+        const observed=checkpoint(s);
+        observed.data.state.configuration.trailers[0]={available:true,value:lead};
+        observed.data.state.configuration.trailers[1]={available:true,value:dolly};
+        accepted(await sink.checkpoint(shaped(s,observed)));
+      }
+      if(fault==='checkpoint-opening'){
+        // J9 can join from a checkpoint, but these retained callbacks do not include the job opening that produced it.
+        const attached=shaped(s,s.checkpoint(job(),0,{simulation:'paused'}));
+        accepted(await sink.checkpoint(attached));accepted(sink.observe(attached,context));
+        expect(sink.attach.due()).toBe(true);accepted(await sink.attach.open(context));
+      }else{
+        await feed(s,r.jobConfigured(),'paused');await verify(s,'paused');
+      }
+      await feed(s,r.started());
+      if(fault==='change-and-restore'){
+        await feed(s,r.trailerConfigured({...lead,id:available('other-lowbed')}));await feed(s,r.trailerConfigured(lead));
+      }
+      if(fault==='clear-and-restore'){await feed(s,r.trailerCleared());await feed(s,r.trailerConfigured(lead));}
+      if(fault==='tail-hole'){
+        // An archived source can retain a row beyond committed coverage without a documented gap for the missing seq.
+        prior.next++;
+        ok(await client.commitEvent({message:shaped(prior,prior.event(r.paused()))}));
+      }
+      prior=s;
+    }
+    const terminal=await feed(last,r.delivered());
+    if(fault==='prior-loss'||fault==='linked-loss')ok(await client.recordCompleteness(a.session,{kind:'restore-loss',
+      ...(fault==='linked-loss'?{tripUuid:root}:{}),firstEventSeq:opening.data.eventSeq,lastEventSeq:opening.data.eventSeq}));
+    if(fault==='sample-loss')ok(await client.recordCompleteness(a.session,{kind:'sample-loss',firstEventSeq:opening.data.eventSeq,lastEventSeq:opening.data.eventSeq}));
+    if(fault==='after-terminal'){
+      ok(await client.commitEvent({message:shaped(last,last.event(r.trailerCleared()))}));
+      ok(await client.commitGap({message:shaped(last,last.gap(1))}));
+      ok(await client.recordCompleteness(last.session,{kind:'restore-loss',firstEventSeq:last.next.toString(),lastEventSeq:last.next.toString()}));
+    }
+    return {root,terminal,last,items:(coupling?[lead,dolly]:[lead]).map(({index,id,bodyType,chainType})=>({index,id,bodyType,chainType}))};
+  }
+  it.each([[1,false,false],[2,true,true]] as const)('preserves the same trailer chain through %i verified game restart(s) (real recorder)',async(resumes,coupling,unordered)=>{
+    const client=await start(),{root,terminal,last,items}=await recordRestarted(client,{resumes,coupling,unordered});
+    const {pin,snapshot}=await projected(client,root);
+    expect(pin.totals.members).toBe(resumes+1);expect(pin.rootTripUuid).toBe(root);
+    expect(pin.facts.outcomeOccurrence).toMatchObject({pluginSessionId:last.session,eventSeq:terminal.data.eventSeq});
+    expect(snapshot.trailers).toEqual({complete:true,items});
+    expect(snapshot.evidence.ruleContextComplete).toBe(true);
+    expect(snapshot.evidence.reasons).toEqual([]);
+    expect(snapshot).toMatchObject({outcome:'delivered',recordingCompleteness:'partial',hardModeResult:'not-qualified'});
+    expect(snapshot.accounting).toEqual({distance:'unknown',fuel:'unknown'});
+    await client.close();
+  });
+  it.each([
+    ['different-id','changed'],['different-body','changed'],['different-chain','changed'],['reverse-slots','changed'],['extra-slot','changed'],
+    ['change-and-restore','changed'],['clear-and-restore','changed'],['missing-slot','unproven'],['startup-gap','unproven'],
+    ['in-window-gap','unproven'],['tail-hole','unproven'],['prior-loss','unproven'],['linked-loss','unproven'],['root-prefix','unproven'],
+    ['same-process','unproven'],['checkpoint-opening','unproven'],
+    ['after-terminal','proven'],['sample-loss','proven'],
+  ] as const)('classifies %s in a joined trailer replay as %s',async(fault,status)=>{
+    const client=await start(),{root,items}=await recordRestarted(client,{fault,coupling:true});
+    const {pin,snapshot}=await projected(client,root);
+    expect(pin.totals.members).toBe(2);
+    expect(snapshot.trailers.complete).toBe(status==='proven');
+    if(status==='proven')expect(snapshot.trailers.items).toEqual(items);
+    expect(snapshot.evidence.reasons.filter(reason=>reason.startsWith('trailer-context'))).toEqual(status==='proven'?[]:[`trailer-context-${status}`]);
+    if(['prior-loss','linked-loss','in-window-gap'].includes(fault))expect(snapshot.evidence.reasons).toContain('recording-intervals');
+    await client.close();
+  });
+  it('continues bounded replay of fourteen raw members after a worker restart',async()=>{
+    let client=await start();
+    const {root,items}=await recordRestarted(client,{resumes:13,coupling:true,unordered:true});
+    const pinId=randomUUID();let work=ok(await client.beginUploadProjection({pinId,tripUuid:root})),turns=0,enteredResume=false;
+    while(work.state==='preparing'&&!enteredResume&&turns++<20){
+      work=ok(await client.advanceUploadProjection(pinId));expect(work.examined).toBeLessThanOrEqual(100);
+      expect(await client.close()).toEqual({clean:true});
+      const member=readOnly(ws.database,db=>db.prepare("SELECT json_extract(snapshot_json,'$.joinedRule.replay.after.$integer') FROM upload_projection_pins WHERE pin_id=?").pluck().get(pinId));
+      enteredResume=typeof member==='string'&&member!=='0';
+      if(!enteredResume&&work.state==='preparing')client=await start();
+    }
+    expect(enteredResume).toBe(true);expect(work.state).toBe('preparing');
+    const reopened=await start();expect(ok(await reopened.getUploadProjectionPreparation(pinId))).toEqual(work);
+    while(work.state==='preparing'&&turns++<20){work=ok(await reopened.advanceUploadProjection(pinId));expect(work.examined).toBeLessThanOrEqual(100);}
+    expect(work.projection?.totals.members).toBe(14);
+    const pin=work.projection!;
+    expect(mapUploadProjection(pin,await pages(reopened,pin))).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:true,items}}}});
+    await reopened.close();
+  });
   function checkpoint(s:Script,coupling=false,slots=10){
     const message=gameShaped(s.checkpoint(null));message.data.state.boundaryOrder='0';
     message.data.state.configuration.trailers=Array.from({length:slots},(_,index)=>index===0?{available:true,value:trailer(0,{id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'}})}
