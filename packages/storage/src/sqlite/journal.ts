@@ -1,5 +1,6 @@
 import {snapshot, readSnapshotToken, snapshotToken, needsSnapshot, type LogicalSnapshot} from './logical-snapshot';
-import {ACCOUNTING_PATH, applyProgress, decisionsEnabled, logicalEnabled, decodeRow} from './logical-trips';
+import {applyProgress, decisionsEnabled, logicalEnabled, decodeRow} from './logical-trips';
+import {moneyPath} from './journal-money-path';
 import {journalAccounting} from './quantities';
 // Journal reads (ET-016 PR-2, J5, J7): a newest-first page of trips, one trip's detail, its timeline and its
 // completeness intervals, read on the writer connection like every other read. Every page is bounded, filters run in
@@ -311,15 +312,20 @@ export function journalIntervals(conn: StorageConnection, tripUuid: string, page
  * marked incomplete, so a partial sum is never reported as a total. Unavailable amounts are counted by reason.
  */
 function moneyTotals(db: Database.Database, trip: bigint, snap?: LogicalSnapshot): JournalMoneyTotals {
-  if (snap?.row._moneyIncomplete===true) return {incomplete:true,totals:[],unavailable:[]};
-  if (snap?.head !== null && snap?.head !== undefined && get(db,`${ACCOUNTING_PATH} SELECT 1 AS present FROM path WHERE cut_odometer_m IS NOT NULL LIMIT 1`,{head:snap.head})) return {incomplete:true,totals:[],unavailable:[]};
-  const rows = snap ? all(db, `SELECT e.type,m.amount_raw,m.amount_sdk_type,m.amount_currency_status,m.amount_currency_code,m.amount_currency_source,m.amount_state
+  const incomplete: JournalMoneyTotals = {incomplete: true, totals: [], unavailable: []};
+  if (snap?.row._moneyIncomplete === true) return incomplete;
+  const path = snap?.head !== null && snap?.head !== undefined ? moneyPath(db, snap.head) : undefined;
+  if (path?.incomplete && !path.includes) return incomplete;
+  const rows = snap ? all(db, `SELECT e.type,m.amount_raw,m.amount_sdk_type,m.amount_currency_status,m.amount_currency_code,m.amount_currency_source,m.amount_state,
+    x.trip_ref AS member,e.plugin_session_id AS session,e.source_clock_ref AS clock,e.occurred_monotonic_ns AS at
     FROM logical_snapshot_memberships x JOIN event_attributions a ON a.trip_ref = x.trip_ref JOIN events e ON e.id = a.event_ref JOIN event_amounts m ON m.event_ref = e.id
     WHERE x.logical_ref = ? AND x.trip_ref <= ? AND x.from_revision < ? AND (x.through_revision IS NULL OR x.through_revision >= ?) AND e.id <= ? AND e.type IN ('player.fined','player.tollgate.paid','player.use.ferry','player.use.train') ORDER BY e.id LIMIT ?`, trip, snap.members, snap.revision, snap.revision, snap.events, JOURNAL_MONEY_AMOUNTS + 1)
     : all(db, JOURNAL_QUERIES.amounts, trip, JOURNAL_MONEY_AMOUNTS + 1);
-  if (rows.length > JOURNAL_MONEY_AMOUNTS) return {incomplete: true, totals: [], unavailable: []};
+  if (rows.length > JOURNAL_MONEY_AMOUNTS) return incomplete;
   const totals = new Map<string, JournalMoneyTotal & {sum: bigint}>(), unavailable = new Map<string, JournalMoneyUnavailable>();
   for (const r of rows) {
+    if (path?.includes && !path.includes({member: r.member as bigint, session: r.session as bigint, clock: r.clock as bigint,
+      at: r.at === null ? null : BigInt(r.at as string)})) continue;
     const category = MONEY_TYPES[String(r.type)];
     const amount = moneyFromColumns({raw: r.amount_raw as string | null, sdkType: r.amount_sdk_type as 's64' | 'u64' | null,
       currencyStatus: r.amount_currency_status as 'unknown' | 'sdk-documented' | null, currencyCode: r.amount_currency_code as string | null,
@@ -337,8 +343,10 @@ function moneyTotals(db: Database.Database, trip: bigint, snap?: LogicalSnapshot
   const order = (category: JournalMoneyCategory) => CATEGORY_ORDER.indexOf(category);
   const sorted = [...totals.entries()].sort(([a, x], [b, y]) => order(x.category) - order(y.category) || (a < b ? -1 : a > b ? 1 : 0));
   const reasons: readonly UnavailableReason[] = ['not-observed', 'not-supported', 'invalid'];
-  return {incomplete: false, totals: sorted.map(([, {sum, ...total}]) => ({...total, raw: sum.toString()})),
+  const amounts = {totals: sorted.map(([, {sum, ...total}]) => ({...total, raw: sum.toString()})),
     unavailable: [...unavailable.values()].sort((a, b) => order(a.category) - order(b.category) || reasons.indexOf(a.reason) - reasons.indexOf(b.reason))};
+  if (!path?.incomplete) return {incomplete: false, ...amounts};
+  return amounts.totals.length || amounts.unavailable.length ? {...incomplete, retainedSubtotal: amounts} : incomplete;
 }
 
 /**

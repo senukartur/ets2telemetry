@@ -599,7 +599,7 @@ export type I18nKey =
   | 'tr.gameDistance' | 'tr.odometer' | 'j.qty.partial' | 'j.qty.partialReasons' | 'j.qty.truck-change' | 'j.qty.position-jump' | 'j.qty.transfer' | 'j.qty.reading-hole'
   | 'j.qty.recording-gap' | 'j.qty.recording-boundary' | 'j.qty.unsupported' | 'j.qty.bridged' | 'j.qty.restored' | 'j.membershipPending' | 'j.membershipPendingHint'
   | 'tr.tab.summary' | 'tr.tab.timeline' | 'tr.tab.completeness' | 'tr.speed' | 'tr.samples' | 'tr.gap'
-  | 'tr.money' | 'tr.fines' | 'tr.tolls' | 'tr.ferry' | 'tr.hmStart' | 'tr.hmEnd' | 'tr.hmSnapshot' | 'tr.truck'
+  | 'tr.money' | 'tr.moneySubtotal' | 'tr.fines' | 'tr.tolls' | 'tr.ferry' | 'tr.hmStart' | 'tr.hmEnd' | 'tr.hmSnapshot' | 'tr.truck'
   | 'tr.ivRecorded' | 'tr.ivGap' | 'tr.ivTotal'
   | 'tr.tabs' | 'tr.kpis' | 'tr.started' | 'tr.recordedTime' | 'tr.recordedNote' | 'tr.recordedLimit' | 'tr.ivNoSamples' | 'tr.recordedNone' | 'tr.gameTimeNone' | 'tr.durS' | 'tr.durM' | 'tr.durH' | 'tr.durMs' | 'tr.durHm' | 'tr.gapNoSpeed' | 'tr.gapExcluded' | 'tr.gapSource' | 'tr.gapUnknown' | 'tr.hmLatest' | 'tr.truckLabel' | 'tr.trailerLabel' | 'tr.trailerN' | 'tr.ivCount' | 'tr.ivNone' | 'tr.ivNoneFirst' | 'tr.ivUnknown' | 'tr.ivBar' | 'tr.ivNote' | 'tr.ivFirstOnly' | 'tr.intervalsMore' | 'tr.allFields' | 'tr.site' | 'tr.siteSaved' | 'tr.siteRevision'
   | 'ev.accepted' | 'ev.refuel' | 'ev.fine' | 'ev.toll' | 'ev.gap' | 'ev.delivered' | 'ev.cancelled' | 'ev.closed' | 'ev.recording'

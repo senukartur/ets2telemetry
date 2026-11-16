@@ -16,6 +16,7 @@ import {mapUploadProjection, UPLOAD_PAGE_KINDS, type UploadProjectionPage} from 
 import {attachTripUuidFor, QUANTITY_FLAGS, tripUuidFor, type ProfileObservation, type QuantityPoint} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail} from '../../packages/contracts/src/journal';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
+import {EUR} from '../shared/journal-seed';
 import {CLOCK_A, CLOCK_B, INCIDENT_QUANTITIES, incidentReadings, QUANTITY_SCENARIOS, s, type QuantityEvent, type QuantityExpectation, type QuantityFlagName,
   type QuantityReading} from '../shared/quantity-scenarios';
 import {ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, r, Script} from '../shared/trip-messages';
@@ -175,6 +176,68 @@ async function recorded(readings: readonly QuantityReading[], expected: Quantity
   expectLedger(found, expected);
   return found;
 }
+
+describe('REG-008 retained money after a saved-game cut', () => {
+  it.each(['physical match', 'odometer only', 'same-session suffix', 'two cuts'] as const)('shows the bounded fine subtotal (%s)', async variant => {
+    const storage = await ws.open(), a = openMember(storage, 'A', 'root', []);
+    const append = (m: Member, reading: QuantityReading) => {
+      ok(storage.appendSamples(m.script.session, [sampleOf(m, reading, true)], {uniqueSeconds: true}));
+      m.previous = reading;
+    };
+    const fine = (m: Member, t: number, amount: string, knownTime = true) => {
+      const at = BigInt(ns(t)) + 1_000_000n;
+      const record = r.fined(amount) as Extract<EventRecord, {type: 'player.fined'}>;
+      if (record.amount.available) record.amount.value.currency = EUR;
+      const message = m.script.event(record, {advanceMs: Number((at - m.at) / 1_000_000n)});
+      if (!knownTime) message.data.occurred.monotonicNs = {available: false, reason: 'not-observed'};
+      m.at = at;
+      ok(storage.commitEvent({message, effects: [{kind: 'event.attribute', tripUuid: m.uuid, attribution: 'trip'}]}));
+    };
+    append(a, s(0));
+    fine(a, 0.5, '100'); // Proven before the save only when its physical point is retained.
+    append(a, s(1));
+    fine(a, 1.5, '900'); // Between the safe prefix boundary and the save.
+    append(a, s(2, {speedMps: 0}));
+    fine(a, 2.5, '800'); // In the abandoned suffix of the original drive.
+    append(a, s(3));
+    append(a, s(4));
+    const x = variant === 'odometer only' ? 50.7 : 40;
+    append(a, s(5, {odometerM: 1040, fuelL: 399.98, x, speedMps: 0, gameClock: CLOCK_B, linked: false}));
+    fine(a, 5, '600'); // The same source instant as the loaded sample has no strict order.
+    if (variant === 'two cuts') fine(a, 5.5, '50'); // On the new path after the first load and before the second save.
+    append(a, s(6, {odometerM: 1060, fuelL: 399.97, x: x + 20, speedMps: variant === 'two cuts' ? 20 : 0, gameClock: CLOCK_B}));
+    let terminal = a;
+    if (variant === 'same-session suffix') {
+      fine(a, 6.1, '500', false);
+      fine(a, 6.2, '300');
+      fine(a, 6.3, '400');
+    } else if (variant === 'two cuts') {
+      fine(a, 6.1, '500'); // Kept by the first cut alone, but not proven by the second.
+      append(a, s(7, {odometerM: 1080, fuelL: 399.96, x: 80, speedMps: 0, gameClock: CLOCK_B}));
+      append(a, s(8, {odometerM: 1100, fuelL: 399.95, x: 100, gameClock: CLOCK_B}));
+      append(a, s(9, {odometerM: 1080, fuelL: 399.96, x: 80, speedMps: 0, gameClock: 'third-clock', linked: false}));
+      fine(a, 9.1, '300');
+      fine(a, 9.2, '400');
+    } else {
+      closeMember(storage, a);
+      const b = openMember(storage, 'B', 'open', []);
+      append(b, s(0, {member: 'B', odometerM: 1060, fuelL: 399.97, x: x + 20, speedMps: 0, linked: false}));
+      // New capture clock and overlapping numeric source times. The two amounts belong to the later member.
+      fine(b, 0.1, '300');
+      fine(b, 0.2, '400');
+      terminal = b;
+    }
+    deliver(storage, terminal);
+    const detail = validateJournalTripDetail(ok(storage.journalTrip(a.uuid)));
+    const [raw, count, eventCount] = variant === 'odometer only' ? ['700', 2, 6] : variant === 'two cuts' ? ['850', 4, 8]
+      : ['800', 3, variant === 'same-session suffix' ? 7 : 6];
+    expect(detail.money).toEqual({incomplete: true, totals: [], unavailable: [], retainedSubtotal: {totals: [{
+      category: 'fine', currency: EUR, sdkType: 's64', raw, count
+    }], unavailable: []}});
+    expect(ok(storage.journalEvents(a.uuid, {limit: 100})).events.filter(event => event.type === 'player.fined')).toHaveLength(eventCount);
+    storage.close();
+  });
+});
 
 const multiMember = QUANTITY_SCENARIOS.filter(scenario => new Set(scenario.readings.map(reading => reading.member)).size > 1);
 /**
