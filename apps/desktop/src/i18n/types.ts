@@ -573,7 +573,7 @@ export type I18nKey =
   | 'mode.sp' | 'mode.tmp' | 'mode.haulmp' | 'stale' | 'paused'
   | 'live.title' | 'live.speed' | 'live.gear' | 'live.rpm' | 'live.fuel' | 'live.of' | 'live.range' | 'live.rangeNote'
   | 'live.cons' | 'live.consNote' | 'live.consNoteAts'
-  | 'live.job' | 'live.market.freight' | 'live.market.cargo' | 'live.driven' | 'live.remaining' | 'live.planned' | 'live.plannedNote'
+  | 'live.job' | 'live.market.freight' | 'live.market.cargo' | 'live.driven' | 'live.remaining' | 'live.planned' | 'live.plannedNote' | 'live.routeProgress'
   | 'live.deadline' | 'live.breakSoon' | 'live.breakDue' | 'live.breakBadge' | 'live.cruiseOff' | 'live.speedLimitNone' | 'live.income' | 'live.trip' | 'live.realTime' | 'live.gameTime' | 'live.fuelUsed' | 'live.recording'
   | 'live.truck' | 'live.plate' | 'live.trailer' | 'live.odometer' | 'live.session' | 'live.clock' | 'live.mode' | 'live.protocol' | 'live.lostEvents'
   | 'live.waitTitle' | 'live.waitText'

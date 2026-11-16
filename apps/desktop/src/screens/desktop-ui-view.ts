@@ -14,6 +14,25 @@ import {DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, profileFor} from '..
 import {SPEED_GAUGE_FULL_SCALE, speedGaugeFraction} from '../speed-gauge';
 /** Geometry only clamps normalized numeric readings; formatted telemetry is never parsed or replaced by demo values. */
 export const clampRatio = (value: number | null) => value === null || !Number.isFinite(value) ? null : Math.max(0, Math.min(1, value));
+
+function plannedMeters(state: LiveSources['v0State']): number | null {
+  const reading = state?.job.state === 'value' ? state.job.value.plannedDistance : undefined;
+  if (reading?.state !== 'value') return null;
+  const {meters} = reading.value;
+  return Number.isFinite(meters) && meters > 0 ? meters : null;
+}
+
+function jobRouteProgress(sources: LiveSources): number | null {
+  if (!sources.v0View.connection.current || !sources.v1Current || sources.job !== 'match') return null;
+  const planned = plannedMeters(sources.v1State);
+  const v0Planned = plannedMeters(sources.v0State);
+  const navigation = sources.v1State?.navigationDistance;
+  if (planned === null || (v0Planned !== null && v0Planned !== planned) || navigation?.state !== 'value') return null;
+  const remaining = navigation.value.meters;
+  if (!Number.isFinite(remaining) || remaining < 0) return null;
+  return Math.max(0, planned - remaining) / planned;
+}
+
 /** `gearDisplay` (ET-050): the per-game gear display mode for `live.instrument.gear`; automatic without settings. */
 export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitProfiles = DEFAULT_UNIT_PROFILES, gearDisplay?: GearDisplayModes) {
   const telemetry = live ?? initialLive(), game = displayGame(telemetry), profile = profileFor(profiles, game), units = resolveDisplayUnits(game, {profile});
@@ -27,7 +46,8 @@ export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitP
   // would paint a dot that blinks as the SDK speed flickers around zero). Above 0 the ratio keeps its fractional precision.
   // ET-045f: the Cluster overlay's speed arc shares this rule and scale (speed-gauge.ts).
   const speedRatio = metersPerSecond === null ? null : speedGaugeFraction(metersPerSecond, profile) ?? null;
-  return {sources, units, current, speed, speedText, rpm, scaleMax, speedRatio, rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel)};
+  return {sources, units, current, speed, speedText, rpm, scaleMax, speedRatio, rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel),
+    routeProgress: jobRouteProgress(sources)};
 }
 export function gaugeArc(radius: number, start: number, end: number, center = 130): string {
   const point = (angle: number) => {const rad = angle * Math.PI / 180; return [center + radius * Math.sin(rad), center - radius * Math.cos(rad)];};

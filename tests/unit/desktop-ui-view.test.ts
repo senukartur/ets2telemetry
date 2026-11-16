@@ -67,6 +67,94 @@ describe('desktop numeric presentation (REG-002/003/009/014)', () => {
   });
 });
 
+describe('current job route progress (REG-003/004/009)', () => {
+  const meters = (value: number) => ({available: true, value, unit: 'm'} as const);
+  const unavailable = {available: false, reason: 'not-observed', unit: 'm'} as const;
+  const route = (live = smokePair()) => {
+    const v0Job = live.observation!.state.configuration.job, v1State = live.v1!.observation!.state;
+    const v1Job = v1State.configuration.job;
+    if (!v0Job.available || !v1Job.available) throw new Error('Fixture job unavailable');
+    v0Job.value.plannedDistance = meters(200_000);
+    v1Job.value.plannedDistance = meters(200_000);
+    v1State.navigationDistance = meters(150_000);
+    return {live, v0Job: v0Job.value, v1Job: v1Job.value, v1State};
+  };
+
+  it('recomputes from unrounded meters across unit profiles, reroutes and arrival', () => {
+    const {live, v1State} = route();
+    expect(desktopLiveView(live).routeProgress).toBe(0.25);
+    expect(desktopLiveView(live, {ets2: 'us-customary', ats: 'us-customary'}).routeProgress).toBe(0.25);
+    v1State.navigationDistance = meters(100_001);
+    expect(desktopLiveView(live).routeProgress).toBe(0.499995);
+    v1State.navigationDistance = meters(175_000);
+    expect(desktopLiveView(live).routeProgress).toBe(0.125);
+    v1State.navigationDistance = meters(200_000);
+    expect(desktopLiveView(live).routeProgress).toBe(0);
+    v1State.navigationDistance = meters(250_000);
+    expect(desktopLiveView(live).routeProgress).toBe(0);
+    v1State.navigationDistance = meters(0);
+    expect(desktopLiveView(live).routeProgress).toBe(1);
+    v1State.navigationDistance = unavailable;
+    expect(desktopLiveView(live).routeProgress).toBeNull();
+  });
+
+  it('requires a positive finite v1 plan and nonnegative finite remaining distance', () => {
+    for (const plan of [unavailable, meters(0), meters(-1), meters(NaN), meters(Infinity)]) {
+      const {live, v0Job, v1Job} = route();
+      v0Job.plannedDistance = unavailable;
+      v1Job.plannedDistance = plan;
+      expect(desktopLiveView(live).routeProgress, `plan: ${JSON.stringify(plan)}`).toBeNull();
+    }
+    for (const remaining of [unavailable, meters(-1), meters(NaN), meters(Infinity)]) {
+      const {live, v1State} = route();
+      v1State.navigationDistance = remaining;
+      expect(desktopLiveView(live).routeProgress, `remaining: ${JSON.stringify(remaining)}`).toBeNull();
+    }
+  });
+
+  it('uses the v1 plan when v0 has no valid plan and clears progress when a valid v0 plan disagrees', () => {
+    const {live, v0Job, v1Job, v1State} = route();
+    for (const missing of [unavailable, meters(0), meters(NaN)]) {
+      v0Job.plannedDistance = missing;
+      expect(desktopLiveView(live).routeProgress).toBe(0.25);
+    }
+    v0Job.plannedDistance = meters(300_000);
+    expect(desktopLiveView(live).routeProgress).toBeNull();
+    v1Job.plannedDistance = meters(300_000);
+    v1State.navigationDistance = meters(225_000);
+    expect(desktopLiveView(live).routeProgress).toBe(0.25);
+  });
+
+  it('requires a current pair from the same source and keeps current paused values', () => {
+    expect(desktopLiveView(smokeV0()).routeProgress).toBeNull();
+    for (const live of [
+      smokePair({status: 'stale'}), smokePair({fresh: false}), smokePair({}, {status: 'disconnected'}), smokePair({}, {fresh: false}),
+      smokePair({game: 'ats'}), smokePair({origin: 'replay'}), smokePair({selection: 'game'})
+    ]) expect(desktopLiveView(route(live).live).routeProgress).toBeNull();
+    expect(desktopLiveView(route(smokePair({status: 'paused'}, {status: 'paused'})).live).routeProgress).toBe(0.25);
+  });
+
+  it('rejects v1 route progress from a previous real game session with the same job', () => {
+    const {live} = route(smokePair({selection: 'game', origin: 'game'}, {selection: 'game'}));
+    const v0 = live.observation!, v1 = live.v1!.observation!;
+    v0.source.origin = 'game';
+    expect(desktopLiveView(live).routeProgress).toBeNull();
+    v1.source = {...v0.source};
+    expect(desktopLiveView(live).routeProgress).toBe(0.25);
+  });
+
+  it('clears a replaced or disappeared job until both streams report the new job', () => {
+    const {live, v0Job, v1Job, v1State} = route();
+    v0Job.cargoId = 'cargo.new';
+    expect(desktopLiveView(live).routeProgress).toBeNull();
+    v1Job.cargoId = {available: true, value: 'cargo.new'};
+    v1State.navigationDistance = meters(200_000);
+    expect(desktopLiveView(live).routeProgress).toBe(0);
+    live.observation!.state.configuration.job = {available: false, reason: 'not-observed'};
+    expect(desktopLiveView(live).routeProgress).toBeNull();
+  });
+});
+
 it('never translates SDK names equal to application words or containing accented/Cyrillic text', () => {
   for (const name of ['Speed', 'Settings', 'Łódź', 'Груз Скорость']) {
     const live = smokePair(), job = live.v1!.observation!.state.configuration.job;

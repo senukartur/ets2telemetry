@@ -118,7 +118,8 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
       {hasJob ? <CardContent className="yu-job-body">
         <div className="yu-route" data-testid="live.job.route">
           <div className="yu-route-end"><MapPin aria-hidden="true" /><span><strong data-testid="live.job.origin">{value('source-city')}</strong><small>{value('source-company')}</small></span></div>
-          <span className="yu-route-line" aria-hidden="true" />
+          {view.routeProgress === null ? <span className="yu-route-line" aria-hidden="true" />
+            : <progress className="yu-route-line" data-testid="live.job.progress" value={view.routeProgress} max={1} aria-label={t('live.routeProgress', undefined, language)} />}
           <div className="yu-route-end yu-route-destination"><span><strong data-testid="live.job.destination">{value('destination-city')}</strong><small>{value('destination-company')}</small></span><Flag aria-hidden="true" /></div>
         </div>
         <div className="yu-job-metrics">
