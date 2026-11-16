@@ -221,7 +221,8 @@ describe('loads, restarts and continuations', () => {
       [s.event(r.jobCleared(), paused)], [s.event(r.truckCleared(), paused)], [s.event(r.trailerCleared(0), paused)],
       [s.event(r.jobConfigured(), paused)], [s.event(r.truckConfigured(), paused)], [s.event(r.trailerConfigured(), paused)],
       [s.event(r.started())],
-      [s.event(r.regression('12345', '12000')), [partial(trip), cause(trip, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '17'})]],
+      [s.event(r.regression('12345', '12000')), [partial(trip), cause(trip, 'discontinuity', {cause: 'save-load', annotation: true, rollbackVersion: 1,
+        fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '17'})]],
       [s.event(r.paused(), paused)],
       [s.event(r.delivered(), paused), [attr(trip, 'trip'), close(trip, 'delivered', 'outcome', 'partial', at(19))]]]);
     expect(tripView(state, 'ets2').lastClosed).toMatchObject({tripUuid: trip, recordingCompleteness: 'partial', outcome: 'delivered'});
@@ -523,7 +524,8 @@ describe('game-mode opening evidence', () => {
       [s.event(mode, paused), [{kind: 'trip.update', tripUuid: trip, set: {gameModeAmbiguous: true}}]],
       [s.event(r.started())], [s.event(mode)],
       [s.event(r.regression('12345', '12000')), [partial(trip),
-        cause(trip, 'discontinuity', {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '15'})]]]);
+        cause(trip, 'discontinuity', {cause: 'save-load', annotation: true, rollbackVersion: 1,
+          fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '15'})]]]);
     expect(tripView(state, 'ets2')).toMatchObject({phase: 'active', lastClosed: null,
       current: {tripUuid: trip, gameMode: UNKNOWN_MODE, gameModeAmbiguous: true, recordingCompleteness: 'partial'}});
   });

@@ -5,6 +5,15 @@ import {isUuid} from '../codec';
 
 export interface CoverageEndpoint extends ProgressCheckpoint {trip: string; head: string | null; prefixState: string | null; running?: CapturedRunning}
 
+interface PendingRollback {
+  sourceClockId: string;
+  fromClockId: string;
+  toClockId: string;
+  toMinutes: string;
+  atNs: string;
+  sample: string | null;
+}
+
 /** References change at coverage boundaries only; ordinary samples use logical_revisions' existing bounds/head. */
 export interface LogicalCoverage {
   acceptancePending?: boolean;
@@ -14,6 +23,7 @@ export interface LogicalCoverage {
    * admitted profile proof (quantities.ts, proofWait); absent otherwise.
    */
   proofPending?: string;
+  rollback?: PendingRollback;
   version: 1; start: 'observed' | 'unproven'; losses: number; member: string;
   phase: 'active' | 'pending' | 'resumed'; endpoint: CoverageEndpoint | null;
   window: {session: string; opened: string | null} | null;
@@ -107,7 +117,7 @@ function validEndpoint(v: unknown): v is CoverageEndpoint {
       && BigInt(c.running.profile.afterMonotonicNs)<=BigInt(c.running.monotonicNs));
 }
 export function validCoverage(v: unknown): v is LogicalCoverage {
-  if (!v || typeof v !== 'object' || Object.keys(v).filter(key=>key!=='acceptancePending'&&key!=='sampleResumePending'&&key!=='proofPending').sort().join(',')!=='endpoint,losses,member,phase,start,version,window') return false;
+  if (!v || typeof v !== 'object' || Object.keys(v).filter(key=>key!=='acceptancePending'&&key!=='sampleResumePending'&&key!=='proofPending'&&key!=='rollback').sort().join(',')!=='endpoint,losses,member,phase,start,version,window') return false;
   const c = v as LogicalCoverage;
   return (!Object.hasOwn(c,'acceptancePending') || typeof c.acceptancePending==='boolean')
     && (!Object.hasOwn(c,'sampleResumePending') || typeof c.sampleResumePending==='boolean') && c.version === 1 && ['observed', 'unproven'].includes(c.start) && Number.isInteger(c.losses) && c.losses >= 0 && c.losses <= 31
@@ -115,7 +125,14 @@ export function validCoverage(v: unknown): v is LogicalCoverage {
     && (c.window === null || typeof c.window === 'object' && keys(c.window, 'opened,session') && reference(c.window.session) && (c.window.opened === null || reference(c.window.opened)))
     && (c.phase === 'pending' || c.window === null)
     && (c.sampleResumePending !== true || c.phase === 'pending' && c.window !== null && c.endpoint !== null)
-    && (c.proofPending === undefined || unsigned(c.proofPending) && c.phase === 'pending' && c.window !== null && c.endpoint !== null);
+    && (c.proofPending === undefined || unsigned(c.proofPending) && c.phase === 'pending' && c.window !== null && c.endpoint !== null)
+    && (c.rollback === undefined || validRollback(c.rollback) && c.phase !== 'pending' && c.start === 'observed' && c.losses === 0);
+}
+function validRollback(v: unknown): v is PendingRollback {
+  if (!v || typeof v !== 'object' || !keys(v, 'atNs,fromClockId,sample,sourceClockId,toClockId,toMinutes')) return false;
+  const b = v as PendingRollback;
+  return isUuid(b.sourceClockId) && isUuid(b.fromClockId) && isUuid(b.toClockId) && b.fromClockId !== b.toClockId
+    && unsigned(b.atNs) && unsigned(b.toMinutes) && nullableReference(b.sample);
 }
 export function latestCoverage(db: Database.Database, id: unknown): {revision?: Row; present: boolean; value?: LogicalCoverage} {
   const revision = get(db, 'SELECT r.*,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref WHERE r.logical_ref=? ORDER BY r.id DESC LIMIT 1', id);
@@ -200,6 +217,26 @@ export function pausedReconnect(db: Database.Database, row: Row, requireStarted 
   if (requireStarted && get(db, 'SELECT type FROM events WHERE plugin_session_id=? AND event_seq=?', row.plugin_session_ref, n)?.type !== 'simulation.started') return null;
   return {continuationOf: previous.trip_uuid, nextEventSeq: next};
 }
+/** The candidate must refer to a live, stored regression of this member on its capture clock. */
+function rollbackBoundary(db: Database.Database, row: Row, detail: Row): PendingRollback | undefined {
+  if (detail.annotation !== true || !unsigned(detail.atEventSeq) || !isUuid(detail.fromClockId) || !isUuid(detail.toClockId)) return undefined;
+  const event = get(db, `SELECT e.occurred_monotonic_ns,e.occurred_game_minutes,c.clock_uuid AS source_clock,g.clock_uuid AS game_clock
+    FROM events e JOIN clocks c ON c.id=e.source_clock_ref JOIN clocks g ON g.id=e.occurred_game_clock_ref
+    WHERE e.plugin_session_id=? AND e.event_seq=? AND e.type='gameTime.regression'
+      AND e.first_redelivered=0 AND e.occurred_simulation='running'`, row.plugin_session_ref, detail.atEventSeq.padStart(20, '0'));
+  if (typeof event?.occurred_monotonic_ns !== 'string' || typeof event.occurred_game_minutes !== 'bigint' || event.game_clock !== detail.toClockId) return undefined;
+  const candidate = {sourceClockId: event.source_clock, fromClockId: detail.fromClockId, toClockId: detail.toClockId,
+    toMinutes: event.occurred_game_minutes.toString(), atNs: BigInt(event.occurred_monotonic_ns).toString(), sample: null};
+  return validRollback(candidate) ? candidate : undefined;
+}
+
+export function finishRollback(coverage: LogicalCoverage, verified: boolean): LogicalCoverage {
+  const decided = {...coverage};
+  delete decided.rollback;
+  if (!verified) decided.losses |= COVERAGE_LOSS.discontinuity;
+  return decided;
+}
+
 /** Inspect new interval rows of the selected members, with an explicit overflow veto. No member-history arrays. */
 export function advanceCoverage(db: Database.Database, id: unknown, group: Row, row: Row, override?: LogicalCoverage): LogicalCoverage | undefined {
   const prior = latestCoverage(db, id), coverage = override ? structuredClone(override) : prior.value;
@@ -224,6 +261,15 @@ export function advanceCoverage(db: Database.Database, id: unknown, group: Row, 
       // A later member cannot establish the first recording's missing acceptance.
       if(acceptedStart(db,row,detail) && String(id)===String(row.id)){coverage.start='observed';if(coverage.acceptancePending)coverage.acceptancePending=false;}
       else if(!validAcceptanceDetail(detail))coverage.losses|=COVERAGE_LOSS.unknown;
+      continue;
+    }
+    if (interval.kind === 'discontinuity' && detail.cause === 'save-load' && detail.rollbackVersion === 1) {
+      const candidate = group.accounting_engine === 1n && group.profile_scope !== null && interval.trip_ref === row.id
+        && coverage.member === String(row.id) && coverage.start === 'observed' && coverage.losses === 0
+        && coverage.phase !== 'pending' && !coverage.rollback && row.outcome === 'open'
+        ? rollbackBoundary(db, row, detail) : undefined;
+      if (candidate) coverage.rollback = candidate;
+      else coverage.losses |= COVERAGE_LOSS.discontinuity;
       continue;
     }
     if (interval.trip_ref === id && ['opened-at-load','save-load'].includes(String(detail.cause))) coverage.start = 'unproven';
@@ -259,12 +305,14 @@ export function advanceCoverage(db: Database.Database, id: unknown, group: Row, 
     else if (detail.annotation !== true || ['odometer-jump', 'position-jump', 'game-time-jump'].includes(String(detail.cause))) coverage.losses |= COVERAGE_LOSS.discontinuity;
   }
   if (coverage.phase === 'pending' && coverage.endpoint?.trip === coverage.member && cleanLoadWindow(db,row)) {coverage.phase='resumed';coverage.window=null;coverage.sampleResumePending=false;delete coverage.proofPending;}
+  if (coverage.rollback && (row.outcome !== 'open' || coverage.losses || coverage.phase === 'pending' || coverage.start !== 'observed'))
+    return finishRollback(coverage, false);
   return coverage;
 }
 export function applyCoverage(row: Row, group: Row, coverage: LogicalCoverage | undefined, present: boolean): void {
   if (coverage) {
     row._coverage = coverage;
-    if(coverage.acceptancePending===true)row.recording_completeness='partial';
+    if(coverage.acceptancePending===true || coverage.rollback)row.recording_completeness='partial';
     else if (group.profile_scope !== null && coverage.start === 'observed' && coverage.losses === 0 && coverage.phase !== 'pending') row.recording_completeness = 'complete';
     else if (coverage.losses !== 0 || coverage.phase === 'pending' || Number(group.member_count) > 1) row.recording_completeness = 'partial';
   } else if (present || Number(group.member_count) > 1) row.recording_completeness = 'partial';
