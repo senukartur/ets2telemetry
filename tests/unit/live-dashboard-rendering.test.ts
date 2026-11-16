@@ -88,12 +88,12 @@ describe('current job route progress (REG-009)', () => {
   };
 
   it.each([
-    ['en', 'Estimated route progress', 'can decrease after rerouting'],
-    ['ru', 'Приблизительный прогресс по маршруту', 'может уменьшиться при перестроении маршрута']
-  ] as const)('gives the determinate progress bar a localized accessible name in %s', (language, label, hint) => {
+    ['en', 'Estimated route progress', ['can decrease after rerouting', 'A reported zero fills the bar.', 'whether a route is set or the delivery is complete.']],
+    ['ru', 'Приблизительный прогресс по маршруту', ['может уменьшиться при перестроении маршрута', 'Нулевой остаток заполняет полосу целиком.', 'задан ли маршрут и завершена ли доставка.']]
+  ] as const)('names the progress bar and explains the estimate and reported zero in %s', (language, label, hints) => {
     const job = renderRoute(150_000, language);
     expect(job).toMatch(new RegExp(`<progress[^>]*value="0.25"[^>]*max="1"[^>]*aria-label="${label}"[^>]*></progress>`));
-    expect(job).toContain(hint);
+    for (const hint of hints) expect(job).toContain(hint);
   });
 
   it('distinguishes the start, arrival and unavailable progress', () => {

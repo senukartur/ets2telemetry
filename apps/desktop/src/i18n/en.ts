@@ -641,7 +641,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.driven': 'Driven',
   'live.remaining': 'Remaining',
   'live.planned': 'planned {v}',
-  'live.plannedNote': 'The planned distance comes from the job offer and excludes ferries. The bar estimates progress from the planned distance and the Route Advisor’s remaining distance. It can decrease after rerouting.',
+  'live.plannedNote': 'The planned distance in the job offer excludes ferries. The bar compares it with the Route Advisor’s remaining distance and can decrease after rerouting. A reported zero fills the bar. This reading alone leaves it unclear whether a route is set or the delivery is complete.',
   'live.routeProgress': 'Estimated route progress',
   'live.deadline': 'Deadline',
   'live.breakSoon': 'Soon',
