@@ -560,6 +560,9 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-route-end small { font-size: 12px; color: var(--yu-text-muted); }
 .yu-route-destination { justify-content: flex-end; text-align: right; }
 .yu-route-line { height: 6px; border-radius: 3px; background: var(--yu-bg-raised); }
+progress.yu-route-line { width: 100%; appearance: none; border: 0; overflow: hidden; }
+progress.yu-route-line::-webkit-progress-bar { background: var(--yu-bg-raised); }
+progress.yu-route-line::-webkit-progress-value { border-radius: 3px; background: var(--yu-accent-light); }
 .yu-job-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .yu-job-metrics > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .yu-job-metrics span { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--yu-text-muted); }

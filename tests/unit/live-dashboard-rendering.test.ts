@@ -46,7 +46,7 @@ describe('connected', () => {
     expect(tags).toContain(`Synthetic Cargo · ${expected.mass}</span>`);
     expect(tags).toContain(`data-testid="live.job.market" data-variant="neutral">${expected.market}</span>`);
     expect(tags).toContain(`${expected.deadline} `);
-    // The route: origin and destination with their companies, and a plain line without a progress fill or truck marker.
+    // This fixture has different v0 and v1 plans, so the two endpoints and their companies frame an empty track.
     const route = between(html, 'live.job.route', 'live.job.break');
     expect(route).toContain('<strong data-testid="live.job.origin">Synthetic City A</strong><small>Synthetic Company A</small>');
     expect(route).toContain('<strong data-testid="live.job.destination">Synthetic City B</strong><small>Synthetic Company B</small>');
@@ -73,6 +73,34 @@ describe('connected', () => {
     expect(between(render(smokePair(), 'en', recording('partial')), 'live.trip', 'live.truck')).toContain('<span data-variant="warn">Partial</span>');
     expect(between(render(smokePair(), 'ru', recording('unknown')), 'live.trip', 'live.truck')).toContain('<span data-variant="neutral">Неизвестно</span>');
     for (const health of [recording(null), {state: 'unknown'} as const, undefined]) expect(between(render(smokePair(), 'en', health), 'live.trip', 'live.truck')).toContain('<dd data-testid="live.trip.recording">—</dd>');
+  });
+});
+
+describe('current job route progress (REG-009)', () => {
+  const renderRoute = (remaining: number | null, language: AppLanguage = 'en') => {
+    const live = smokePair(), v1State = live.v1!.observation!.state, job = v1State.configuration.job;
+    const v0Job = live.observation!.state.configuration.job;
+    if (!v0Job.available || !job.available || !job.value.expectedIncome.available) throw new Error('Fixture job or expected income unavailable');
+    job.value.plannedDistance = {available: true, value: 200_000, unit: 'm'};
+    v0Job.value.expectedIncome.rawValue = job.value.expectedIncome.value.raw;
+    v1State.navigationDistance = remaining === null ? {available: false, reason: 'not-observed', unit: 'm'} : {available: true, value: remaining, unit: 'm'};
+    return between(render(live, language), 'live.job.route', 'live.job.break');
+  };
+
+  it.each([
+    ['en', 'Estimated route progress', ['can decrease after rerouting', 'A reported zero fills the bar.', 'whether a route is set or the delivery is complete.']],
+    ['ru', 'Приблизительный прогресс по маршруту', ['может уменьшиться при перестроении маршрута', 'Нулевой остаток заполняет полосу целиком.', 'задан ли маршрут и завершена ли доставка.']]
+  ] as const)('names the progress bar and explains the estimate and reported zero in %s', (language, label, hints) => {
+    const job = renderRoute(150_000, language);
+    expect(job).toMatch(new RegExp(`<progress[^>]*value="0.25"[^>]*max="1"[^>]*aria-label="${label}"[^>]*></progress>`));
+    for (const hint of hints) expect(job).toContain(hint);
+  });
+
+  it('distinguishes the start, arrival and unavailable progress', () => {
+    expect(renderRoute(200_000)).toMatch(/<progress[^>]*value="0"/);
+    expect(renderRoute(0)).toMatch(/<progress[^>]*value="1"/);
+    expect(renderRoute(null)).toContain('<span class="yu-route-line" aria-hidden="true"></span>');
+    expect(renderRoute(null)).not.toContain('<progress');
   });
 });
 
@@ -106,6 +134,7 @@ it.each([['en', 'No current data'], ['ru', 'Нет текущих данных']
   expect(job).not.toContain('live.job.tags');
   expect(job).toContain('<strong data-testid="live.job.origin">—</strong><small>—</small>');
   expect(job).not.toContain('Synthetic City');
+  expect(job).not.toContain('<progress');
 });
 
 describe('partial', () => {
