@@ -79,8 +79,10 @@ describe('connected', () => {
 describe('current job route progress (REG-009)', () => {
   const renderRoute = (remaining: number | null, language: AppLanguage = 'en') => {
     const live = smokePair(), v1State = live.v1!.observation!.state, job = v1State.configuration.job;
-    if (!job.available) throw new Error('Fixture job unavailable');
+    const v0Job = live.observation!.state.configuration.job;
+    if (!v0Job.available || !job.available || !job.value.expectedIncome.available) throw new Error('Fixture job or expected income unavailable');
     job.value.plannedDistance = {available: true, value: 200_000, unit: 'm'};
+    v0Job.value.expectedIncome.rawValue = job.value.expectedIncome.value.raw;
     v1State.navigationDistance = remaining === null ? {available: false, reason: 'not-observed', unit: 'm'} : {available: true, value: remaining, unit: 'm'};
     return between(render(live, language), 'live.job.route', 'live.job.break');
   };

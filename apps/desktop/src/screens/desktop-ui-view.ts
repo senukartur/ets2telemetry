@@ -2,6 +2,7 @@ import type {GearDisplayModes, LiveTelemetry, RecordingHealth, PluginTargetState
 import type {HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
 import {resolveDisplayUnits} from '../../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../../packages/telemetry-core/src/format';
+import type {LiveJob} from '../../../../packages/telemetry-core/src/readings';
 import {convertSpeed} from '../../../../packages/telemetry-core/src/units';
 import {liveSources, type LiveSources} from '../live-sources';
 import {connectionReasonText} from '../live-dashboard-text';
@@ -15,19 +16,27 @@ import {SPEED_GAUGE_FULL_SCALE, speedGaugeFraction} from '../speed-gauge';
 /** Geometry only clamps normalized numeric readings; formatted telemetry is never parsed or replaced by demo values. */
 export const clampRatio = (value: number | null) => value === null || !Number.isFinite(value) ? null : Math.max(0, Math.min(1, value));
 
-function plannedMeters(state: LiveSources['v0State']): number | null {
-  const reading = state?.job.state === 'value' ? state.job.value.plannedDistance : undefined;
-  if (reading?.state !== 'value') return null;
+function plannedMeters(reading: LiveJob['plannedDistance']): number | null {
+  if (reading.state !== 'value') return null;
   const {meters} = reading.value;
   return Number.isFinite(meters) && meters > 0 ? meters : null;
 }
 
 function jobRouteProgress(sources: LiveSources): number | null {
-  if (!sources.v0View.connection.current || !sources.v1Current || sources.job !== 'match') return null;
-  const planned = plannedMeters(sources.v1State);
-  const v0Planned = plannedMeters(sources.v0State);
-  const navigation = sources.v1State?.navigationDistance;
-  if (planned === null || (v0Planned !== null && v0Planned !== planned) || navigation?.state !== 'value') return null;
+  const v0Job = sources.v0State?.job, v1 = sources.v1State;
+  if (!sources.v0View.connection.current || !sources.v1Current || sources.job !== 'match' ||
+    v0Job?.state !== 'value' || v1?.job.state !== 'value') return null;
+  const {expectedIncome: v0Income, plannedDistance: v0Plan} = v0Job.value;
+  const {expectedIncome: v1Income, plannedDistance: v1Plan} = v1.job.value;
+  if (v0Income.state === 'value' && v1Income.state === 'value') {
+    // Both streams carry the same SDK attribute. Synthetic or replay v0 data can spell a whole amount as a decimal.
+    const raw = v0Income.value.raw.replace(/\.0+$/, '');
+    if ((raw === '-0' ? '0' : raw) !== v1Income.value.raw) return null;
+  }
+  const planned = plannedMeters(v1Plan);
+  const v0Planned = plannedMeters(v0Plan);
+  const navigation = v1.navigationDistance;
+  if (planned === null || (v0Planned !== null && v0Planned !== planned) || navigation.state !== 'value') return null;
   const remaining = navigation.value.meters;
   if (!Number.isFinite(remaining) || remaining < 0) return null;
   return Math.max(0, planned - remaining) / planned;

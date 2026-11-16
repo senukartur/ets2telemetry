@@ -69,6 +69,8 @@ describe('desktop numeric presentation (REG-002/003/009/014)', () => {
 
 describe('current job route progress (REG-003/004/009)', () => {
   const meters = (value: number) => ({available: true, value, unit: 'm'} as const);
+  const income = (raw: string) => ({available: true, value: {raw, sdkType: 'u64', currency: {status: 'unknown'}}} as const);
+  const originalIncome = '9007199254740992';
   const unavailable = {available: false, reason: 'not-observed', unit: 'm'} as const;
   const route = (live = smokePair()) => {
     const v0Job = live.observation!.state.configuration.job, v1State = live.v1!.observation!.state;
@@ -76,6 +78,8 @@ describe('current job route progress (REG-003/004/009)', () => {
     if (!v0Job.available || !v1Job.available) throw new Error('Fixture job unavailable');
     v0Job.value.plannedDistance = meters(200_000);
     v1Job.value.plannedDistance = meters(200_000);
+    v0Job.value.expectedIncome.rawValue = originalIncome;
+    v1Job.value.expectedIncome = income(originalIncome);
     v1State.navigationDistance = meters(150_000);
     return {live, v0Job: v0Job.value, v1Job: v1Job.value, v1State};
   };
@@ -152,6 +156,37 @@ describe('current job route progress (REG-003/004/009)', () => {
     expect(desktopLiveView(live).routeProgress).toBe(0);
     live.observation!.state.configuration.job = {available: false, reason: 'not-observed'};
     expect(desktopLiveView(live).routeProgress).toBeNull();
+  });
+
+  it.each(['v0', 'v1'] as const)('clears progress when only %s reports a replacement job with different expected income', first => {
+    const {live, v0Job, v1Job, v1State} = route();
+    v1State.navigationDistance = meters(0);
+    expect(desktopLiveView(live).routeProgress).toBe(1);
+
+    const newIncome = '9007199254740993';
+    const replaceV0 = () => { v0Job.expectedIncome.rawValue = newIncome; };
+    const replaceV1 = () => {
+      v1Job.expectedIncome = income(newIncome);
+      v1State.navigationDistance = meters(160_000);
+    };
+    const [replaceFirst, replaceSecond] = first === 'v0' ? [replaceV0, replaceV1] : [replaceV1, replaceV0];
+    replaceFirst();
+    expect(desktopLiveView(live).routeProgress).toBeNull();
+    replaceSecond();
+    expect(desktopLiveView(live).routeProgress).toBe(0.2);
+  });
+
+  it('compares v0 decimal income exactly when v1 supplies income', () => {
+    const {live, v0Job, v1Job} = route();
+    v0Job.expectedIncome.rawValue = `${originalIncome}.000000`;
+    expect(desktopLiveView(live).routeProgress).toBe(0.25);
+    v0Job.expectedIncome.rawValue = `${originalIncome}.000001`;
+    expect(desktopLiveView(live).routeProgress).toBeNull();
+    v1Job.expectedIncome = {available: false, reason: 'not-observed'};
+    expect(desktopLiveView(live).routeProgress).toBe(0.25);
+    v0Job.expectedIncome.rawValue = '-0.000000';
+    v1Job.expectedIncome = income('0');
+    expect(desktopLiveView(live).routeProgress).toBe(0.25);
   });
 });
 
