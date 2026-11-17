@@ -314,17 +314,17 @@ export function journalIntervals(conn: StorageConnection, tripUuid: string, page
 function moneyTotals(db: Database.Database, trip: bigint, snap?: LogicalSnapshot): JournalMoneyTotals {
   const incomplete: JournalMoneyTotals = {incomplete: true, totals: [], unavailable: []};
   if (snap?.row._moneyIncomplete === true) return incomplete;
-  const path = snap?.head !== null && snap?.head !== undefined ? moneyPath(db, snap.head) : undefined;
+  const path = snap?.head != null ? moneyPath(db, snap) : undefined;
   if (path?.incomplete && !path.includes) return incomplete;
   const rows = snap ? all(db, `SELECT e.type,m.amount_raw,m.amount_sdk_type,m.amount_currency_status,m.amount_currency_code,m.amount_currency_source,m.amount_state,
-    x.trip_ref AS member,e.plugin_session_id AS session,e.source_clock_ref AS clock,e.occurred_monotonic_ns AS at
+    x.from_revision AS membership_order,e.plugin_session_id AS session,e.source_clock_ref AS clock,e.occurred_monotonic_ns AS at
     FROM logical_snapshot_memberships x JOIN event_attributions a ON a.trip_ref = x.trip_ref JOIN events e ON e.id = a.event_ref JOIN event_amounts m ON m.event_ref = e.id
     WHERE x.logical_ref = ? AND x.trip_ref <= ? AND x.from_revision < ? AND (x.through_revision IS NULL OR x.through_revision >= ?) AND e.id <= ? AND e.type IN ('player.fined','player.tollgate.paid','player.use.ferry','player.use.train') ORDER BY e.id LIMIT ?`, trip, snap.members, snap.revision, snap.revision, snap.events, JOURNAL_MONEY_AMOUNTS + 1)
     : all(db, JOURNAL_QUERIES.amounts, trip, JOURNAL_MONEY_AMOUNTS + 1);
   if (rows.length > JOURNAL_MONEY_AMOUNTS) return incomplete;
   const totals = new Map<string, JournalMoneyTotal & {sum: bigint}>(), unavailable = new Map<string, JournalMoneyUnavailable>();
   for (const r of rows) {
-    if (path?.includes && !path.includes({member: r.member as bigint, session: r.session as bigint, clock: r.clock as bigint,
+    if (path?.includes && !path.includes({order: r.membership_order as bigint, session: r.session as bigint, clock: r.clock as bigint,
       at: r.at === null ? null : BigInt(r.at as string)})) continue;
     const category = MONEY_TYPES[String(r.type)];
     const amount = moneyFromColumns({raw: r.amount_raw as string | null, sdkType: r.amount_sdk_type as 's64' | 'u64' | null,

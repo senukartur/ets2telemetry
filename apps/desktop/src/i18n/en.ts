@@ -800,7 +800,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'tr.samples': '1 Hz samples',
   'tr.gap': 'no samples for {d}',
   'tr.money': 'Fines and tolls',
-  'tr.moneySubtotal': 'Subtotal for confirmed portions of the trip.',
+  'tr.moneySubtotal': 'Subtotal for confirmed portions of the trip. Charges on abandoned or unverified portions are excluded.',
   'tr.fines': 'Fines',
   'tr.tolls': 'Tolls',
   'tr.ferry': 'Ferries and trains',

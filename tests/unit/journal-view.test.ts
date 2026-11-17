@@ -240,11 +240,11 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
       retainedSubtotal: {totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '700', count: 2}], unavailable: []}}};
     const side = journalTripSideText(detail, {timeZone: ZONE, language: 'ru'});
     expect(side.money.rows).toEqual([expect.objectContaining({id: 'fine', value: expect.stringContaining('700 EUR')})]);
-    expect(side.money.notes).toEqual(['Сумма по подтверждённым участкам рейса.']);
+    expect(side.money.notes).toEqual(['Сумма по подтверждённым участкам рейса. Расходы на отброшенных и неподтверждённых участках не учтены.']);
     const text = journalDetailText(detail, {timeZone: ZONE});
     expect(fields(text.sections, 'money')).toMatchObject({fine: '700 EUR (SDK-documented), 2 amounts'});
     expect(fields(text.sections, 'money')).not.toHaveProperty('toll');
-    expect(notes(text.sections, 'money')).toContain('Subtotal for confirmed portions of the trip.');
+    expect(notes(text.sections, 'money')).toContain('Subtotal for confirmed portions of the trip. Charges on abandoned or unverified portions are excluded.');
   });
   it('shows a partial trip closed by lost events with its own outcome', () => {
     const text = journalDetailText(GAP_DETAIL, {timeZone: ZONE});
