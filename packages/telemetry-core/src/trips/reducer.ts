@@ -8,7 +8,8 @@ import type {CompletenessInterval} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
 import {liveTruckPowertrain} from '../truck-powertrain';
 import {
-  accumulate, advanceGameTime, classifyStep, accountingUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, REFUEL_READING_LIMIT, startRunClock, switchRunClock,
+  accumulate, advanceGameTime, classifyStep, accountingUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, REFUEL_READING_LIMIT,
+  roadsideRelocation, startRunClock, switchRunClock,
   type GameTimeJump, type ReadingPoint, type ReadingStep
 } from './accounting';
 import {attachTripUuidFor, canonicalJson, jobKey, tripUuidFor} from './identity';
@@ -94,8 +95,8 @@ function annotation(tripUuid: string, detail: Record<string, unknown>): TripEffe
 /**
  * Queues annotations; consecutive ones of the same trip, cause and label merge into one with a count (T18). The first
  * keeps its values; the merged one adds the last position (`lastAtEventSeq`, or `lastAtMonotonicNs` for a reading).
- * A refuel or a game-time jump never merges: each is a separate episode with its own litres or range, which may still
- * grow in place, so merging would lend one episode's growth to another. This only lengthens the waiting queue; the
+ * Refuels, game-time jumps and roadside relocations keep their own amount or range. Refuels and jumps may still grow
+ * in place, so merging would lend one episode's growth to another. This only lengthens the waiting queue; the
  * per-carrier cap of MAX_ANNOTATIONS_PER_COMMIT still holds, and episodes are bounded by real refuels and jumps.
  */
 function queueAnnotations(slot: GameSlot, annotations: TripEffect[]) {
@@ -103,7 +104,8 @@ function queueAnnotations(slot: GameSlot, annotations: TripEffect[]) {
     const last = slot.pendingAnnotations.at(-1);
     if (last?.kind === 'completeness.add' && effect.kind === 'completeness.add' && last.interval.tripUuid === effect.interval.tripUuid &&
       last.interval.detail?.cause === effect.interval.detail?.cause && last.interval.detail?.label === effect.interval.detail?.label &&
-      effect.interval.detail?.cause !== 'refuel' && effect.interval.detail?.cause !== 'game-time-jump' && effect.interval.detail?.cause !== 'paused-reconnect') {
+      effect.interval.detail?.cause !== 'refuel' && effect.interval.detail?.cause !== 'game-time-jump' &&
+      effect.interval.detail?.cause !== 'paused-reconnect' && effect.interval.detail?.cause !== 'possible-roadside-assistance') {
       const detail = last.interval.detail!, next = effect.interval.detail!;
       last.interval.detail = {...detail, count: (typeof detail.count === 'number' ? detail.count : 1) + 1,
         ...(next.atMonotonicNs !== undefined ? {lastAtMonotonicNs: next.atMonotonicNs} : {lastAtEventSeq: next.atEventSeq})};
@@ -384,6 +386,22 @@ function carrierSession(state: TripState, source: {pluginSessionId: string; game
   return coveredThrough === state.sessions[id].processedThrough ? state.sessions[id] : 'COVERAGE_MISMATCH';
 }
 
+function updateRoadsidePause(c: Carrier, message: EventMessage): void {
+  const {record, redelivered, occurred} = message.data;
+  const session = c.session, pause = session.roadsidePause;
+  // Any intervening durable event ends the candidate, including a save or configuration boundary.
+  delete session.roadsidePause;
+  if (c.game !== 'ets2' || c.slot.trip?.phase !== 'active' || redelivered || replayed(c) || c.monotonicNs === null) return;
+  if (record.type === 'simulation.paused' && occurred.simulation === 'paused' && c.gameTime !== null) {
+    session.roadsidePause = {pausedNs: c.monotonicNs, resumedNs: null, sourceClockId: message.capture.clockId,
+      processInstanceId: message.source.processInstanceId, gameClockId: c.gameTime.clockId, gameMinutes: c.gameTime.minutes};
+  } else if (record.type === 'simulation.started' && occurred.simulation === 'running' && pause && pause.resumedNs === null
+    && pause.sourceClockId === message.capture.clockId && pause.processInstanceId === message.source.processInstanceId
+    && occurred.gameTime.clockId === pause.gameClockId && BigInt(c.monotonicNs) > BigInt(pause.pausedNs)) {
+    session.roadsidePause = {...pause, resumedNs: c.monotonicNs};
+  }
+}
+
 function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint64, receivedUtcMs: number): TripStepResult {
   const checked = carrierSession(state, message.source, coveredThrough);
   if (typeof checked === 'string') return {ok: false, code: checked};
@@ -395,6 +413,7 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   const label = utcOf(occurred.utcUnixMs) ?? session.lastUtcMs ?? receivedUtcMs;
   const c = carrierFor(draft, session, label, occurred.monotonicNs.available ? occurred.monotonicNs.value : null, message.data.eventSeq, occurred.simulation);
   c.gameTime = occurred.gameTime.minutes.available ? {minutes: occurred.gameTime.minutes.value, clockId: occurred.gameTime.clockId} : null;
+  updateRoadsidePause(c, message);
   if (session.reconnect !== null) {
     const pending = session.reconnect;
     const safeEvent = pending.through !== null && seq <= BigInt(pending.through) && occurred.simulation === 'paused' &&
@@ -495,6 +514,7 @@ function stepGap(state: TripState, message: GapMessage, coveredThrough: Uint64, 
   if (last <= processed) return {ok: true, state, effects: []};
   if (first > processed + 1n || attachDue(checked, state.games[checked.game])) return {ok: false, code: 'ORDER_VIOLATION'};
   const draft = structuredClone(state), session = draft.sessions[checked.pluginSessionId], suffixFirst = processed + 1n;
+  delete session.roadsidePause;
   session.emptyJobObserved=false;
   if(first!==1n || last>2n)session.prestartBlocked=true;
   const c = carrierFor(draft, session, session.lastUtcMs ?? receivedUtcMs, null, null, null);
@@ -650,6 +670,7 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUt
   const id = message.source.pluginSessionId;
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== message.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], job = message.data.state.configuration.job;
+  delete session.roadsidePause;
   session.emptyJobObserved=false;
   // Only the initial empty startup checkpoint can support a later live menu transition.
   if(session.attachedFromEventSeq!==null || job.available || message.data.state.simulation==='running'
@@ -794,6 +815,7 @@ function stepDisconnected(state: TripState): TripStepResult {
     session.disconnected = {utcMs: session.lastUtcMs, monotonicNs: session.lastMonotonicNs, clockId: session.clockId, reading: session.lastReading};
     // The next connection starts its own readings: no step crosses a connection hole (T16).
     session.lastReading = null; session.connectionSinceNs = null; session.runClock = null; session.gameTimeWindow = null; session.jumpEpisode = null; session.bridge = null;
+    delete session.roadsidePause;
   }
   return {ok: true, state: draft, effects: []};
 }
@@ -844,6 +866,7 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, cu
     : isFastAdvance(episode.lastNs, episode.lastMinutes, next) ? {...advanced.jump, grows: 'extend'} : null;
   const hole = prev !== null && session.runClock !== null && isReadingHole(session.runClock, next);
   let annotated: string | null = null;
+  let relocated = false;
   const trip = slot.trip;
   if (trip !== null && trip.pluginSessionId === id) {
     if (trip.loadCoverage !== null && trip.loadCoverage.start === null && next.gameTime.minutes !== null) trip.loadCoverage.start = {...next.gameTime, minutes: next.gameTime.minutes};
@@ -853,8 +876,21 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, cu
     if (prev !== null && acc.lastReading !== 'none') {
       if (hole) queueHole(slot, trip, prev, next, session.connectionSinceNs);
       if (acc.lastReading === 'active' && trip.phase === 'active') {
-        accountStep(slot, trip, session, prev, next, classifyStep(prev, next, session.lastTransfer), jump);
-        if (jump !== null) annotated = trip.tripUuid;
+        const step = classifyStep(prev, next, session.lastTransfer);
+        const pause = session.roadsidePause;
+        const meters = !hole && pause && (currentJob === undefined || currentJob !== null && jobKey(currentJob) === trip.jobKey)
+          ? roadsideRelocation(pause, prev, next, step) : null;
+        if (meters !== null) {
+          relocated = true;
+          accountStep(slot, trip, session, prev, next, {...step, positionJump: null}, null);
+          queueAnnotations(slot, [readingNote(trip.tripUuid, next, {cause: 'possible-roadside-assistance',
+            fromMinutes: prev.gameTime.minutes, toMinutes: next.gameTime.minutes, meters})]);
+          // Normal driving must start a new time window so it cannot rediscover this already explained jump.
+          session.gameTimeWindow = advanceGameTime(null, null, next).window;
+        } else {
+          accountStep(slot, trip, session, prev, next, step, jump);
+          if (jump !== null) annotated = trip.tripUuid;
+        }
       }
     }
     // A refuel episode continues only over counted steps: after a step that is not counted (the first reading of a
@@ -862,7 +898,8 @@ function stepReading(state: TripState, sample: StepSample & {utcMs?: number}, cu
     if (prev === null || acc.lastReading !== 'active' || trip.phase !== 'active') acc.refuelling = false;
     acc.lastReading = trip.phase === 'active' ? 'active' : 'open';
   }
-  session.jumpEpisode = advanced.jump === null ? null : jump === null ? episode
+  if (next.simulation === 'running') delete session.roadsidePause;
+  session.jumpEpisode = relocated || advanced.jump === null ? null : jump === null ? episode
     : {tripUuid: annotated ?? (jump.grows === 'extend' ? episode?.tripUuid ?? null : null), lastNs: next.capture.monotonicNs, lastMinutes: next.gameTime.minutes!};
   session.lastReading = next; session.runClock = startRunClock(next);
   if (session.lastMonotonicNs === null || BigInt(next.capture.monotonicNs) >= BigInt(session.lastMonotonicNs)) session.simulation = next.simulation;

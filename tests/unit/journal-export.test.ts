@@ -232,6 +232,13 @@ describe('JSON export compatibility and format version 7 (J15, REG-014)', () => 
 });
 
 describe('money stays exact decimal text (J15)', () => {
+  it('keeps the format 7 money block unchanged when the Journal has a retained subtotal', () => {
+    const withSubtotal: JournalTripDetail = {...detail, money: {incomplete: true, totals: [], unavailable: [], retainedSubtotal: {
+      totals: [{category: 'fine', sdkType: 's64', currency: {status: 'unknown'}, raw: '700', count: 2}], unavailable: []
+    }}};
+    const exported = JSON.parse(serialize(withSubtotal, {})) as {money: unknown};
+    expect(exported.money).toEqual({incomplete: true, totals: [], unavailable: []});
+  });
   it('keeps revenue and totals beyond 2^53 as strings with their SDK type and currency basis', () => {
     const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/include/eurotrucks2/scssdk_telemetry_eut2.h#game-specific-units'};
     const delivered = changed(DETAIL, d => {

@@ -106,9 +106,11 @@ export class TripExportSerializer {
   begin(): string {
     if (this.#section !== -1) throw new Error('The export document has already begun');
     const d = this.detail;
+    // Format 7 carries whole-trip money and the raw events. The Journal's retained subtotal is a view field.
     const fixed: [string, unknown][] = [['format', TRIP_EXPORT_FORMAT], ['formatVersion', TRIP_EXPORT_FORMAT_VERSION], ['header', this.header], ['units', TRIP_EXPORT_UNITS],
       ['bounds', tripExportBounds(d)], ['trip', trip(d.trip, this.powertrain)], ['job', d.job], ['truck', d.truck && {...d.truck, values: truckValues(d.truck.values, d.trip.game)}], ['trailers', d.trailers], ['outcomeDetails', d.outcomeDetails],
-      ['money', d.money], ['window', d.window], ['diagnostics', this.diagnostics]];
+      ['money', {incomplete: d.money.incomplete, totals: d.money.totals, unavailable: d.money.unavailable}],
+      ['window', d.window], ['diagnostics', this.diagnostics]];
     this.#section = 0; this.#rows = 0;
     return `{\n${fixed.map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)},\n`).join('')}"${TRIP_EXPORT_SECTIONS[0]}": [`;
   }

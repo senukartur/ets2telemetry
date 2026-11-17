@@ -16,9 +16,10 @@ import {mapUploadProjection, UPLOAD_PAGE_KINDS, type UploadProjectionPage} from 
 import {attachTripUuidFor, QUANTITY_FLAGS, tripUuidFor, type ProfileObservation, type QuantityPoint} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail} from '../../packages/contracts/src/journal';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
+import {EUR, USD} from '../shared/journal-seed';
 import {CLOCK_A, CLOCK_B, INCIDENT_QUANTITIES, incidentReadings, QUANTITY_SCENARIOS, s, type QuantityEvent, type QuantityExpectation, type QuantityFlagName,
   type QuantityReading} from '../shared/quantity-scenarios';
-import {ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, r, Script} from '../shared/trip-messages';
+import {ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, money, r, Script} from '../shared/trip-messages';
 import {ok, uploadGame, workspace} from './helpers';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
@@ -276,6 +277,131 @@ async function recorded(readings: readonly QuantityReading[], expected: Quantity
   expectLedger(found, expected);
   return found;
 }
+
+describe('REG-008 retained money after a saved-game cut', () => {
+  it.each(['physical match', 'odometer only', 'same-session suffix', 'two cuts', 'empty subtotal'] as const)('shows the bounded fine subtotal (%s)', async variant => {
+    const storage = await ws.open(), a = openMember(storage, 'A', 'root', []);
+    const append = (m: Member, reading: QuantityReading) => {
+      ok(storage.appendSamples(m.script.session, [sampleOf(m, reading, true)], {uniqueSeconds: true}));
+      m.previous = reading;
+    };
+    const charge = (m: Member, t: number, record: EventRecord, knownTime = true) => {
+      const at = BigInt(ns(t)) + 1_000_000n;
+      const message = m.script.event(record, {advanceMs: Number((at - m.at) / 1_000_000n)});
+      if (!knownTime) message.data.occurred.monotonicNs = {available: false, reason: 'not-observed'};
+      m.at = at;
+      ok(storage.commitEvent({message, effects: [{kind: 'event.attribute', tripUuid: m.uuid, attribution: 'trip'}]}));
+    };
+    const fine = (m: Member, t: number, amount: string, knownTime = true) => {
+      const record = r.fined(amount) as Extract<EventRecord, {type: 'player.fined'}>;
+      record.amount = money(amount, 's64', EUR);
+      charge(m, t, record, knownTime);
+    };
+    append(a, s(0));
+    fine(a, 0.5, '100'); // Proven before the save only when its physical point is retained.
+    append(a, s(1));
+    fine(a, 1.5, '900'); // Between the safe prefix boundary and the save.
+    append(a, s(2, {speedMps: 0}));
+    fine(a, 2.5, '800'); // In the abandoned suffix of the original drive.
+    append(a, s(3));
+    append(a, s(4));
+    const x = variant === 'odometer only' || variant === 'empty subtotal' ? 50.7 : 40;
+    append(a, s(5, {odometerM: 1040, fuelL: 399.98, x, speedMps: 0, gameClock: CLOCK_B, linked: false}));
+    fine(a, 5, '600'); // The same source instant as the loaded sample has no strict order.
+    if (variant === 'two cuts') fine(a, 5.5, '50'); // On the new path after the first load and before the second save.
+    append(a, s(6, {odometerM: 1060, fuelL: 399.97, x: x + 20, speedMps: variant === 'two cuts' ? 20 : 0, gameClock: CLOCK_B}));
+    let terminal = a;
+    if (variant === 'same-session suffix') {
+      fine(a, 6.1, '500', false);
+      fine(a, 6.2, '300');
+      fine(a, 6.3, '400');
+      const ferry = r.ferry() as Extract<EventRecord, {type: 'player.use.ferry'}>;
+      charge(a, 6.4, {...ferry, amount: money('125', 's64', USD)});
+      const train = r.train() as Extract<EventRecord, {type: 'player.use.train'}>;
+      charge(a, 6.5, {...train, amount: absent});
+    } else if (variant === 'two cuts') {
+      fine(a, 6.1, '500'); // Kept by the first cut alone, but not proven by the second.
+      append(a, s(7, {odometerM: 1080, fuelL: 399.96, x: 80, speedMps: 0, gameClock: CLOCK_B}));
+      append(a, s(8, {odometerM: 1100, fuelL: 399.95, x: 100, gameClock: CLOCK_B}));
+      append(a, s(9, {odometerM: 1080, fuelL: 399.96, x: 80, speedMps: 0, gameClock: 'third-clock', linked: false}));
+      fine(a, 9.1, '300');
+      fine(a, 9.2, '400');
+    } else if (variant !== 'empty subtotal') {
+      closeMember(storage, a);
+      const b = openMember(storage, 'B', 'open', []);
+      append(b, s(0, {member: 'B', odometerM: 1060, fuelL: 399.97, x: x + 20, speedMps: 0, linked: false}));
+      // New capture clock and overlapping numeric source times. The two amounts belong to the later member.
+      fine(b, 0.1, '300');
+      fine(b, 0.2, '400');
+      terminal = b;
+    }
+    deliver(storage, terminal);
+    const detail = validateJournalTripDetail(ok(storage.journalTrip(a.uuid)));
+    if (variant === 'empty subtotal') {
+      expect(detail.money).toEqual({incomplete: true, totals: [], unavailable: []});
+      storage.close();
+      return;
+    }
+    const [raw, count, eventCount] = variant === 'odometer only' ? ['700', 2, 6] : variant === 'two cuts' ? ['850', 4, 8]
+      : ['800', 3, variant === 'same-session suffix' ? 7 : 6];
+    const mixed = variant === 'same-session suffix';
+    expect(detail.money).toEqual({incomplete: true, totals: [], unavailable: [], retainedSubtotal: {
+      totals: [{category: 'fine', currency: EUR, sdkType: 's64', raw, count},
+        ...(mixed ? [{category: 'ferry', currency: USD, sdkType: 's64', raw: '125', count: 1}] : [])],
+      unavailable: mixed ? [{category: 'train', reason: 'not-observed', count: 1}] : []
+    }});
+    expect(ok(storage.journalEvents(a.uuid, {limit: 100})).events.filter(event => event.type === 'player.fined')).toHaveLength(eventCount);
+    storage.close();
+  });
+  it.each(['open', 'retro'] as const)('includes an earlier member before a physical save match after a %s join', async join => {
+    const storage = await ws.open(), a = openMember(storage, 'A', 'root', []);
+    const append = (m: Member, reading: QuantityReading, withProof: boolean) => {
+      ok(storage.appendSamples(m.script.session, [sampleOf(m, reading, withProof)], {uniqueSeconds: true}));
+      m.previous = reading;
+    };
+    const fine = (m: Member, t: number, amount: string) => {
+      const at = BigInt(ns(t)) + 1_000_000n;
+      const message = m.script.event(r.fined(amount), {advanceMs: Number((at - m.at) / 1_000_000n)});
+      m.at = at;
+      ok(storage.commitEvent({message, effects: [{kind: 'event.attribute', tripUuid: m.uuid, attribution: 'trip'}]}));
+    };
+    append(a, s(0), true);
+    fine(a, 0.5, '50');
+    append(a, s(1, {speedMps: 0}), true);
+    closeMember(storage, a);
+    const b = openMember(storage, 'B', join, []), admit = join === 'open';
+    const point = (i: number, overrides: Partial<QuantityReading> = {}) => s(i + 1, {t: i, member: 'B', ...overrides});
+    append(b, point(0, {speedMps: 0, linked: false}), admit);
+    append(b, point(1), admit);
+    append(b, point(2, {speedMps: 0}), admit);
+    fine(b, 2.5, '900');
+    append(b, point(3), admit);
+    append(b, point(4, {odometerM: 1060, fuelL: 399.97, x: 60, speedMps: 0, gameClock: CLOCK_B, linked: false}), admit);
+    fine(b, 4.5, '300');
+    if (join === 'retro') closeMember(storage, b); else deliver(storage, b);
+    const detail = ok(storage.journalTrip(a.uuid));
+    expect(detail.window.sourceCount).toBe(2);
+    expect(detail.money.retainedSubtotal?.totals).toEqual([expect.objectContaining({category: 'fine', raw: '350', count: 2})]);
+    storage.close();
+  });
+  it.each([false,true])('keeps money unavailable when the path exceeds its bound (visible cut %s)', async visibleCut => {
+    const storage = await ws.open(), a = openMember(storage, 'A', 'root', []);
+    const rows = Array.from({length: 259}, (_, i) => {
+      // Each game-clock change with forward odometer movement creates a separate retained run.
+      const reading = s(i, {gameClock: i % 2 === 0 ? CLOCK_A : CLOCK_B, linked: false});
+      return sampleOf(a, reading, true);
+    });
+    if (visibleCut) rows.push(sampleOf(a, s(259, {odometerM: 6140, fuelL: 397.43, x: 5140, gameClock: 'late-cut', linked: false}), true));
+    ok(storage.appendSamples(a.script.session, rows, {uniqueSeconds: true}));
+    const fine = a.script.event(r.fined(), {advanceMs: 300_000});
+    ok(storage.commitEvent({message: fine, effects: [{kind: 'event.attribute', tripUuid: a.uuid, attribution: 'trip'}]}));
+    deliver(storage, a);
+    const detail = ok(storage.journalTrip(a.uuid));
+    expect(detail.money).toEqual({incomplete: true, totals: [], unavailable: []});
+    expect(detail.trip.accounting?.distance.quality.includes('restored')).toBe(visibleCut);
+    storage.close();
+  });
+});
 
 const multiMember = QUANTITY_SCENARIOS.filter(scenario => new Set(scenario.readings.map(reading => reading.member)).size > 1);
 /**

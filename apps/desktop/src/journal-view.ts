@@ -290,17 +290,19 @@ const section = (id: keyof typeof JOURNAL_SECTION_TEXT, fields: JournalField[], 
   ({id, title: JOURNAL_SECTION_TEXT[id], fields, notes});
 
 function moneyLines(totals: JournalMoneyTotals): {fields: JournalField[]; notes: string[]} {
-  if (totals.incomplete) return {fields: [], notes: [JOURNAL_STRINGS.moneyIncomplete]};
-  const fields = (['fine', 'toll', 'ferry', 'train'] as const).map(category => {
+  const amounts = totals.incomplete ? totals.retainedSubtotal : totals;
+  if (!amounts) return {fields: [], notes: [JOURNAL_STRINGS.moneyIncomplete]};
+  const fields = (['fine', 'toll', 'ferry', 'train'] as const).flatMap(category => {
     const parts = [
-      ...totals.totals.filter(total => total.category === category).map(total =>
+      ...amounts.totals.filter(total => total.category === category).map(total =>
         `${moneyText(total)}, ${total.count === 1 ? JOURNAL_STRINGS.moneyCountOne : fill(JOURNAL_STRINGS.moneyCount, {count: total.count})}`),
-      ...totals.unavailable.filter(entry => entry.category === category).map(entry =>
+      ...amounts.unavailable.filter(entry => entry.category === category).map(entry =>
         fill(JOURNAL_STRINGS.moneyUnavailable, {count: entry.count, reason: JOURNAL_REASON_TEXT[entry.reason]}))
     ];
-    return {id: category, label: JOURNAL_MONEY_CATEGORY_TEXT[category], value: parts.length ? parts.join('; ') : JOURNAL_STRINGS.moneyNone};
+    if (totals.incomplete && !parts.length) return [];
+    return [{id: category, label: JOURNAL_MONEY_CATEGORY_TEXT[category], value: parts.length ? parts.join('; ') : JOURNAL_STRINGS.moneyNone}];
   });
-  return {fields, notes: []};
+  return {fields, notes: totals.incomplete ? [t('tr.moneySubtotal', undefined, language)] : []};
 }
 
 function refuelCard(refuels: NonNullable<JournalTripDetail['refuels']>, units: DisplayUnits): JournalSideCard {

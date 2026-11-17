@@ -1,4 +1,4 @@
-import {classifyStep, readingPoint} from '../../packages/telemetry-core/src/trips/accounting';
+import {classifyStep, readingPoint, roadsideRelocation} from '../../packages/telemetry-core/src/trips/accounting';
 // ET-014 PR-2: readings accounting (T16) and the provisional thresholds (T17), fed through the trip reducer as `reading`
 // inputs between committed events. Every expected value is written by hand from docs/trips.md, the T16/T17 decisions
 // and the derived.ts step rules (docs/live-telemetry-fields.md); none is copied from reducer output. Each case names its
@@ -14,7 +14,7 @@ import {
   GAME_TIME_JUMP_MINUTES, GAME_TIME_JUMP_RATE, MAX_ANNOTATIONS_PER_COMMIT, MAX_EFFECTS, MAX_PLAUSIBLE_SPEED_MPS, POSITION_JUMP_MARGIN_METERS, READING_HOLE_SECONDS, initialTripState,
   dueAttach, jobKey, normalizeV1State, stepTrip, tripView, type NormalizedLiveState, type TripEffect, type TripInput, type TripSeed, type TripState
 } from '../../packages/telemetry-core/src/index';
-import {BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, Script, job, r, run, sessionInput, type Step} from '../shared/trip-messages';
+import {BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, Script, job, otherJob, r, run, sessionInput, type Step} from '../shared/trip-messages';
 
 const uuid = (session: string, eventSeq: string) => {
   const h = createHash('sha256').update(`ets2telemetry-trip-v1:${session}:${eventSeq}`, 'utf8').digest('hex');
@@ -50,13 +50,14 @@ const NONE = {state: 'missing', reason: 'not-observed'} as const;
 const value = <T>(v: T) => ({state: 'value' as const, value: v});
 interface At {
   ms: number; speed?: number | null; odometer?: number; fuel?: number; minutes?: number; clock?: string; simulation?: 'running' | 'paused';
-  position?: {x: number; y: number; z: number}; plate?: string; country?: string; noTruck?: boolean; captureClock?: string; utc?: boolean; utcMs?: number;
+  position?: {x: number; y: number; z: number}; plate?: string; country?: string; modelId?: string; noTruck?: boolean; captureClock?: string; utc?: boolean; utcMs?: number;
 }
 /** Synthetic ordinary motion supplies speed, position and a stable game minute; explicit undefined position/minutes are unavailable. */
 function reading(s: Script, a: At): TripInput {
   const base = BASE.truck.state === 'value' ? BASE.truck.value : undefined;
   const truck = a.noTruck === true ? NONE : base === undefined ? BASE.truck : value({...base, ...(a.plate !== undefined ? {licensePlate: value(a.plate)} : {}),
-    ...(a.country !== undefined ? {plateCountry: {id: value(a.country), name: value(a.country)}} : {})});
+    ...(a.country !== undefined ? {plateCountry: {id: value(a.country), name: value(a.country)}} : {}),
+    ...(a.modelId !== undefined ? {model: {...base.model, id: value(a.modelId)}} : {})});
   const position = 'position' in a ? a.position : {x: a.ms * 0.02, y: 0, z: 0};
   const state: NormalizedLiveState = {...BASE, speed: a.speed === null ? NONE : value(a.speed ?? 20), simulation: a.simulation ?? 'running', truck,
     odometer: a.odometer === undefined ? NONE : value({kind: 'odometer' as const, meters: a.odometer}), fuel: a.fuel === undefined ? NONE : value(a.fuel),
@@ -596,6 +597,89 @@ describe('game-time and position jumps (T17)', () => {
     play([[sessionInput(s.welcome())], [reading(s, {ms: 0, odometer: 1000, fuel: 100, minutes: 1000})], [reading(s, {ms: 1000, odometer: 900, fuel: 500, minutes: 2000})],
       [s.event(r.fined()), [attr(null, 'free-driving')]]]);
   });
+});
+
+describe('REG-008 ETS2 roadside relocation', () => {
+  it.each([
+    {name: 'equal stationarity threshold', x: 0.05, expected: null},
+    {name: 'equal maximum displacement', x: 50, expected: 50},
+    {name: 'late after the resume', after: 19_000, expected: null},
+    {name: 'stale before the pause', before: 998, expected: null},
+    {name: 'short time advance', minutes: 1029, expected: null},
+    {name: 'long time advance', minutes: 1032, expected: null},
+    {name: 'electric charge on the SDK fuel channel', truck: 'vehicle.daf.xf_electric', expected: 37},
+    {name: 'missing electric charge', truck: 'vehicle.daf.xf_electric', missing: true, expected: null},
+    {name: 'ATS', game: 'ats' as const, expected: null}
+  ])('uses the recorded source and exact roadside bounds ($name)', variant => {
+    const s = new Script(ETS2_A, variant.game), point = (at: At) => {
+      const input = reading(s, at);
+      if (input.kind !== 'reading') throw new Error('Reading expected');
+      return readingPoint(input.sample);
+    };
+    const common = {odometer: 1_000_000, fuel: variant.missing ? undefined : 100, speed: 0, modelId: variant.truck};
+    const before = point({...common, ms: variant.before ?? 999, minutes: 1000, position: {x: 0, y: 0, z: 0}});
+    const after = point({...common, ms: variant.after ?? 18_999, minutes: variant.minutes ?? 1031, position: {x: variant.x ?? 37, y: 0, z: 0}});
+    const pause = {sourceClockId: s.clockId, processInstanceId: before.source.processInstanceId, gameClockId: GAME_CLOCK_1,
+      gameMinutes: '1000', pausedNs: ns(2999), resumedNs: ns(16_999)};
+    expect(roadsideRelocation(pause, before, after, classifyStep(before, after))).toBe(variant.expected);
+  });
+  it.each(['gap', 'checkpoint', 'disconnect'] as const)('retires the pause witness on a %s', boundary => {
+    const {s, rows} = opened();
+    const pause = s.event(r.paused(), {...paused, advanceMs: 1000});
+    const retired: Step[] = boundary === 'gap' ? [s.gap(1)] : boundary === 'checkpoint'
+      ? [{kind: 'checkpoint', message: s.checkpoint(job())}]
+      : [{kind: 'disconnected'}, sessionInput(s.welcome(), '3')];
+    const resume = s.event(r.started(), {advanceMs: 14_000});
+    const after = Number((BigInt(resume.capture.monotonicNs) - BigInt(ns(0))) / 1_000_000n) + 50;
+    const base = {odometer: 1_000_000, fuel: 100, speed: 0};
+    const result = run(initialTripState(), [...rows.map(([step]) => step),
+      reading(s, {...base, ms: 2200, minutes: 12345, position: {x: 0, y: 0, z: 0}}), pause,
+      ...retired, resume, reading(s, {...base, ms: after, minutes: 12376, position: {x: 37, y: 0, z: 0}}), s.event(r.delivered())]);
+    expect(result.effects.flat()).not.toContainEqual(expect.objectContaining({interval: expect.objectContaining({
+      detail: expect.objectContaining({cause: 'possible-roadside-assistance'})
+    })}));
+  });
+  it.each(['30 minutes', '31 minutes', 'unbracketed', 'moving', 'odometer changed', 'fuel changed', 'large relocation', 'late reading', 'replayed resume', 'job changed'] as const)(
+    'requires a clean stopped relocation at a live pause and resume (%s)', variant => {
+      const {s, rows} = opened();
+      const event = (record: Parameters<Script['event']>[0], simulation: 'paused' | 'running', advanceMs: number) => {
+        const message = s.event(record, {simulation, advanceMs});
+        message.data.occurred.gameTime.minutes = {available: true, value: '1000'};
+        return message;
+      };
+      const before = {ms: 2200, minutes: 1000, odometer: 1_000_000, fuel: 100, speed: 0, position: {x: 0, y: 0, z: 0}};
+      const pause = event(variant === 'unbracketed' ? r.fined() : r.paused(), 'paused', 1000);
+      const resume = event(r.started(), 'running', 14_000);
+      if (variant === 'replayed resume') resume.data.redelivered = true;
+      const ms = variant === 'late reading' ? 19_050 : 17_050;
+      const minutes = variant === '30 minutes' ? 1030 : 1031;
+      const after = {...before, ms, minutes, speed: variant === 'moving' ? 1 : 0,
+        odometer: before.odometer + (variant === 'odometer changed' ? 100 : 0), fuel: variant === 'fuel changed' ? 99 : before.fuel,
+        position: {x: variant === 'large relocation' ? 51 : 37, y: 0, z: 0}};
+      const drive = Array.from({length: 43}, (_, i) => {
+        const seconds = i + 1;
+        return reading(s, {...after, ms: ms + seconds * 1000, minutes: minutes + Math.floor(seconds / 3),
+          odometer: after.odometer + seconds * 200, speed: 15, position: {...after.position, x: after.position.x + seconds * 15}});
+      });
+      const resumed = reading(s, after);
+      if (resumed.kind !== 'reading') throw new Error('Reading expected');
+      if (variant === 'job changed') resumed.currentJob = otherJob();
+      const result = run(initialTripState(), [...rows.map(([step]) => step), reading(s, before), pause,
+        reading(s, {...before, ms: 16_900, simulation: 'paused'}), resume, resumed, ...drive,
+        s.event(r.delivered(), {advanceMs: 50_000})]);
+      const notes = result.effects.flat().flatMap(effect => effect.kind === 'completeness.add' ? [effect.interval.detail] : []);
+      const qualified = variant === '30 minutes' || variant === '31 minutes';
+      if (qualified) {
+        expect(notes.filter(detail => detail?.cause === 'possible-roadside-assistance')).toEqual([
+          {annotation: true, cause: 'possible-roadside-assistance', fromMinutes: '1000', toMinutes: String(minutes), meters: 37, atMonotonicNs: ns(ms)}
+        ]);
+        expect(notes.some(detail => detail?.cause === 'game-time-jump' || detail?.cause === 'position-jump' || detail?.cause === 'reading-hole')).toBe(false);
+      } else {
+        expect(notes.some(detail => detail?.cause === 'possible-roadside-assistance')).toBe(false);
+        expect(notes).toContainEqual(expect.objectContaining({cause: 'game-time-jump', label: 'possible-sleep'}));
+      }
+    }
+  );
 });
 
 describe('fix round 2', () => {

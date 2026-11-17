@@ -677,6 +677,10 @@ describe('ET-016 journal reads at the worker boundary', () => {
     ['a window of another session', 'trip', changed(DETAIL, p => { p.window = {...WINDOW, pluginSessionId: '10000000-0000-4000-8000-000000000002'}; })],
     ['job values outside the protocol', 'trip', changed(DETAIL, p => { (p.job.values as unknown as {plannedDistance: unknown}).plannedDistance = {available: true, value: 1_500, unit: 'm'}; })],
     ['incomplete money with totals', 'trip', changed(DETAIL, p => { p.money.incomplete = true; })],
+    ['retained subtotal on complete money', 'trip', changed(DETAIL, p => Object.assign(p.money, {retainedSubtotal: {totals: p.money.totals, unavailable: []}}))],
+    ['invalid retained subtotal', 'trip', changed(DETAIL, p => {
+      Object.assign(p.money, {incomplete: true, totals: [], retainedSubtotal: {totals: [{...p.money.totals[0], raw: '1.5'}], unavailable: []}});
+    })],
     ['a money total that is not an integer', 'trip', changed(DETAIL, p => { p.money.totals[0].raw = '1.5'; })],
     ['a sample label without samples', 'trip', changed(DETAIL, p => { (p.samples as {firstUtcMs: unknown}).firstUtcMs = 1; })],
     ['export bounds that disagree with the intervals', 'trip', changed(DETAIL, p => { (p.exportBounds as {lastIntervalId: unknown}).lastIntervalId = null; })],

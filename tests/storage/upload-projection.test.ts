@@ -777,6 +777,8 @@ describe('TEL-034 checkpoint-bound trailer context',()=>{
     ['not-connected',{cause:'opened-before-attach'},false],
     ['not-connected',{cause:'opened-before-attach',annotation:true},false],
     ['discontinuity',{cause:'paused-reconnect',annotation:true},true],
+    ['discontinuity',{cause:'possible-roadside-assistance',annotation:true,fromMinutes:'1000',toMinutes:'1031',meters:37},true],
+    ['discontinuity',{cause:'possible-roadside-assistance'},false],
     ['discontinuity',{cause:'menu-job-acceptance',version:1,annotation:true},true],
     ['discontinuity',{cause:'opened-at-load',annotation:true},true],
     ['discontinuity',{cause:'game-time-jump',label:'possible-sleep',stationary:true,annotation:true},true]

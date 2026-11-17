@@ -14,7 +14,7 @@ import {
   ANCHOR_GAME_MODE, ANCHOR_JOBS, CHANGED_TRUCK, EUR, JOURNAL_TRIPS as T, MIGRATED_V1_SESSION, MIGRATED_V1_TRIP, seedJournalAnchors, seedJournalFillers, seedSample, SESSION_B_UTC,
   SESSION_C_UTC, UNKNOWN_CURRENCY, USD, ZERO_DELIVERY, type FillerTrip
 } from '../shared/journal-seed';
-import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, job, money, r, Script, trailer, truck} from '../shared/trip-messages';
+import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, money, r, Script, trailer, truck} from '../shared/trip-messages';
 import type {ProfileObservation} from '../../packages/telemetry-core/src';
 import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 
@@ -696,6 +696,17 @@ describe('a trip with more than 5,000 money amounts and more than 100 intervals 
       {const db=new Database(big.database);try {projectEffects(db,[{kind:'trip.update',tripUuid:trip,set:{}}]);}finally{db.close();}}
       st = await big.open(); s.next = BigInt(SEEDED_FINE.lastEventSeq) + 1n;
       expect(ok(st.journalTrip(trip)).money).toEqual({incomplete: false, unavailable: [], totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '10000', count: 5_000}]});
+      // All 5,000 fines occur after a small recorded drive and its rollback, before the first fine at 1001.999 s.
+      const shared = {recording: {job: job(), truck: 'recorded-truck', processInstanceId: s.welcome().source.processInstanceId},
+        fuel: {available: true as const, value: 50}, speed: {available: true as const, value: 5}};
+      const point = (offsetMs: number, odo: number, x: number, clockId: string) => ({...seedSample(s, trip, 0, BASE_UTC + 1000 + offsetMs,
+        {...shared, odometer: {available: true, value: odo}, position: {available: true, value: {x, y: 0, z: 0}},
+          gameTime: {minutes: {available: true, value: 600}, clockId}}),
+      monotonicNs: (1_001_000_000_000n + BigInt(offsetMs) * 1_000_000n).toString()});
+      ok(st.appendSamples(s.session, [point(100, 1000, 0, GAME_CLOCK_1), point(300, 1020, 1, GAME_CLOCK_1), point(500, 1000, 0, GAME_CLOCK_2)]));
+      expect(ok(st.journalTrip(trip)).money).toEqual({incomplete: true, totals: [], unavailable: [], retainedSubtotal: {
+        totals: [{category: 'fine', sdkType: 's64', currency: EUR, raw: '10000', count: 5_000}], unavailable: []
+      }});
       commit(r.fined('3'), [{kind: 'event.attribute', tripUuid: trip, attribution: 'trip'}]);
       const detail = ok(st.journalTrip(trip));
       expect(detail.money).toEqual({incomplete: true, totals: [], unavailable: []});

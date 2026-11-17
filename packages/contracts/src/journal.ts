@@ -173,7 +173,12 @@ export interface JournalMoneyUnavailable {category: JournalMoneyCategory; reason
  * Fines, tolls, ferry and train amounts attributed to the trip. With more than JOURNAL_MONEY_AMOUNTS amounts nothing is
  * summed: `incomplete` is true and both lists are empty, so a partial sum is never shown as a total.
  */
-export interface JournalMoneyTotals {incomplete: boolean; totals: JournalMoneyTotal[]; unavailable: JournalMoneyUnavailable[]}
+interface JournalMoneyAmounts {totals: JournalMoneyTotal[]; unavailable: JournalMoneyUnavailable[]}
+export interface JournalMoneyTotals extends JournalMoneyAmounts {
+  incomplete: boolean;
+  /** Amounts on proven portions of a rolled-back trip, separate from the unavailable whole-trip totals. */
+  retainedSubtotal?: JournalMoneyAmounts;
+}
 
 export type JournalOutcomeRecord = Extract<EventRecord, {type: 'job.delivered'} | {type: 'job.cancelled'}>;
 /** Measured energy increases supported by the selected route; raw refuel annotations may cover more. */
@@ -423,12 +428,17 @@ function event(value: unknown): void {
 }
 const CATEGORIES: readonly unknown[] = ['fine', 'toll', 'ferry', 'train'];
 function moneyTotals(value: unknown): void {
-  const o = exact(value, ['incomplete', 'totals', 'unavailable']);
+  const hasSubtotal = isRecord(value) && Object.hasOwn(value, 'retainedSubtotal');
+  const o = exact(value, ['incomplete', 'totals', 'unavailable', ...(hasSubtotal ? ['retainedSubtotal'] : [])]);
   boolean(o.incomplete);
+  const count = moneyAmounts(o);
+  if (o.incomplete === true && count > 0) bad();
+  if (hasSubtotal && (o.incomplete !== true || moneyAmounts(exact(o.retainedSubtotal, ['totals', 'unavailable'])) === 0)) bad();
+}
+function moneyAmounts(o: Record<string, unknown>): number {
   // Each total and each unavailable count stands for at least one of at most JOURNAL_MONEY_AMOUNTS amounts.
   if (!Array.isArray(o.totals) || !Array.isArray(o.unavailable) || o.totals.length + o.unavailable.length > JOURNAL_MONEY_AMOUNTS) bad();
   const totals = o.totals as unknown[], unavailable = o.unavailable as unknown[];
-  if (o.incomplete === true && (totals.length > 0 || unavailable.length > 0)) bad();
   for (const total of totals) {
     const t = exact(total, ['category', 'sdkType', 'currency', 'raw', 'count']);
     oneOf(t.category, CATEGORIES); oneOf(t.sdkType, ['s64', 'u64']); currency(t.currency);
@@ -439,6 +449,7 @@ function moneyTotals(value: unknown): void {
     oneOf(u.category, CATEGORIES); oneOf(u.reason, REASONS);
     if (!isCount(u.count) || (u.count as number) < 1) bad();
   }
+  return totals.length + unavailable.length;
 }
 
 /**

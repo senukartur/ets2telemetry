@@ -37,6 +37,7 @@ import {StorageClient} from '../../packages/storage/src/client';
 import {ENGINE_0, storageWorker} from './recording-helpers';
 import {seedSample} from '../shared/journal-seed';
 import {JournalService,type JournalClient} from '../../apps/desktop/src/journal-service';
+import {journalIntervalText} from '../../apps/desktop/src/journal-view';
 import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {TripExportSerializer,tripExportHeader} from '../../apps/desktop/src/journal-export';
 import {tripExportProblems} from '../shared/trip-export-validator';
@@ -1049,6 +1050,51 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.commitEvent({message,effects:[{kind:'trip.open',tripUuid:uuid,game:script.game,gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'unknown',startedUtcMs:1000}]}));
     ok(storage.commitEvent({message:script.event(r.truckConfigured()),effects:[{kind:'completeness.add',interval:{tripUuid:uuid,kind:'discontinuity',detail:{cause,annotation:true}}}]}));
     expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(cause==='truck-change'?'unknown':'partial');storage.close();
+  });
+  it.each([31, 32])('preserves delivered recording coverage only for the supported roadside time advance (%i min)', async minutes => {
+    const worker = storageWorker(), client = new StorageClient(worker.handle, {closeGraceMs: TEST_CLOSE_GRACE_MS});
+    const s = new Script(ETS2_A), context = {receivedUtcMs: 1000};
+    ok(await client.open({path: ws.database, backupsDirectory: ws.backups, purpose: 'synthetic', appVersion: 'test'}));
+    const recorder = new TripRecorderSink(client, {profileEvidence: () => proof(s)});
+    succeeded(await recorder.openSession(s.welcome()));
+    succeeded(recorder.observe(s.checkpoint(null), context));
+    succeeded(await recorder.commit(s.event(r.started()), context));
+    const configured = s.event(r.jobConfigured());
+    succeeded(await recorder.commit(configured, context));
+    const uuid = tripUuidFor(s.session, configured.data.eventSeq), configuration = s.checkpoint(job()).data.state.configuration;
+    const capture = async (advanceMs: number, x: number, distance: number, gameMinutes: string, speed: number, fuel: number) => {
+      const snapshot = s.snapshot({configuration, simulation: 'running',
+        odometer: {available: true, value: 1_000_000 + distance, unit: 'm'}, fuel: {available: true, value: fuel, unit: 'L'},
+        speed: {available: true, value: speed, unit: 'm/s'},
+        gameTime: {available: true, value: gameMinutes, unit: 'min', clockId: GAME_CLOCK_1},
+        worldPlacement: {available: true, value: {position: {x, y: 0, z: 0}, orientation: {heading: 0, pitch: 0, roll: 0}}}
+      }, advanceMs);
+      succeeded(recorder.observe(snapshot, context));
+      if (recorder.attach.due()) succeeded(await recorder.attach.open(context));
+    };
+    await capture(1000, 0, 0, '12345', 0, 100);
+    await capture(1000, 0, 0, '12345', 0, 100);
+    succeeded(await recorder.commit(s.event(r.paused(), {simulation: 'paused', advanceMs: 100}), context));
+    succeeded(await recorder.commit(s.event(r.started(), {advanceMs: 14_000}), context));
+    await capture(50, 37, 0, String(12345 + minutes), 0, 100);
+    await capture(1000, 57, 20, String(12345 + minutes), 20, 99.5);
+    succeeded(await recorder.samples.write(3600, true));
+    succeeded(await recorder.commit(s.event(r.delivered()), context));
+    const detail = ok(await client.journalTrip(uuid)), {trip} = detail;
+    expect(trip).toMatchObject({outcome: 'delivered', recordingCompleteness: minutes === 31 ? 'complete' : 'partial'});
+    const page = ok(await client.journalIntervals(uuid, {limit: 100})), {intervals} = page;
+    expect(intervals).toContainEqual(expect.objectContaining({annotation: true, cause: minutes === 31 ? 'possible-roadside-assistance' : 'game-time-jump'}));
+    if (minutes === 31) {
+      expect(journalIntervalText(page, {language: 'ru'}).rows).toContainEqual(expect.objectContaining({cause: expect.stringContaining('вероятная техпомощь')}));
+      const databaseUuid = detail.exportBounds.snapshot!.intervals.split(':')[1];
+      const serializer = new TripExportSerializer(detail, tripExportHeader({...detail.database, uuid: databaseUuid}, 'test', 1000));
+      const exported = JSON.parse(serializer.begin() + serializer.rows('intervals', intervals) + serializer.end()) as {intervals: unknown[]};
+      expect(exported.intervals).toContainEqual(expect.objectContaining({cause: 'possible-roadside-assistance', annotation: true,
+        detail: expect.objectContaining({meters: 37, fromMinutes: '12345', toMinutes: '12376'})}));
+    }
+    const raw = ok(await client.getTrip(uuid));
+    expect(raw).toMatchObject({observedDistanceM: {available: true, value: 20}, fuelUsedL: {available: true, value: 0.5}});
+    expect(await client.close()).toEqual({clean: true});
   });
   it('rejects malformed captured boundaries at the real worker without changing coverage or samples',async()=>{
     const worker=storageWorker(ENGINE_0),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS}),script=new Script(ETS2_A);

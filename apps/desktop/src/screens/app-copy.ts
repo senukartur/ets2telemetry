@@ -197,6 +197,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "odometer jumped": "copy.odometer-jumped",
   "game time jumped": "copy.game-time-jumped",
   "position jumped": "copy.position-jumped",
+  "possible roadside assistance": "copy.possible-roadside-assistance",
   "refuelled": "copy.refuelled",
   "samples could not be stored in time": "copy.samples-could-not-be-stored-in-time",
   "database behind the plugin": "copy.database-behind-the-plugin",
