@@ -660,7 +660,7 @@ export type I18nKey =
   | 'theme.light' | 'theme.dark' | 'theme.system' | 'theme.saveFailed'
   | 'ui.moreAbout' | 's.interface' | 'hm.howChecked' | 'hm.now' | 'hm.required.parkingShort' | 'j.incomeNote'
   | 'hm.currentSettings' | 'hm.conditionsTitle' | 'hm.noticePersisted' | 'hm.noticeParking' | 'hm.noticeSnapshots'
-  | 'shell.breadcrumb' | 'shell.status' | 'live.instruments' | 'live.sub' | 'live.sub.connected' | 'live.sub.paused' | 'live.sub.stale' | 'live.sub.waiting' | 'live.sub.partial' | 'live.partialTitle'
+  | 'shell.breadcrumb' | 'shell.status' | 'live.instruments' | 'live.sub' | 'live.sub.connected' | 'live.sub.paused' | 'live.sub.stale' | 'live.sub.waiting' | 'live.sub.partial' | 'live.sub.placeholder' | 'live.placeholder' | 'live.partialTitle'
   | 'live.noJobHint' | 'live.staleReason'
   | 's.nav' | 's.general.sub' | 's.plugin.sub' | 's.data.sub' | 's.units.note' | 's.gear.example' | 'np.enabledD' | 's.data.sourceD' | 's.data.state' | 's.data.bundle'
   | 's.about.updates' | 's.about.font' | 's.about.license';

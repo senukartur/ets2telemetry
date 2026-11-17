@@ -1177,6 +1177,8 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'live.sub.stale': 'values are out of date and dimmed',
   'live.sub.waiting': 'game not connected',
   'live.sub.partial': 'game connection is incomplete',
+  'live.sub.placeholder': 'waiting for game data',
+  'live.placeholder': 'The instruments appear when you get behind the wheel',
   'live.partialTitle': 'Connection incomplete',
   'live.noJobHint': 'No active job. The fields appear when the game reports a job.',
   'live.staleReason': 'no new data from the game',

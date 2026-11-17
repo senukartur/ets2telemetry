@@ -99,6 +99,26 @@ export async function waitForPartialLive(page) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
+// Self-contained browser callback for the Live page without current game data, once its display hold has passed
+// (live-display-hold.ts): the status matches `status` (a RegExp source), the visible placeholder scene reads `caption`
+// exactly, and neither the instrument, the waiting banner, a stale badge nor the field list exists.
+export function placeholderLiveObservation({status, caption}) {
+  const one = id => {const nodes = globalThis.document.querySelectorAll('[data-testid="' + id + '"]'); return nodes.length === 1 ? nodes[0] : null;};
+  const root = one('live-telemetry'), scene = one('live.placeholder'), text = one('live.placeholder.caption');
+  if (root?.getAttribute('data-live-display') !== 'placeholder' || !scene || !text) return false;
+  const box = scene.getBoundingClientRect();
+  if (!(box.width > 0 && box.height > 0) || globalThis.getComputedStyle(scene).visibility !== 'visible') return false;
+  if (!new RegExp(status).test(one('telemetry-status')?.textContent ?? '') || text.textContent !== caption) return false;
+  for (const id of ['live.instrument', 'live.waiting', 'live.stale', 'live.details']) if (globalThis.document.querySelectorAll('[data-testid="' + id + '"]').length) return false;
+  return {state: root.getAttribute('data-live-state'), caption: text.textContent};
+}
+/** The Live placeholder's caption while no condition needs the driver (live.placeholder in the dictionaries). */
+export const LIVE_PLACEHOLDER_CAPTION = Object.freeze({en: 'The instruments appear when you get behind the wheel', ru: 'Приборы появятся, когда вы сядете за руль'});
+export async function waitForPlaceholderLive(page, status, caption = LIVE_PLACEHOLDER_CAPTION.en) {
+  const handle = await page.waitForFunction(placeholderLiveObservation, {status, caption}, {timeout: 10000});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
 // ET-010c protocol v1 rows. Expected texts are written by hand from tests/fixtures/protocol-v1/snapshot-live.json with
 // the job's cargo and destination city ids set to the v0 checkpoint's (cargo.logs, city.warszawa), as the v1 smoke source
 // serves it, in the ETS2 metric profile: 151000 m remaining, deadline minute 13000 at game minute 12345 (10 h 55 min),

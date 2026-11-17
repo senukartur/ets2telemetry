@@ -1,7 +1,7 @@
 import {AccountScreen} from './dashboard-upload/account-screen';
 import {SyncChip} from './dashboard-upload/sync-chip';
 import {useDashboardUpload} from './dashboard-upload/use-dashboard-upload';
-import {connectionChip, desktopLiveView, hardModeChip, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, recordingMotion, recordingTone, type ShellRoute} from './screens/desktop-ui-view';
+import {connectionChip, desktopLiveView, hardModeChip, liveGameMode, liveHasData, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, recordingMotion, recordingTone, type ShellRoute} from './screens/desktop-ui-view';
 import {HardModeCard} from './hard-mode/card';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import type {AppLanguage, AppState, LiveTelemetry, SettingsView} from '../../../packages/contracts/src';
@@ -18,6 +18,7 @@ import {ThemedLogo} from './shell/themed-logo';
 import {createStartupLine} from './dashboard-startup';
 import {recordingStatusText} from './recording-status-text';
 import {LiveDashboard} from './live-dashboard';
+import {useLiveDisplay} from './live-display-hold';
 import {usePluginActions} from './plugin-setup-card';
 import {SettingsScreen, type SettingsCard, type SettingsPanel} from './settings-screen';
 import {SidebarUpdateControl, VersionLine} from './update-control';
@@ -76,6 +77,8 @@ export default function App() {
   const liveView = useMemo(() => desktopLiveView(live, settings?.units, settings?.gearDisplay), [live, settings?.units, settings?.gearDisplay]);
   const game = live?.observation?.source.game.toUpperCase() ?? '', mode = liveGameMode(liveView.sources);
   const liveState = liveScreenState(live?.status, liveView.current, liveView.sources.paused, liveSourcesPartial(live));
+  // The Live page switches between the dashboard and the placeholder only after the change has held (live-display-hold.ts).
+  const liveDisplay = useLiveDisplay(live !== undefined, liveHasData(liveState));
   return <div className="yu-app" data-testid="shell.root">
     {/* ET-074: the title bar holds the app name and the native window buttons only; the logo is in the sidebar lockup. */}
     <div className="yu-titlebar" data-testid="shell.titlebar"><span>{CHANNEL.displayName}</span></div>
@@ -108,10 +111,10 @@ export default function App() {
       </TopBar><main ref={content} className="yu-content" data-testid="shell.content">
         {/* ET-074: the page title opens the content of every route; it takes focus on each route change. */}
         <div className="yu-page-header" data-testid="shell.pageHeader"><h1 ref={heading} tabIndex={-1} data-testid="screen-title">{route === 'journal' ? t('j.title', undefined, language) : t(`nav.${route}`, undefined, language)}</h1>
-          {route === 'live' ? <p className="yu-page-sub" data-testid="live.sub">{liveSubline(liveState, game, live?.reason, language)}</p> : null}
+          {route === 'live' ? <p className="yu-page-sub" data-testid="live.sub">{liveSubline(liveDisplay === 'placeholder' ? 'placeholder' : liveState, game, live?.reason, language)}</p> : null}
           <div ref={setSublineSlot} /></div>
         <div hidden={route !== 'live'} className="yu-live-screen" data-testid="live.screen">
-          <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} recording={health?.recording} language={language} />
+          <LiveDashboard onSelect={game => window.desktop.selectSource(game)} live={live} units={settings?.units} gearDisplay={settings?.gearDisplay} recording={health?.recording} language={language} display={liveDisplay} />
         </div>
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
         {route === 'journal' ? <JournalBoundary language={language}><Journal uploadStatus={upload.state.status} units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}

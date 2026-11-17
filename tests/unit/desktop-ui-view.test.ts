@@ -5,7 +5,7 @@ import {initialLive} from '../../apps/desktop/src/live-state';
 import {v1Projection} from '../shared/live-v1-fixtures';
 import {dashboardFuel} from '../../apps/desktop/src/speed-display';
 import {describe, expect, it} from 'vitest';
-import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, pluginTargetTone, pluginTone, serviceTone, storageTone,
+import {clampRatio, connectionChip, connectionTone, desktopLiveView, gaugeArc, hardModeChip, hardModeTone, liveGameMode, liveHasData, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, pluginTargetTone, pluginTone, serviceTone, storageTone,
   pluginStatusText, recordingMotion, recordingTone, routeGroup, staleReasonText} from '../../apps/desktop/src/screens/desktop-ui-view';
 import {gameConnectionText, liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
 import {getStrings} from '../../apps/desktop/src/strings';
@@ -438,6 +438,9 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
     expect(liveSubline('paused', 'ETS2', undefined, 'ru')).toBe('Данные игры в реальном времени · игра на паузе, значения текущие');
     expect(liveSubline('stale', 'ETS2', 'Main has no recent SDK capture', 'en')).toBe('Real-time game data · values are out of date and dimmed · no new data from the game');
     expect(liveSubline('stale', 'ATS', 'Renderer has no recent SDK capture', 'ru')).toBe('Данные игры в реальном времени · значения устарели и приглушены · нет новых данных от игры');
+    // The placeholder keeps one subline, without the stale reason.
+    expect(liveSubline('placeholder', 'ETS2', 'Main has no recent SDK capture', 'en')).toBe('Real-time game data · waiting for game data');
+    expect(liveSubline('placeholder', '', undefined, 'ru')).toBe('Данные игры в реальном времени · ждём данные игры');
     expect(liveSubline('waiting', '', 'Waiting for game', 'ru')).toBe('Данные игры в реальном времени · игра не подключена');
     // Partial never says the values are out of date: the current stream's values are current.
     expect(liveSubline('partial', 'ETS2', 'Main has no recent SDK capture', 'en')).toBe('Real-time game data · game connection is incomplete');
@@ -447,4 +450,8 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
   it('maps every route to its sidebar group', () => {
     expect((['live', 'hardMode', 'journal', 'settings', 'account'] as const).map(routeGroup)).toEqual(['drive', 'drive', 'drive', 'app', 'company']);
   });
+});
+
+it('counts connected, paused and partial as game data for the Live dashboard', () => {
+  expect((['connected', 'paused', 'partial', 'stale', 'waiting'] as const).filter(liveHasData)).toEqual(['connected', 'paused', 'partial']);
 });

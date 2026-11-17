@@ -6,7 +6,9 @@ import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
 import {Button} from '@/components/ui/button';
 import {Badge} from '@/components/ui/badge';
 import {gameConnectionText, liveDashboardText, liveFieldValue, type LiveRowText} from './live-dashboard-text';
-import {desktopLiveView, gaugeArc, liveGameMode, liveScreenState, liveSourcesPartial} from './screens/desktop-ui-view';
+import {desktopLiveView, gaugeArc, liveGameMode, liveHasData, liveScreenState, liveSourcesPartial} from './screens/desktop-ui-view';
+import type {LiveDisplay} from './live-display-hold';
+import {LivePlaceholder} from './live-placeholder';
 import {dashboardFuel, dashboardSpeed} from './speed-display';
 import {displayProfile} from './unit-profiles';
 import {getStrings} from './strings';
@@ -28,15 +30,18 @@ const COMPLETENESS_TONE = {complete: 'ok', partial: 'warn', unknown: 'neutral'} 
  * The Live page (ET-074 compact layout): the instrument, the current job, This trip, Truck and Game session, and the
  * collapsed list of every field. `data-live-state` is connected, paused, partial, stale or waiting; stale values are
  * dimmed dashes, partial shows the current stream's values with the banner, and waiting shows dashes and the banner.
- * Values come only from the live view and the recording health.
+ * `display` (live-display-hold.ts) picks the dashboard or the placeholder scene; the renderer holds it against flicker, and
+ * without it the state decides at once. `data-live-display` names the shown one. Values come only from the live view and
+ * the recording health.
  */
-export function LiveDashboard({live, units, gearDisplay, recording, language = 'en', onSelect}: {onSelect?: (game: 'ets2' | 'ats') => Promise<void>; live: LiveTelemetry | undefined;
-  units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; recording?: RecordingHealth; language?: AppLanguage}) {
+export function LiveDashboard({live, units, gearDisplay, recording, language = 'en', display: held, onSelect}: {onSelect?: (game: 'ets2' | 'ats') => Promise<void>; live: LiveTelemetry | undefined;
+  units: UnitProfiles | undefined; gearDisplay?: GearDisplayModes; recording?: RecordingHealth; language?: AppLanguage; display?: LiveDisplay}) {
   const [choosing, setChoosing] = useState(false), [choiceFailed, setChoiceFailed] = useState(false);
   const text = useMemo(() => liveDashboardText(live, units, language, gearDisplay), [live, units, language, gearDisplay]);
   const view = useMemo(() => desktopLiveView(live, units, gearDisplay), [live, units, gearDisplay]);
   const strings = getStrings(language), profile = displayProfile(live, units), sources = view.sources;
   const state = liveScreenState(live?.status, view.current, text.paused, liveSourcesPartial(live));
+  const display = held ?? (liveHasData(state) ? 'dashboard' : 'placeholder');
   const value = (id: LiveFieldId) => {const f = sources.field(id); return f.state === 'value' || f.state === 'absent' ? liveFieldValue(f, language) : '—';};
   const has = (id: LiveFieldId) => sources.field(id).state === 'value';
   const shown = (id: LiveFieldId) => sources.field(id).state !== 'hidden';
@@ -67,16 +72,29 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const mode = liveGameMode(sources);
   const protocol = live?.observation ? sources.v1Carried ? 'v0 + v1' : 'v0' : sources.v1Carried ? 'v1' : '—';
 
-  return <div className="yu-live" data-testid="live-telemetry" data-live-state={state}>
+  const choice = live?.selection === 'game' && live.reason === 'Both games are available; choose ETS2 or ATS' && onSelect ? <div className="flex flex-wrap gap-2" data-testid="live-game-choice" aria-busy={choosing}>
+    {(['ets2', 'ats'] as const).map(game => <Button key={game} type="button" variant="outline" disabled={choosing} data-testid={`live-choose-${game}`} onClick={() => {
+      setChoosing(true); setChoiceFailed(false); void onSelect(game).catch(() => setChoiceFailed(true)).finally(() => setChoosing(false));
+    }}>{game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator'}</Button>)}
+    {choosing ? <p role="status">{strings.sourceChoosing}</p> : null}{choiceFailed ? <p role="alert">{strings.sourceSelectionFailed}</p> : null}
+  </div> : null;
+
+  // Without current game data the page shows the placeholder scene and one stable caption. Only a condition the driver
+  // has to act on replaces the caption, and it does not change while a game loads, pauses or reconnects.
+  if (display === 'placeholder') {
+    const actionable = status === 'incompatible' || status === 'service-failed' || live?.v1?.status === 'incompatible'
+      || [strings.sourceChoice, strings.sourceMismatch, strings.sourceAmbiguous, strings.sourceRejected].includes(connectionText);
+    return <div className="yu-live" data-testid="live-telemetry" data-live-state={state} data-live-display="placeholder">
+      {choice}
+      <LivePlaceholder caption={actionable ? connectionText : t('live.placeholder', undefined, language)} />
+    </div>;
+  }
+
+  return <div className="yu-live" data-testid="live-telemetry" data-live-state={state} data-live-display="dashboard">
     {waiting ? <div className="yu-connection" data-testid="live.waiting"><span className="yu-connection-icon" aria-hidden="true">{status === 'waiting' ? <Clock /> : <WifiOff />}</span><div>
       <strong>{state === 'partial' ? t('live.partialTitle', undefined, language) : status === 'waiting' ? t('live.waitTitle', undefined, language) : t(`ui.status.${status}`, undefined, language)}</strong>
       <p>{connectionText === strings.sourceWaiting ? t('live.waitText', undefined, language) : connectionText}</p></div></div> : null}
-    {live?.selection === 'game' && live.reason === 'Both games are available; choose ETS2 or ATS' && onSelect ? <div className="flex flex-wrap gap-2" data-testid="live-game-choice" aria-busy={choosing}>
-      {(['ets2', 'ats'] as const).map(game => <Button key={game} type="button" variant="outline" disabled={choosing} data-testid={`live-choose-${game}`} onClick={() => {
-        setChoosing(true); setChoiceFailed(false); void onSelect(game).catch(() => setChoiceFailed(true)).finally(() => setChoosing(false));
-      }}>{game === 'ets2' ? 'Euro Truck Simulator 2' : 'American Truck Simulator'}</Button>)}
-      {choosing ? <p role="status">{strings.sourceChoosing}</p> : null}{choiceFailed ? <p role="alert">{strings.sourceSelectionFailed}</p> : null}
-    </div> : null}
+    {choice}
 
     <Card className="yu-instrument" data-testid="live.instrument"><CardContent>
       <h2 className="sr-only">{t('live.instruments', undefined, language)}</h2>
