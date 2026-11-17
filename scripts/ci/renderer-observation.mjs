@@ -99,6 +99,23 @@ export async function waitForPartialLive(page) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
+// Self-contained browser callback for the display hold right after both streams stop (REG-002, REG-009): the page is still
+// the dashboard, its state is stale or waiting and the status matches `status` (a RegExp source). It returns what the
+// held dashboard shows, so the caller asserts that values became dashes instead of staying frozen. The hold lasts three
+// seconds, so the wait polls every 50 ms instead of on animation frames.
+export function heldNotCurrentLiveObservation({status}) {
+  const one = id => {const nodes = globalThis.document.querySelectorAll('[data-testid="' + id + '"]'); return nodes.length === 1 ? nodes[0] : null;};
+  const count = id => globalThis.document.querySelectorAll('[data-testid="' + id + '"]').length;
+  const root = one('live-telemetry'), state = root?.getAttribute('data-live-state');
+  if (root?.getAttribute('data-live-display') !== 'dashboard' || state !== 'stale' && state !== 'waiting') return false;
+  if (!new RegExp(status).test(one('telemetry-status')?.textContent ?? '')) return false;
+  return {state, gauge: one('live-speed-number')?.textContent ?? null, staleBadges: count('live.stale'), banners: count('live.waiting'), placeholders: count('live.placeholder')};
+}
+export async function waitForHeldNotCurrentLive(page, status) {
+  const handle = await page.waitForFunction(heldNotCurrentLiveObservation, {status}, {timeout: 8000, polling: 50});
+  try {return await handle.jsonValue();} finally {await handle.dispose();}
+}
+
 // Self-contained browser callback for the Live page without current game data, once its display hold has passed
 // (live-display-hold.ts): the status matches `status` (a RegExp source), the visible placeholder scene reads `caption`
 // exactly, and neither the instrument, the waiting banner, a stale badge nor the field list exists.
@@ -115,7 +132,8 @@ export function placeholderLiveObservation({status, caption}) {
 /** The Live placeholder's caption while no condition needs the driver (live.placeholder in the dictionaries). */
 export const LIVE_PLACEHOLDER_CAPTION = Object.freeze({en: 'The instruments appear when you get behind the wheel', ru: 'Приборы появятся, когда вы сядете за руль'});
 export async function waitForPlaceholderLive(page, status, caption = LIVE_PLACEHOLDER_CAPTION.en) {
-  const handle = await page.waitForFunction(placeholderLiveObservation, {status, caption}, {timeout: 10000});
+  // The wait covers the stream's freshness expiry (up to five seconds) plus the three-second hold, with margin.
+  const handle = await page.waitForFunction(placeholderLiveObservation, {status, caption}, {timeout: 12000});
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 

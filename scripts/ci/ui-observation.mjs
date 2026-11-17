@@ -5,7 +5,7 @@ import path from 'node:path';
 import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage, isolateDashboardPointer} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
-import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, waitForPartialLive, waitForPlaceholderLive, LIVE_PLACEHOLDER_CAPTION, zeroLiveObservation} from './renderer-observation.mjs';
+import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, waitForHeldNotCurrentLive, waitForPartialLive, waitForPlaceholderLive, LIVE_PLACEHOLDER_CAPTION, zeroLiveObservation} from './renderer-observation.mjs';
 import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
@@ -1092,9 +1092,11 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           assert.equal(partial.text?.includes(partialText), true, `UI_LIVE_PARTIAL_TEXT_${language}`);
           assert.equal(partial.title, language === 'en' ? 'Connection incomplete' : 'Подключение неполное', `UI_LIVE_PARTIAL_TITLE_${language}`);
           assert.equal(partial.staleBadges, 0, `UI_LIVE_PARTIAL_STALE_BADGE_${language}`);
-          // Both streams stopped: after the display hold the placeholder scene with its one caption replaces the dimmed
-          // dashboard; the state stays stale underneath.
+          // Both streams stopped: during the display hold the dashboard shows the stale badge and dashes, never frozen
+          // values; after it the placeholder scene with its one caption replaces it, and the state stays stale underneath.
           sourceV1.hold();
+          const held = await waitForHeldNotCurrentLive(dashboard, '^stale:');
+          assert.deepEqual(held, {state: 'stale', gauge: '—', staleBadges: 1, banners: 0, placeholders: 0}, `UI_LIVE_STALE_HELD_${language}`);
           const placeholder = await waitForPlaceholderLive(dashboard, '^stale:', LIVE_PLACEHOLDER_CAPTION[language]);
           assert.equal(placeholder.state, 'stale', `UI_LIVE_STATE_STALE_${language}`);
           await save('stale', language, size);

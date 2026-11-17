@@ -18,7 +18,7 @@ import {startLiveSmokeSourceV1} from './live-smoke-source-v1.mjs';
 import {
   captureFailureScreenshot, overlayOverflow, RECORDING_NOT_RECORDED_TEXT, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_BREAK_CUE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT,
   SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_STRIP_SECTIONS, SYNTHETIC_V1_VALUE_IDS,
-  waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayBreakCue, waitForOverlayV1, waitForPlaceholderLive, waitForRecordingText, waitForV1NotCurrentLive
+  waitForCompleteLive, waitForCurrentTelemetry, waitForNotCurrentLive, waitForOverlayBreakCue, waitForHeldNotCurrentLive, waitForOverlayV1, waitForPlaceholderLive, waitForRecordingText, waitForV1NotCurrentLive
 } from './renderer-observation.mjs';
 import {
   captureHiddenOverlay, LAYOUT_SMOKE_RESERVED_CSS, LAYOUT_SMOKE_WINDOWS, LAYOUT_SMOKE_ZOOM, rendererPages, verifyAppliedWindow, zoomedViewportTolerance, runOverlaySmoke, verifyLayoutContainment, verifyStripLayout, waitForLayoutContainment, waitForStripLayout, windowSecurity,
@@ -523,7 +523,11 @@ try {
     await atTop(); await waitForNotCurrentLive(window, ['live-gear', 'live-cargo', 'live-odometer'], '^(disconnected|waiting):');
     result.telemetry.liveDisconnectedHidden = true;
     await telemetrySourceV1.stop();
-    // With neither source current the Live page shows the placeholder scene instead of dimmed values.
+    // With neither source current the held dashboard first shows dashes, not frozen values; then the placeholder scene.
+    const held = await waitForHeldNotCurrentLive(window, '^(disconnected|waiting):');
+    assert.equal(held.gauge, '—', 'Live kept a current speed after both sources stopped');
+    assert.equal(held.placeholders, 0);
+    result.telemetry.liveHeldNotCurrent = held;
     await atTop(); result.telemetry.livePlaceholder = await waitForPlaceholderLive(window, '^(disconnected|waiting):');
     result.telemetry.overlayV1.stopped = await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_STOPPED);
     result.telemetry.v1DisconnectedHidden = true;
