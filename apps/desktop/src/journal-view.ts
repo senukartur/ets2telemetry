@@ -308,7 +308,9 @@ function refuelCard(refuels: NonNullable<JournalTripDetail['refuels']>, units: D
   if (refuels.dieselL > 0) rows.push({id: 'fuelAdded', label: t('energy.fuelAdded', undefined, language), value: amount(units, 'diesel')(refuels.dieselL)});
   if (refuels.electricKWh > 0) rows.push({id: 'chargeAdded', label: t('energy.chargeAdded', undefined, language), value: amount(units, 'electric')(refuels.electricKWh)});
   if (rows.length === 0) rows.push({id: 'energyAdded', label: t('energy.confirmedAmount', undefined, language), value: t('energy.noConfirmedIncrease', undefined, language)});
-  return {rows, notes: refuels.omitted ? [t('energy.refuelHistory', undefined, language)] : []};
+  const note = refuels.unavailableReason === 'retained-path-unproven' ? 'energy.refuelRouteUnknown'
+    : refuels.unavailableReason === 'annotation-limit' ? 'energy.refuelAnnotationLimit' : 'energy.refuelHistory';
+  return {rows, notes: refuels.omitted ? [t(note, undefined, language)] : []};
 }
 
 /** The trip detail's summary sections (J13). */

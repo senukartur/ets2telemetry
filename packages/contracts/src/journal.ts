@@ -177,7 +177,10 @@ export interface JournalMoneyTotals {incomplete: boolean; totals: JournalMoneyTo
 
 export type JournalOutcomeRecord = Extract<EventRecord, {type: 'job.delivered'} | {type: 'job.cancelled'}>;
 /** Measured energy increases supported by the selected route; raw refuel annotations may cover more. */
-export interface JournalRefuels {dieselL: number; electricKWh: number; omitted: boolean}
+export interface JournalRefuels {
+  dieselL: number; electricKWh: number; omitted: boolean;
+  unavailableReason?: 'retained-path-unproven' | 'annotation-limit';
+}
 export interface JournalTripDetail {
   database: JournalDatabase;
   trip: JournalTripListItem & {
@@ -515,8 +518,13 @@ export function validateJournalTripDetail(value: unknown): JournalTripDetail {
     ...(isRecord(value) && Object.hasOwn(value, 'refuels') ? ['refuels'] : [])]);
   if (Object.hasOwn(o, 'energyPowertrain') && !isTruckPowertrain(o.energyPowertrain)) bad();
   if (Object.hasOwn(o, 'refuels')) {
-    const refuels = exact(o.refuels, ['dieselL', 'electricKWh', 'omitted']);
+    const hasReason = isRecord(o.refuels) && Object.hasOwn(o.refuels, 'unavailableReason');
+    const refuels = exact(o.refuels, ['dieselL', 'electricKWh', 'omitted', ...(hasReason ? ['unavailableReason'] : [])]);
     nonNegative(refuels.dieselL); nonNegative(refuels.electricKWh); boolean(refuels.omitted);
+    if (hasReason) {
+      oneOf(refuels.unavailableReason, ['retained-path-unproven', 'annotation-limit']);
+      if (refuels.dieselL !== 0 || refuels.electricKWh !== 0 || refuels.omitted !== true) bad();
+    }
   }
   database(o.database);
   const trip = exact(o.trip, [...listKeys(o.trip), 'pluginSessionId', 'openedBy', 'openedEventSeq', 'outcomeEventSeq', 'closedBy']);

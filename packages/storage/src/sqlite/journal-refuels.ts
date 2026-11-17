@@ -125,7 +125,11 @@ export function journalRefuels(db: Database.Database, trip: bigint, snap?: Logic
     {trip_ref: bigint; detail_json: string}[];
   if (notes.length === 0) return undefined;
   const total = {dieselL: 0, electricKWh: 0, omitted: false};
-  if (!snap || snap.head === null || snap.row._moneyIncomplete === true || notes.length > NOTE_LIMIT) return {...total, omitted: true};
+  if (notes.length > NOTE_LIMIT) return {...total, omitted: true, unavailableReason: 'annotation-limit'};
+  // The legacy projection key is set from logical_trips.reconciliation_unknown. It signals an unproven accounting
+  // path independently of whether the trip has any money events.
+  if (!snap || snap.head === null || snap.row._moneyIncomplete === true)
+    return {...total, omitted: true, unavailableReason: 'retained-path-unproven'};
   const spans = retainedSpans(db, snap), cache = new Map<string, Window[]>();
   for (const note of notes) {
     const detail = JSON.parse(note.detail_json) as Record<string, unknown>;

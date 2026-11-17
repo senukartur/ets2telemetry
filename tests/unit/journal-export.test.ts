@@ -167,7 +167,7 @@ describe('format version 6 quantity provenance (ET-112e; REG-011, REG-014)', () 
   });
 });
 
-describe('format version 6 (J15, REG-014)', () => {
+describe('JSON export compatibility and format version 7 (J15, REG-014)', () => {
   it('still validates the hand-written historical format-1 document', () => {expect(tripExportProblems(EXPECTED)).toEqual([]);});
   it('still validates the historical format-2 document', () => {expect(tripExportProblems(EXPECTED_V2)).toEqual([]);});
   it('writes the open anchor exactly as the hand-written document, in key order, one row per line', () => {
