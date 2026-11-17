@@ -282,7 +282,7 @@ ET-016 PR-2 adds four read commands for the [trip journal](journal.md) (J5). Eac
 | Command | Bound | Order and cursor |
 | --- | --- | --- |
 | `journalTrips({cursor?, game?, outcome?, completeness?, mode?, jobType?})` | 50 trips; the page size is fixed and a `limit` is refused | Newest first. The filters are in the `WHERE` clause, before the `LIMIT`. A cursor is an `l5` snapshot cursor bound to the filters, or a last row id, `^[1-9][0-9]{0,18}$`. A read without a cursor adds the matching logical trips and their samples as `totals` (ET-076) |
-| `journalTrip(tripUuid)` | One trip; its first 50 completeness intervals; its latest 10 trailer configurations with their total; at most 5,000 money amounts summed, beyond that `incomplete: true` | `UNKNOWN_TRIP` for an unknown trip |
+| `journalTrip(tripUuid)` | One trip; its first 50 completeness intervals; its latest 10 trailer configurations with their total; at most 5,000 money amounts summed, beyond that `incomplete: true`. A supported save cut can return a separate `retainedSubtotal` for confirmed amounts. | `UNKNOWN_TRIP` for an unknown trip |
 | `journalEvents(tripUuid, {cursor?, limit})` | `limit` 100 or 500 | eventSeq order; the cursor is the last eventSeq, `^[1-9][0-9]{0,19}$` |
 | `journalIntervals(tripUuid, {cursor?, limit})` | `limit` 100 or 500, with the trip's total | Insertion order; the cursor is the last interval id |
 

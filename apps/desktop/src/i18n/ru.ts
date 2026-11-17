@@ -802,6 +802,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'tr.samples': 'сэмплы 1 Гц',
   'tr.gap': 'нет сэмплов {d}',
   'tr.money': 'Штрафы и платные дороги',
+  'tr.moneySubtotal': 'Сумма по подтверждённым участкам рейса. Расходы на отброшенных и неподтверждённых участках не учтены.',
   'tr.fines': 'Штрафы',
   'tr.tolls': 'Платные дороги',
   'tr.ferry': 'Паромы и поезда',
