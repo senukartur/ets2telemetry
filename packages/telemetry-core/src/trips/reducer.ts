@@ -331,8 +331,8 @@ function onTimersRestart(c: Carrier) {
   closeTrip(c, 'none', 'discontinuity');
   if (trip.phase==='active' && trip.jobKey!==null) c.session.untrackedJob={key:trip.jobKey,source:'recovery'};
 }
-/** gameTime.regression (O9, O10): a save load. It continues a reload-checked or just-loaded trip as partial, else closes it. */
-function onRegression(c: Carrier, record: Extract<EventRecord, {type: 'gameTime.regression'}>) {
+/** A live reload of the same job can be verified by storage against the retained sample path. */
+function onRegression(c: Carrier, record: Extract<EventRecord, {type: 'gameTime.regression'}>, live: boolean) {
   const trip = c.slot.trip;
   // A regression follows the start of the load it ends (O10), so it never starts a load (T12).
   if (c.simulation === 'running') c.session.load = 'running';
@@ -340,7 +340,7 @@ function onRegression(c: Carrier, record: Extract<EventRecord, {type: 'gameTime.
   const detail = {cause: 'save-load', fromClockId: record.from.clockId, toClockId: record.to.clockId};
   if (trip.phase === 'reload-check') {
     trip.phase = 'active'; trip.reloadEventSeq = null; trip.loadCheck = null;
-    downgrade(c, 'discontinuity', detail);
+    downgrade(c, 'discontinuity', live && c.simulation === 'running' ? {...detail, annotation: true, rollbackVersion: 1} : detail);
     return;
   }
   if (trip.phase === 'active' && trip.loadCheck !== null) {
@@ -461,7 +461,7 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
       // One startup timer baseline is allowed. Later resets are load evidence.
       if(session.initialTimerSeen)session.prestartBlocked=true;
       session.initialTimerSeen=true;onTimersRestart(c);break;
-    case 'gameTime.regression': session.prestartBlocked=true;onRegression(c, record); break;
+    case 'gameTime.regression': session.prestartBlocked=true;onRegression(c, record, !message.data.redelivered && !replayed(c)); break;
     case 'source.gameMode': {
       session.gameMode = modeOf(record);
       const trip = c.slot.trip;

@@ -9,11 +9,12 @@ import {advanceQuantities, completeAnchor, DISTANCE_BREAK_FLAGS, FUEL_BREAK_FLAG
   type QuantityAdvance, type QuantityAnchor, type QuantityPath, type QuantityPoint, type QuantityRun, type QuantityStep} from '../../../telemetry-core/src/trips/quantities';
 import {READING_HOLE_SECONDS} from '../../../telemetry-core/src/trips/accounting';
 import {matchesSavedEndpoint} from '../../../telemetry-core/src/trips/saved-endpoint';
+import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {JOURNAL_DISTANCE_BREAKS, JOURNAL_DISTANCE_QUALITY, JOURNAL_FUEL_BREAKS, JOURNAL_FUEL_QUALITY, type JournalAccounting, type JournalQuantityStatus} from '../../../contracts/src/journal';
 import {MAX_RESOLVE_MEMBERSHIPS, MAX_SAMPLE_BATCH, type SampleInput} from '../api';
 import type {UploadAccounting} from '../upload-projection';
 import {registeredAccountingEngine} from './connection';
-import {cleanLoadWindow, COVERAGE_LOSS, pausedReconnect, type LogicalCoverage} from './logical-coverage';
+import {cleanLoadWindow, COVERAGE_LOSS, finishRollback, pausedReconnect, type LogicalCoverage} from './logical-coverage';
 
 type Row = Record<string, unknown>;
 const F = QUANTITY_FLAGS, CUMULATIVE = 0x3fff, BREAKS = DISTANCE_BREAK_FLAGS | FUEL_BREAK_FLAGS, GAP = F.distanceGap | F.fuelBoundary;
@@ -136,14 +137,14 @@ function gapAdvance<R extends QuantityRun>(previous: QuantityPoint | null, ancho
  * junction, null for any other step and undefined when nothing was written, with the head after the step.
  */
 function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Stored, truckRef: unknown, link: (a: Stored) => boolean, replay: Replay | null, now: unknown,
-  carried?: Carried, gap?: Stored): {decided: boolean | null | undefined; carried: Carried} {
+  carried?: Carried, gap?: Stored): {decided: boolean | null | undefined; carried: Carried; previous: Stored | undefined; restoredMinute?: string} {
   const headId = carried ? carried.headId : get(db, 'SELECT progress_head FROM logical_trips WHERE id=?', logical)!.progress_head;
   const head = headId === null ? undefined : ledgerRow(db, headId), a = carried ? carried.a : anchorOf(db, head);
   const previous = pointAt(head, a);
   const linked = !gap && !!a && link(a), step: QuantityStep = a ? stepOf(db, a, b, linked) : {kind: 'member'};
   const advance: QuantityAdvance<LedgerRun> = gap ? gapAdvance(previous, b.anchor) : advanceQuantities(previous, b.anchor, step, ledgerPath(db, logical, head));
   const point = advance.point;
-  if (!point) return {decided: undefined, carried: {headId, a}};
+  if (!point) return {decided: undefined, carried: {headId, a}, previous: a};
   const own = replay?.own ?? null;
   let prefix: unknown, start: unknown, startOdometer: unknown, flags = point.flags;
   if (!completeAnchor(b.anchor)) {
@@ -176,15 +177,30 @@ function advanceLedger(db: Database.Database, logical: bigint, trip: Row, b: Sto
       VALUES(?,?,'discontinuity',?,?,?,?,?)`, at.session, trip.id, at.utcMs, at.anchor.monotonicNs.padStart(20, '0'), at.clock, JSON.stringify(detail), now);
   }
   const decided = gap ? false : previous && step.kind === 'member' && completeAnchor(b.anchor) ? advance.savePoint : null;
-  return {decided, carried: {headId: inserted.lastInsertRowid, a: completeAnchor(b.anchor) ? b : a}};
+  const matched = advance.cut?.matched?.anchor;
+  const restoredMinute = step.kind === 'boundary' && matched?.pluginSessionId === b.anchor.pluginSessionId
+    && matched.sourceClockId === b.anchor.sourceClockId ? matched.gameMinutes : null;
+  return {decided, carried: {headId: inserted.lastInsertRowid, a: completeAnchor(b.anchor) ? b : a}, previous: a,
+    ...(restoredMinute ? {restoredMinute} : {})};
+}
+
+interface RollbackProof {
+  coverage: LogicalCoverage;
+  sameJob: boolean;
+  scope: unknown;
+  profile: ProfileObservation | undefined;
 }
 
 /**
  * Records one live sample of raw trip `row` into the engine-1 group `logical`. The recorder link holds when the sample's
- * recorded predecessor is the ledger's last complete anchor of the same raw trip. Returns the savePoint of a member junction.
+ * recorded predecessor is the ledger's last complete anchor of the same raw trip. A live rollback is decided against
+ * the actual cut written in this transaction.
  */
-export function projectQuantitySample(db: Database.Database, logical: bigint, row: Row, sample: SampleInput, sampleId: bigint, truckRef: unknown, now: number): boolean | null {
-  return advanceLedger(db, logical, row, stored(db, sampleId, sample.recording?.truck ?? null), truckRef, recorderLink(row, sample), null, now).decided ?? null;
+export function projectQuantitySample(db: Database.Database, logical: bigint, row: Row, sample: SampleInput, sampleId: bigint, truckRef: unknown, now: number,
+  evidence?: RollbackProof): {junction: boolean | null; rollback?: LogicalCoverage} {
+  const current = stored(db, sampleId, sample.recording?.truck ?? null), link = recorderLink(row, sample);
+  const write = advanceLedger(db, logical, row, current, truckRef, link, null, now);
+  return {junction: write.decided ?? null, ...(evidence ? {rollback: decideRollback(db, row, evidence, current, write.previous, write.restoredMinute, link)} : {})};
 }
 /** The recorder link of a live sample of raw trip `row`: its recorded predecessor is the anchor `a` of the same raw trip. */
 function recorderLink(row: Row, sample: SampleInput): (a: Stored) => boolean {
@@ -294,6 +310,36 @@ export function junctionCoverage(db: Database.Database, row: Row, coverage: Logi
 /** The longest wait of a junction for an admitted proof, in source monotonic time from the junction reading. */
 export const PROOF_WAIT_NS = 10_000_000_000n;
 const LINK_NS = BigInt(READING_HOLE_SECONDS) * 1_000_000_000n;
+const stopped = (point: QuantityAnchor) => point.speedMps !== null && Math.abs(point.speedMps) <= 0.05;
+
+function decideRollback(db: Database.Database, row: Row, {coverage, sameJob, scope, profile}: RollbackProof, current: Stored,
+  previous: Stored | undefined, restoredMinute: string | undefined, link: (a: Stored) => boolean): LogicalCoverage | undefined {
+  const pending = coverage.rollback!, y = current.anchor, elapsed = BigInt(y.monotonicNs) - BigInt(pending.atNs);
+  if (y.sourceClockId === pending.sourceClockId && elapsed < 0n) return undefined; // Buffered readings before the load.
+
+  const fail = () => finishRollback(coverage, false);
+  if (!sameJob || coverage.member !== String(row.id) || y.sourceClockId !== pending.sourceClockId || y.gameClockId !== pending.toClockId
+    || elapsed > PROOF_WAIT_NS || !previous || previous.trip !== current.trip || previous.clock !== current.clock
+    || !completeAnchor(y) || (profile && profile.scope !== scope)) return fail();
+
+  const admitted = profile && BigInt(profile.afterMonotonicNs) > BigInt(pending.atNs);
+  if (pending.sample === null) {
+    const x = previous.anchor;
+    if (y.gameMinutes !== pending.toMinutes || restoredMinute !== pending.toMinutes || x.gameClockId !== pending.fromClockId
+      || BigInt(x.monotonicNs) >= BigInt(pending.atNs)) return fail();
+    if (admitted) return finishRollback(coverage, true);
+    return stopped(y) ? {...coverage, rollback: {...pending, sample: String(current.id)}} : fail();
+  }
+
+  const firstId = BigInt(pending.sample), first = stored(db, firstId, truckOf(db, sampleTruckRef(db, firstId)));
+  const stepNs = BigInt(y.monotonicNs) - BigInt(previous.anchor.monotonicNs);
+  // The cut itself still requires the exact loaded minute. After it, one forward stationary tick can occur before proof arrives.
+  const minute = y.gameMinutes!, lastMinute = previous.anchor.gameMinutes;
+  if (!link(previous) || previous.anchor.gameClockId !== pending.toClockId || stepNs <= 0n || stepNs >= LINK_NS
+    || lastMinute === null || BigInt(minute) < BigInt(lastMinute) || !stopped(y)
+    || !matchesSavedEndpoint(first.anchor, y, true, minute)) return fail();
+  return admitted ? finishRollback(coverage, true) : undefined;
+}
 /**
  * Engine 1 (ET-112k): a live sample of raw member `row` while its junction waits for an admitted proof, read before the
  * ledger records it. The sample must stand at the coverage's saved endpoint by the junction's save-point rule
@@ -305,11 +351,10 @@ const LINK_NS = BigInt(READING_HOLE_SECONDS) * 1_000_000_000n;
 export function proofWait(db: Database.Database, logical: bigint, row: Row, coverage: LogicalCoverage | undefined, sample: SampleInput, sampleId: bigint, proof: boolean): LogicalCoverage | undefined {
   if (coverage?.proofPending === undefined) return undefined;
   const a = anchorOf(db, headRow(db, logical)), y = stored(db, sampleId, sample.recording?.truck ?? null).anchor, x = a?.anchor;
-  const still = (v: QuantityAnchor) => v.speedMps !== null && Math.abs(v.speedMps) <= 0.05;
   const standing = pendingFor(row, coverage) && coverage.endpoint !== null && !!a && !!x && recorderLink(row, sample)(a) && x.pluginSessionId === y.pluginSessionId
     && x.sourceClockId === y.sourceClockId && x.gameClockId === y.gameClockId && BigInt(y.monotonicNs) > BigInt(x.monotonicNs)
     && BigInt(y.monotonicNs) - BigInt(x.monotonicNs) < LINK_NS && BigInt(y.monotonicNs) - BigInt(coverage.proofPending) <= PROOF_WAIT_NS
-    && still(x) && still(y) && completeAnchor(y) && matchesSavedEndpoint(coverage.endpoint.anchor, y, true, y.gameMinutes!);
+    && stopped(x) && stopped(y) && completeAnchor(y) && matchesSavedEndpoint(coverage.endpoint.anchor, y, true, y.gameMinutes!);
   if (!standing) return decideJunction(db, row, coverage, false);
   return proof ? decideJunction(db, row, coverage, true) : undefined;
 }

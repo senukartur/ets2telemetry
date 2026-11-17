@@ -61,7 +61,7 @@ export interface QuantityAdvance<R extends QuantityRun = QuantityRun> {
   point: QuantityPoint | null;
   run: 'continue' | 'new';
   /** A rollback restored to `run` at `odometerM`; the caller records the cut. */
-  cut: {run: R; odometerM: number} | null;
+  cut: {run: R; odometerM: number; matched: QuantityPoint | undefined} | null;
   /** This step made a quantity unavailable (a different truck at earlier minutes, or a rollback without a retained run). */
   unproven: boolean;
   /** At a junction or rollback: whether the anchor is the same save point as the compared one; null otherwise. */
@@ -94,13 +94,13 @@ export function advanceQuantities<R extends QuantityRun>(previous: QuantityPoint
       && r.startOdometerM <= x && x <= r.end.anchor.odometerM! && r.end.distanceM !== null);
     // ET-112 E7: no retained run holds the loaded point, so neither quantity can be supported for the rest of the trip.
     if (!retained) { distance = null; fuel = null; flags |= UNPROVEN_FLAGS; unproven = true; return; }
-    cut = {run: retained, odometerM: x};
     const points = path.points(retained, x).slice(0, QUANTITY_POINT_LIMIT);
     let match: QuantityPoint | undefined;
     for (const point of points) {
       if (point.anchor.odometerM !== x || !matchesSavedEndpoint(point.anchor, anchor, true, anchor.gameMinutes!)) continue;
       if (!match || Math.abs(point.anchor.fuelL! - anchor.fuelL!) < Math.abs(match.anchor.fuelL! - anchor.fuelL!)) match = point;
     }
+    cut = {run: retained, odometerM: x, matched: match};
     const kept = match ?? points[0];
     let fuelFlags = kept ? kept.flags & FUEL_FLAGS : F.fuelUnproven;
     if (!match && kept) fuelFlags |= F.fuelBoundary;

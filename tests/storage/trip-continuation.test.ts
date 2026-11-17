@@ -20,7 +20,7 @@ import path from 'node:path';
 import type {SampleInput, Storage} from '../../packages/storage/src';
 import {attachTripUuidFor,tripUuidFor, type EventMessage, type ProfileObservation} from '../../packages/telemetry-core/src';
 import {validateJournalTripDetail, validateJournalEventPage,validateJournalIntervalPage,type JournalTripDetail,type JournalTripPage} from '../../packages/contracts/src/journal';
-import {ETS2_A, ETS2_B, GAME_CLOCK_1, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
+import {ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, otherJob, r, Script, trailer} from '../shared/trip-messages';
 import {FINAL_PROCESS_PROFILE_DELAY_MS, INCIDENT_EXPECTED, INCIDENT_JOB, INCIDENT_JOB_U32_MAX_DEADLINE, INCIDENT_JOB_WITHOUT_CARGO_ID, INCIDENT_JOB_WITHOUT_DEADLINE,
   INCIDENT_OTHER_JOB, INCIDENT_SEGMENTS, INCIDENT_SESSIONS, incidentDelivered, incidentTripUuid, type IncidentSegment} from '../shared/trip-continuation-incident';
 import type {JobConfiguration} from '../../packages/contracts/src/protocol-v1';
@@ -1051,6 +1051,111 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.commitEvent({message:script.event(r.truckConfigured()),effects:[{kind:'completeness.add',interval:{tripUuid:uuid,kind:'discontinuity',detail:{cause,annotation:true}}}]}));
     expect(ok(storage.journalTrip(uuid)).trip.recordingCompleteness).toBe(cause==='truck-change'?'unknown':'partial');storage.close();
   });
+  it.each(['verified', 'delayed proof', 'one minute', 'two minutes', 'timeout', 'closed pending', 'reopened pending', 'stale proof',
+    'moved before proof', 'odometer only', 'unobserved start', 'earlier loss', 'different job', 'different profile', 'engine zero'] as const)(
+    'keeps recording completeness across a same-session save rollback only with verified retained coverage (%s)', async variant => {
+      const s = new Script(ETS2_A), context = {receivedUtcMs: 1000};
+      const openClient = async () => {
+        const worker = storageWorker(variant === 'engine zero' ? ENGINE_0 : undefined);
+        const handle = new StorageClient(worker.handle, {closeGraceMs: TEST_CLOSE_GRACE_MS});
+        ok(await handle.open({path: ws.database, backupsDirectory: ws.backups, purpose: 'synthetic', appVersion: 'test'}));
+        return handle;
+      };
+      let client = await openClient();
+      let profile: ProfileObservation | undefined = proof(s);
+      const port = recorderClient({get client() {return client;}});
+      const recorder = new TripRecorderSink({...port, appendSamples: (session, rows, options) => port.appendSamples(session, rows.map(row => {
+        if (!row.recording || row.gameTime?.clockId !== GAME_CLOCK_2) return row;
+        // Conflicting sample evidence at the worker boundary is independent of the reducer's durable identical re-send.
+        if (variant === 'different job') return {...row, recording: {...row.recording, job: otherJob()}};
+        if (variant === 'different profile' && row.recording.profile)
+          return {...row, recording: {...row.recording, profile: {...row.recording.profile, scope: 'c'.repeat(64)}}};
+        return row;
+      }), options)}, {profileEvidence: () => profile});
+      const commit = async (message: EventMessage) => { succeeded(await recorder.commit(message, context)); };
+      succeeded(await recorder.openSession(s.welcome()));
+      succeeded(recorder.observe(s.checkpoint(null), context));
+      if (variant !== 'unobserved start') await commit(s.event(r.started()));
+      const configured = s.event(r.jobConfigured(), variant === 'unobserved start' ? {simulation: 'paused'} : {});
+      await commit(configured);
+      if (variant === 'unobserved start') await commit(s.event(r.started()));
+      const uuid = tripUuidFor(s.session, configured.data.eventSeq);
+      const configuration = s.checkpoint(job()).data.state.configuration;
+      const capture = async (distance: number, x: number, fuel: number, speed: number, minutes: string, clockId: string, advanceMs = 1000) => {
+        const message = s.snapshot({configuration, simulation: 'running',
+          odometer: {available: true, value: 1_000_000 + distance, unit: 'm'}, fuel: {available: true, value: fuel, unit: 'L'},
+          speed: {available: true, value: speed, unit: 'm/s'}, gameTime: {available: true, value: minutes, unit: 'min', clockId},
+          worldPlacement: {available: true, value: {position: {x, y: 0, z: 0}, orientation: {heading: 0, pitch: 0, roll: 0}}}
+        }, advanceMs);
+        succeeded(recorder.observe(message, context));
+        if (recorder.attach.due()) succeeded(await recorder.attach.open(context));
+      };
+      const flush = async () => { succeeded(await recorder.samples.write(3600, true)); };
+      await capture(0, 0, 100, 20, '12345', GAME_CLOCK_1);
+      await capture(20, 20, 99.5, 0, '12346', GAME_CLOCK_1, variant === 'earlier loss' ? 6000 : 1000);
+      await capture(40, 40, 99.2, 20, '12347', GAME_CLOCK_1);
+      await capture(60, 60, 99, 0, '12348', GAME_CLOCK_1);
+      // Leave the last old-clock sample buffered until after the event; it still belongs to the old path.
+      await commit(s.event(r.paused(), {simulation: 'paused', advanceMs: 100}));
+      await commit(s.event(r.jobCleared(), {simulation: 'paused', advanceMs: 100}));
+      await commit(s.event(r.jobConfigured(), {simulation: 'paused', advanceMs: 100}));
+      await commit(s.event(r.started(), {advanceMs: 100}));
+      const regression = s.event(r.regression('12348', '12346'), {advanceMs: 0});
+      await commit(regression);
+      expect(ok(await client.journalTrip(uuid)).trip.recordingCompleteness).toBe('partial');
+
+      const freshProfile = {...proof(s), loadGeneration: 2, afterMonotonicNs: regression.capture.monotonicNs};
+      const waiting = ['delayed proof','one minute','two minutes','timeout','closed pending','reopened pending','moved before proof'].includes(variant);
+      if (waiting) profile = undefined;
+      else if (variant !== 'stale proof') profile = freshProfile;
+      const loaded = variant === 'odometer only' ? 30 : 20;
+      await capture(20, loaded, 99.5, 0, '12346', GAME_CLOCK_2);
+      await flush();
+      if (waiting) {
+        expect(ok(await client.journalTrip(uuid)).trip.recordingCompleteness).toBe('partial');
+        if (variant === 'reopened pending') {
+          expect(await client.close()).toEqual({clean: true});
+          client = await openClient();
+          expect(ok(await client.journalTrip(uuid)).trip.recordingCompleteness).toBe('partial');
+        }
+        if (variant === 'timeout') {
+          for (let i = 0; i < 9; i++) await capture(20, 20, 99.5, 0, '12346', GAME_CLOCK_2);
+          await flush();
+        }
+        profile = freshProfile;
+        if (!['moved before proof','closed pending'].includes(variant)) {
+          const minute = variant === 'one minute' ? '12347' : variant === 'two minutes' ? '12348' : '12346';
+          await capture(20, 20, 99.5, 0, minute, GAME_CLOCK_2);
+          await flush();
+        }
+      }
+      if (variant !== 'closed pending') await capture(40, loaded + 20, 99.3, 20, variant === 'two minutes' ? '12349' : '12347', GAME_CLOCK_2);
+      await flush();
+      await commit(s.event(r.delivered()));
+      const detail = ok(await client.journalTrip(uuid)), {trip: finished} = detail;
+      const confirmed = ['verified', 'delayed proof', 'one minute', 'reopened pending'].includes(variant);
+      expect(finished).toMatchObject({outcome: 'delivered', recordingCompleteness: confirmed ? 'complete' : 'partial'});
+      if (variant === 'engine zero') {
+        expect(finished.accounting).toBeUndefined();
+        expect(await client.close()).toEqual({clean: true});
+        return;
+      }
+      expect(finished.observedDistanceM).toEqual({available: true, value: variant === 'closed pending' ? 20 : 40});
+      const fuel = variant === 'earlier loss' ? 0.2 : variant === 'closed pending' ? 0.5 : 0.7;
+      if (variant !== 'odometer only') expect(finished.fuelUsedL).toEqual({available: true, value: expect.closeTo(fuel, 8)});
+      else expect(finished.accounting?.fuel).toMatchObject({status: 'partial', breaks: ['recording-boundary']});
+      const samples = ok(await client.listSamples({tripUuid: uuid}, {includeExcluded: true}));
+      expect(samples.filter(sample => !sample.accountingIncluded).map(sample => sample.odometer)).toEqual([
+        {available: true, value: 1_000_040}, {available: true, value: 1_000_060}
+      ]);
+      if (variant === 'verified') {
+        const databaseUuid = detail.exportBounds.snapshot!.samples.split(':')[1];
+        const serializer = new TripExportSerializer(detail, tripExportHeader({...detail.database, uuid: databaseUuid}, 'test', 1000));
+        const exported = JSON.parse(serializer.begin() + serializer.rows('samples', samples) + serializer.end()) as {samples: {accountingIncluded: boolean}[]};
+        expect(exported.samples.filter(sample => !sample.accountingIncluded)).toHaveLength(2);
+      }
+      expect(await client.close()).toEqual({clean: true});
+    });
   it.each([31, 32])('preserves delivered recording coverage only for the supported roadside time advance (%i min)', async minutes => {
     const worker = storageWorker(), client = new StorageClient(worker.handle, {closeGraceMs: TEST_CLOSE_GRACE_MS});
     const s = new Script(ETS2_A), context = {receivedUtcMs: 1000};

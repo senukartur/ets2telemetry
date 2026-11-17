@@ -15,7 +15,7 @@
   "attributions": [],
   "intervals": [
     {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "opened-at-load", "annotation": true, "atEventSeq": "3"}},
-    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "save-load", "fromClockId": "game-clock-0", "toClockId": "game-clock-1", "atEventSeq": "13"}}
+    {"trip": "trip@3", "kind": "discontinuity", "detail": {"cause": "save-load", "annotation": true, "rollbackVersion": 1, "fromClockId": "game-clock-0", "toClockId": "game-clock-1", "atEventSeq": "13"}}
   ],
   "coverage": {"committedThroughEventSeq": "13", "committed": 13, "duplicate": 0, "covered": 0},
   "view": {"phase": "active", "untrackedJob": false, "lastClosed": null,

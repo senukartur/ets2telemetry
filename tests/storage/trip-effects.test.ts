@@ -173,7 +173,8 @@ describe('ET-014 reducer effects through real commits', () => {
     storage.close();
     expect(rows(ws.database)).toMatchObject({
       attributions: [{eventSeq: 8, trip: t, attribution: 'trip'}, {eventSeq: 19, trip: t, attribution: 'trip'}],
-      intervals: [{kind: 'discontinuity', trip: t, first: null, detail: {cause: 'save-load', fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '17'}}]
+      intervals: [{kind: 'discontinuity', trip: t, first: null, detail: {cause: 'save-load', annotation: true, rollbackVersion: 1,
+        fromClockId: GAME_CLOCK_1, toClockId: GAME_CLOCK_2, atEventSeq: '17'}}]
     });
   });
   it('20. a UTC label set back is clamped, so the close passes the ended >= started CHECK, and is annotated (T15) [synthetic-inference]', async () => {
