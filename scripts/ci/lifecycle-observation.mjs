@@ -22,13 +22,13 @@ const SETTINGS_SEED = '{"format":"ets2telemetry.settings","version":1,"units":{"
 // ET-071: the current format is v13, which adds the overlay section `cruise-control` (on by default) after `rpm`.
 // ET-082: the format became v14, which adds `theme` after `autostart`. The seed is an invalid file, not an older format, so
 // run A gets the new-install default `system` (no dark migration), its saves write that value and run B loads it back.
-// ET-084: the current format is v15, which adds the overlay section `speed-limit` (on by default) after `cruise-control`.
+// Settings v16 adds Rest State, enabled by default.
 const placementLines = (layout, x, y, last = false) => [`      "${layout}": {`, `        "x": ${x},`, `        "y": ${y},`, '        "scale": 1', last ? '      }' : '      },'];
-const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 15,', '  "language": "en",', '  "autostart": false,', '  "theme": "system",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
+const SETTINGS_SAVED = ['{', '  "format": "ets2telemetry.settings",', '  "version": 16,', '  "language": "en",', '  "autostart": false,', '  "theme": "system",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "us-customary"', '  },',
   '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
   '  "overlay": {', '    "enabled": false,', '    "backgroundOpacity": 80,', '    "layout": "strip",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": true,', '      "cruise-control": true,', '      "speed-limit": true,', '      "fuel": true,',
   '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,', '      "distance-driven": true,',
-  '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true,', '      "mandatory-break": true', '    },', '    "placements": {',
+  '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true,', '      "mandatory-break": true,', '      "rest-state": true', '    },', '    "placements": {',
   ...placementLines('strip', 0.5, 0), ...placementLines('card', 1, 0), ...placementLines('cluster', 0, 1), ...placementLines('hud', 0, 0, true),
   '    }', '  },', '  "nowPlaying": {', '    "enabled": false,', '    "style": "minimal",', '    "backgroundOpacity": 80,', '    "position": {', '      "displayId": null,', '      "x": 1,', '      "y": 0.75', '    }', '  }', '}', ''].join('\n');
 const SETTINGS_GEAR_SAVED = SETTINGS_SAVED.replace('"enabled": false', '"enabled": true');
@@ -36,7 +36,7 @@ const SETTINGS_UNIT_SAVED = SETTINGS_GEAR_SAVED.replace('"ets2": "manual"', '"et
 const AUTOMATIC_GEARS = {ets2: 'automatic', ats: 'automatic'}, SAVED_GEARS = {ets2: 'manual', ats: 'automatic'};
 const DEFAULT_OVERLAY = {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {'speed': true, 'gear': true, 'rpm': true, 'cruise-control': true, 'speed-limit': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true,
   'origin': true, 'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true,
-  'mandatory-break': true},
+  'mandatory-break': true, 'rest-state': true},
 placements: {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}}};
 const QUARANTINE_NAME = /^settings\.rejected-\d{8}T\d{6}Z\.json$/;
 // 25 m/s and 73 L in the us-customary profile.

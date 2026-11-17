@@ -171,6 +171,7 @@ export type I18nKey =
   | "copy.game-time"
   | "copy.delivery-deadline"
   | "copy.next-mandatory-break"
+  | "copy.rest-state"
   | "copy.cargo"
   | "copy.source-city"
   | "copy.source-company"

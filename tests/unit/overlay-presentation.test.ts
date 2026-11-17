@@ -361,7 +361,8 @@ const FULL: OverlaySectionView[] = [
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
   {id: 'game-time', state: 'value', text: '09:18'},
   // ET-052 (MB9): the minor-0 stand-in carries the break as not-supported, so the section is a dash, never a zero.
-  {id: 'mandatory-break', state: 'unavailable'}
+  {id: 'mandatory-break', state: 'unavailable'},
+  {id: 'rest-state', state: 'unavailable'}
 ];
 it('shows the v1 sections and names beside the v0 sections while both are current (ET-010c)', () => {
   const presentation = overlayPresentation(withV1());
@@ -395,13 +396,14 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
     {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
     {id: 'game-time', state: 'value', text: '09:18'},
     // ET-052: stale v1 data is a carried observation without a value, so the break is a dash.
-    {id: 'mandatory-break', state: 'unavailable'}
+    {id: 'mandatory-break', state: 'unavailable'},
+    {id: 'rest-state', state: 'unavailable'}
   ]);
   expect(v1Stale.freshness).toBe('current');
   const v0Stale = overlayPresentation(withV1(V1_STALE, {...live(), fresh: false, status: 'stale'}), undefined, undefined, v1Stale);
   expect(v0Stale).toMatchObject({freshness: 'stale', speed: '—', fuel: '—', paused: false});
   expect(v0Stale.sections).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
-    'expected-income', 'game-time', 'mandatory-break'].map(id => ({id, state: 'unavailable'})));
+    'expected-income', 'game-time', 'mandatory-break', 'rest-state'].map(id => ({id, state: 'unavailable'})));
   // A new selection clears the v1 projection: v1 sections are no longer carried, even as placeholders.
   const cleared = overlayPresentation(initialLive('ats'), undefined, undefined, v0Stale);
   expect(cleared.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
@@ -419,7 +421,7 @@ it('leaves out v1 job sections for another job unless they were shown, and keeps
   // ET-052: the break is not tied to the job, so it stays (as a dash for the minor-0 stand-in) beside another job's sections;
   // so does cruise control (ET-071) and the speed limit (ET-084).
   expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time',
-    'mandatory-break']);
+    'mandatory-break', 'rest-state']);
   expect(mismatch.sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
   expect(mismatch.sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '151 km'});
   const afterShown = overlayPresentation(withV1({ids: 'fixture'}), undefined, undefined, overlayPresentation(withV1()));
@@ -430,7 +432,7 @@ it('leaves the v1 job sections out once v0 reports no job, without keeping dashe
   const noJob = withV1();
   noJob.observation!.state.configuration = {...noJob.observation!.state.configuration, job: {available: false, reason: 'not-observed'}};
   const presentation = overlayPresentation(noJob, undefined, undefined, overlayPresentation(withV1()));
-  expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time', 'mandatory-break']);
+  expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'distance-remaining', 'game-time', 'mandatory-break', 'rest-state']);
 });
 it('keeps v1 sections that were never shown absent without v1 data (fix round 1)', () => {
   // Fix round 1 checked this with a previous projection that showed v1 sections; the PR #73 advisory review changed that
@@ -463,7 +465,8 @@ const LOST_V1: OverlaySectionView[] = [
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
   {id: 'game-time', state: 'value', text: '09:18'},
   // ET-052: a break section that was shown keeps its dash when the v1 carriage is lost while v0 continues (ET-012a L5).
-  {id: 'mandatory-break', state: 'unavailable'}
+  {id: 'mandatory-break', state: 'unavailable'},
+  {id: 'rest-state', state: 'unavailable'}
 ];
 it.each([
   ['main strips the projection', () => live()],
@@ -596,8 +599,8 @@ it.each([
 ] as const)('shows %d break minutes as %s with urgency %s', (minutes, text, urgency) => {
   const presentation = overlayPresentation(smokePair({nextMandatoryBreak: measure(minutes)}));
   expect(breakOf(presentation)).toEqual({id: 'mandatory-break', state: 'value', text, ...(urgency ? {urgency} : {})});
-  // The break is the last section, after game time, and no raw number or other field travels to the renderer.
-  expect(ids(presentation.sections).slice(-2)).toEqual(['game-time', 'mandatory-break']);
+  // The break follows game time, and no raw number or other field travels to the renderer.
+  expect(ids(presentation.sections).slice(-3)).toEqual(['game-time', 'mandatory-break', 'rest-state']);
   expect(Object.keys(breakOf(presentation)!).sort()).toEqual(urgency ? ['id', 'state', 'text', 'urgency'] : ['id', 'state', 'text']);
 });
 it('localizes the break text in Russian and keeps the urgency enum untouched', () => {
@@ -736,4 +739,19 @@ it('leaves the speed limit out when it is switched off and in the job-focus pres
     expect(limitOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections, placements: PLACEMENTS}))).toBeUndefined();
   for (const sections of [OVERLAY_PRESETS['driving-only'], OVERLAY_PRESETS['everything']])
     expect(limitOf(overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections, placements: PLACEMENTS}))).toMatchObject({state: 'value', text: '81 km/h'});
+});
+
+it('shows Rest State independently of the break and respects the section toggle (REG-009, REG-016)', () => {
+  const restOf = (view: OverlayPresentation) => view.sections.find(section => section.id === 'rest-state');
+  for (const [value, text] of [[500, '8 h 20 min'], [0, '0 min'], [-3, '0 min']] as const) {
+    const presentation = overlayPresentation(smokePair({restState: measure(value)}));
+    expect(restOf(presentation)).toEqual({id: 'rest-state', state: 'value', text});
+    expect(breakOf(presentation)).toEqual({id: 'mandatory-break', state: 'value', text: '1 h 35 min', urgency: 'soon'});
+  }
+  for (const reason of ['not-supported', 'not-observed', 'invalid'] as const)
+    expect(restOf(overlayPresentation(smokePair({restState: {available: false, unit: 'min', reason}})))).toEqual({id: 'rest-state', state: 'unavailable'});
+  expect(restOf(overlayPresentation(smokePair({status: 'stale', fresh: false})))).toEqual({id: 'rest-state', state: 'unavailable'});
+  const disabled = overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL, 'rest-state': false}, placements: PLACEMENTS});
+  expect(restOf(disabled)).toBeUndefined();
+  expect(breakOf(disabled)?.state).toBe('value');
 });

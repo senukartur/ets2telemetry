@@ -58,8 +58,8 @@ export interface LiveDashboardText {paused: boolean; sections: LiveSectionText[]
  */
 export function liveFieldValue(field: LiveField, language: AppLanguage): string {
   if (field.state === 'value' && field.id === 'market') return BASE_COPY.getJobMarketText(field.text, language);
-  // The break is a duration ("1 h 35 min"); the Russian units are the deadline's.
-  if (field.state === 'value' && field.id === 'mandatory-break') return localizeDeadlineString(field.text, language);
+  // Localize the units of both remaining in-game durations.
+  if (field.state === 'value' && (field.id === 'mandatory-break' || field.id === 'rest-state')) return localizeDeadlineString(field.text, language);
   // Cruise control off is a value, the app-owned word (ET-071); a set speed is a measurement like speed.
   if (field.state === 'value' && field.id === 'cruise-control' && field.text === CRUISE_CONTROL_OFF) return t('live.cruiseOff', undefined, language);
   // No limit is a value, the app-owned words (ET-084); a limit is a measurement like speed.

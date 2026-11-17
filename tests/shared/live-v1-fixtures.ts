@@ -51,6 +51,7 @@ export interface V1Options {
   cruiseControl?: Measure<'m/s'>;
   /** ET-084: the projection's speed limit; by default what the fixture carries, or not-supported below minor 4. */
   speedLimit?: Measure<'m/s'>;
+  restState?: Measure<'min'>;
 }
 /** The live v1 projection of a v1 fixture message, by hand: the state without its window and two status fields. */
 export function v1Projection(name = 'snapshot-live', options: V1Options = {}): LiveTelemetryV1 {
@@ -64,6 +65,7 @@ export function v1Projection(name = 'snapshot-live', options: V1Options = {}): L
   state.cruiseControl = structuredClone(options.cruiseControl ?? state.cruiseControl ?? {available: false, reason: 'not-supported', unit: 'm/s'});
   // ET-084: likewise the speed limit; a fixture below minor 4 carries none, so it is not-supported.
   state.speedLimit = structuredClone(options.speedLimit ?? state.speedLimit ?? {available: false, reason: 'not-supported', unit: 'm/s'});
+  state.restState = structuredClone(options.restState ?? state.restState ?? {available: false, reason: 'not-supported', unit: 'min'});
   const job = state.configuration.job;
   if ((options.ids ?? 'v0') === 'v0' && job.available) {
     job.value.cargoId = {available: true, value: 'cargo.logs'};
@@ -83,8 +85,8 @@ export function v1Projection(name = 'snapshot-live', options: V1Options = {}): L
 /** The smoke pair: the v0 smoke checkpoint with the v1 projection of snapshot-live carrying the same job ids. */
 export function smokePair(v1: V1Options = {}, v0Patch: Partial<LiveTelemetry> = {}): LiveTelemetry {
   // ET-052: the smoke source serves states with a next mandatory break of 95 game minutes (scripts/ci/live-smoke-source-v1.mjs).
-  // ET-071: they also carry a cruise control set speed of 25 m/s. ET-084: they are minor 4 and carry a speed limit of 22.5 m/s.
-  return {...smokeV0(v0Patch), v1: v1Projection('snapshot-live', {nextMandatoryBreak: {available: true, value: 95, unit: 'min'}, cruiseControl: {available: true, value: 25, unit: 'm/s'}, speedLimit: {available: true, value: 22.5, unit: 'm/s'}, ...v1})};
+  // The minor-5 smoke source also carries a 25 m/s cruise control speed, a 22.5 m/s speed limit and 500 game minutes of Rest State.
+  return {...smokeV0(v0Patch), v1: v1Projection('snapshot-live', {nextMandatoryBreak: {available: true, value: 95, unit: 'min'}, cruiseControl: {available: true, value: 25, unit: 'm/s'}, speedLimit: {available: true, value: 22.5, unit: 'm/s'}, restState: {available: true, value: 500, unit: 'min'}, ...v1})};
 }
 /** A service-internal v1 source state of a fixture, with the service-only fields the projection must drop. */
 export function v1SourceState(name = 'snapshot-live', patch: Partial<V1SourceState> = {}): V1SourceState {

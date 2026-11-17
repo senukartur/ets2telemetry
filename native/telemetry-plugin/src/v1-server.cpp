@@ -19,11 +19,8 @@ constexpr ULONGLONG snapshot_interval_ms = limits.snapshot_interval_ms, write_de
 constexpr ULONGLONG end_budget_ms = 250, end_items_ms = 150, end_reserve_ms = 100;
 // After the channel's last eventSeq, its open loss run reaches the worker with the next frame_end flush.
 constexpr ULONGLONG exhaustion_flush_ms = 250;
-// The highest minor the endpoint serves (ET-050b B1, ET-052, ET-071, ET-084): it selects min(hello maxMinor, 4). A minor-1
-// connection carries `state.gearbox`, a minor-2 connection also `state.nextMandatoryBreak`, a minor-3 connection also
-// `state.cruiseControl` and a minor-4 connection also `state.speedLimit`; a hello offering only minor 0 gets the original
-// minor-0 bytes, and an offer above the maximum is clamped to it.
-constexpr unsigned endpoint_max_minor = highest_minor;
+// The endpoint selects min(hello maxMinor, endpoint_max_minor). Each connection carries the fields of its negotiated minor.
+constexpr unsigned endpoint_max_minor = 5;
 // Static notices and bounded connection diagnostics are handed to the SDK thread.
 const sdk::DeferredLog invariant_log{SCS_LOG_TYPE_error, ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation"};
 const sdk::DeferredLog close_overflow_log{SCS_LOG_TYPE_message, ETS2TELEMETRY_GAME_LOG_PREFIX " V1_CLOSE_DIAGNOSTICS_DROPPED"};

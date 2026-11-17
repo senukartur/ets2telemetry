@@ -15,7 +15,7 @@ const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmo
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
 const previewScreens = ['settings-preview-strip', 'settings-preview-card', 'settings-preview-cluster', 'settings-preview-hud', 'settings-preview-narrow'];
 const previewNames = ['strip', 'card', 'cluster', 'hud', 'narrow-strip', 'large-strip', 'large-card'];
-const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break'];
+const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state'];
 // ET-084: the card and the cluster draw the speed limit sign with speed, gear and RPM, so it comes before cruise control in their DOM.
 const previewSectionsHero = ['speed', 'gear', 'rpm', 'speed-limit', ...previewSections.filter(id => !['speed', 'gear', 'rpm', 'speed-limit'].includes(id))];
 type Case = keyof typeof screens;

@@ -62,6 +62,13 @@ it('serves validated live-only v1 data that goes stale while held on the same co
     }
     source.setSpeedLimit(undefined);
     await vi.waitFor(() => expect(limitNow()).toEqual({available: true, value: 22.5, unit: 'm/s'}), {timeout: 2000, interval: 20});
+    expect(liveV1Projection(ingestion.current).observation?.state.restState).toEqual({available: true, value: 500, unit: 'min'});
+    for (const reading of [{available: true, value: 0, unit: 'min'}, {available: false, reason: 'not-observed', unit: 'min'}] as const) {
+      source.setRestState(structuredClone(reading));
+      await vi.waitFor(() => expect(liveV1Projection(ingestion.current).observation?.state.restState).toEqual(reading), {timeout: 2000, interval: 20});
+    }
+    source.setRestState(undefined);
+    await vi.waitFor(() => expect(ingestion.current.observation!.state.restState).toEqual({available: true, value: 500, unit: 'min'}), {timeout: 2000, interval: 20});
     // ET-050b: the source also carries the Mack gearbox of the minor-1 fixture in every state, and the v1
     // truck keeps the fixture's model id until setTruckId names v0's.
     const mack = (JSON.parse(readFileSync('tests/fixtures/protocol-v1/minor1/checkpoint-ats-mack.json', 'utf8')) as {data: {state: {gearbox: unknown}}}).data.state.gearbox;

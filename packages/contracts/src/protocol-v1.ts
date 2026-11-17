@@ -1,5 +1,5 @@
-// Durable telemetry protocol 1.0 to 1.4 (ET-002b; minor 1, the gearbox state, is ET-050b; minor 2, the next mandatory
-// break, is ET-052; minor 3, the cruise control speed, is ET-071; minor 4, the speed limit, is ET-084). It is a separate
+// Durable telemetry protocol 1.0 to 1.5 (ET-002b; minor 1, the gearbox state, is ET-050b; minor 2, the next mandatory
+// break, is ET-052; minor 3, the cruise control speed, is ET-071; minor 4, the speed limit, is ET-084; minor 5, Rest State, is ET-118). It is a separate
 // major from the frozen v0 live protocol and from CAP0 evidence capture: each decoder rejects the others' frames. Protocol
 // logic is independent of Electron, Node APIs, SDK callbacks and storage. The wire format is specified in docs/protocol/v1.md.
 import {isUint64, strictJson, type Uint64} from './protocol-v0';
@@ -10,11 +10,11 @@ export const PROTOCOL_V1 = {major: 1, minor: 0} as const;
 /**
  * The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7); minor 2
  * adds `state.nextMandatoryBreak` on top of it (ET-052 MB1), minor 3 adds `state.cruiseControl` (ET-071) and minor 4
- * adds `state.speedLimit` (ET-084). Raising this constant widens what the decoders accept; it does not make any runtime
+ * adds `state.speedLimit` (ET-084). Minor 5 adds `state.restState` (ET-118). Raising this constant widens what the decoders accept; it does not make any runtime
  * path offer or serve the new minor (the offers are pinned where they are made).
  */
-export const V1_MAX_MINOR = 4;
-export type V1Minor = 0 | 1 | 2 | 3 | 4;
+export const V1_MAX_MINOR = 5;
+export type V1Minor = 0 | 1 | 2 | 3 | 4 | 5;
 export interface V1Version {major: 1; minor: V1Minor}
 /**
  * Minor selection for the stateless entry points. Every entry point defaults to 0, so a caller accepts or writes a
@@ -110,11 +110,13 @@ export interface CurrentState {
    */
   cruiseControl?: Measure<'m/s'>;
   /**
-   * Present exactly when the message's envelope minor is 4 (ET-084): the SDK's optional `truck.navigation.speed.limit`
+   * Present exactly when the message's envelope minor is 4 or higher (ET-084): the SDK's optional `truck.navigation.speed.limit`
    * in m/s. Zero and negative readings are available values that mean "no limit", never unavailable; the bounds are
    * speed's [-1000, 1000], so such a reading is not turned into `invalid`.
    */
   speedLimit?: Measure<'m/s'>;
+  /** SDK `rest.stop` as signed in-game minutes. Carried from minor 5. */
+  restState?: Measure<'min'>;
 }
 /** Cumulative counts of lost eventSeqs by cause; gap messages use the same keys for one range. */
 export interface LossCounts {offline: Uint64; noDurableConsumer: Uint64; queueCount: Uint64; queueBytes: Uint64; retentionExpired: Uint64; encodingFailed: Uint64}
@@ -308,11 +310,11 @@ function gearbox(v: unknown) {
 }
 /**
  * The minor-0 state, plus `gearbox` from minor 1, `nextMandatoryBreak` from minor 2, `cruiseControl` from minor 3 and
- * `speedLimit` from minor 4, exactly as the envelope minor says.
+ * `speedLimit` from minor 4 and `restState` from minor 5, exactly as the envelope minor says.
  */
 function state(v: unknown, minor: V1Minor) {
   const o = record(v, [
-    ...STATE_KEYS, ...(minor >= 1 ? ['gearbox'] : []), ...(minor >= 2 ? ['nextMandatoryBreak'] : []), ...(minor >= 3 ? ['cruiseControl'] : []), ...(minor >= 4 ? ['speedLimit'] : [])
+    ...STATE_KEYS, ...(minor >= 1 ? ['gearbox'] : []), ...(minor >= 2 ? ['nextMandatoryBreak'] : []), ...(minor >= 3 ? ['cruiseControl'] : []), ...(minor >= 4 ? ['speedLimit'] : []), ...(minor >= 5 ? ['restState'] : [])
   ]);
   choice(o.simulation, ['running', 'paused', 'unavailable']);
   measure(o.speed, 'm/s', -1_000, 1_000); measure(o.fuel, 'L', 0, 1_000_000); measure(o.fuelCapacity, 'L', 0, 1_000_000);
@@ -337,6 +339,7 @@ function state(v: unknown, minor: V1Minor) {
   if (minor >= 3) measure(o.cruiseControl, 'm/s', 0, 1_000);
   // Speed's bounds, because a negative or zero reading is a value meaning "no limit" (ET-084); a non-finite or above-bound one is invalid.
   if (minor >= 4) measure(o.speedLimit, 'm/s', -1_000, 1_000);
+  if (minor >= 5) measure(o.restState, 'min', -2_147_483_648, 2_147_483_647, true);
 }
 function status(v: unknown, captureNs: bigint) {
   const o = record(v, ['gameMode', 'delivery', 'eventLoss']); gameMode(record(o.gameMode, GAME_MODE_KEYS)); lossCounts(o.eventLoss);
@@ -415,12 +418,12 @@ function source(v: unknown) {
 /** The caller's highest accepted minor; a value this contract does not implement is a caller error. */
 function maxMinorOf(options: V1MinorOptions): V1Minor {
   const max = options.maxMinor ?? 0;
-  if (max !== 0 && max !== 1 && max !== 2 && max !== 3 && max !== 4) fail('Unsupported maximum protocol v1 minor');
+  if (max !== 0 && max !== 1 && max !== 2 && max !== 3 && max !== 4 && max !== 5) fail('Unsupported maximum protocol v1 minor');
   return max;
 }
 function version(v: unknown, maxMinor: V1Minor): V1Minor {
   const ver = record(v, ['major', 'minor']);
-  if (ver.major !== PROTOCOL_V1.major || (ver.minor !== 0 && ver.minor !== 1 && ver.minor !== 2 && ver.minor !== 3 && ver.minor !== 4) || ver.minor > maxMinor) fail('Unsupported protocol version');
+  if (ver.major !== PROTOCOL_V1.major || (ver.minor !== 0 && ver.minor !== 1 && ver.minor !== 2 && ver.minor !== 3 && ver.minor !== 4 && ver.minor !== 5) || ver.minor > maxMinor) fail('Unsupported protocol version');
   return ver.minor;
 }
 /**
@@ -471,10 +474,11 @@ export function validateServerMessage(v: unknown, options: V1MinorOptions = {}):
  * `not-supported`. The next mandatory break is always present too (ET-052 MB5): a minor-2 or higher connection's own
  * raw reading, and `NOT_SUPPORTED_BREAK` under minor 0 and 1, which transport none. So are the cruise control speed
  * (ET-071), a minor-3 or higher connection's own raw reading and `NOT_SUPPORTED_CRUISE_CONTROL` below minor 3, and the
- * speed limit (ET-084), a minor-4 connection's own raw reading and `NOT_SUPPORTED_SPEED_LIMIT` below minor 4.
+ * speed limit (ET-084) from minor 4. Rest State (ET-118) carries raw game minutes from minor 5 and
+ * `NOT_SUPPORTED_REST_STATE` for older connections.
  */
-export type LiveStateV1 = Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak' | 'cruiseControl' | 'speedLimit'> &
-  {gearbox: GearboxState; nextMandatoryBreak: Measure<'min'>; cruiseControl: Measure<'m/s'>; speedLimit: Measure<'m/s'>};
+export type LiveStateV1 = Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak' | 'cruiseControl' | 'speedLimit' | 'restState'> &
+  {gearbox: GearboxState; nextMandatoryBreak: Measure<'min'>; cruiseControl: Measure<'m/s'>; speedLimit: Measure<'m/s'>; restState: Measure<'min'>};
 /**
  * The live next mandatory break of a connection below minor 2: those minors transport none, so it is `not-supported`
  * (ET-052 MB5). The live projection (apps/desktop/src/live-v1.ts) substitutes it for a minor-0 or minor-1 state.
@@ -490,6 +494,8 @@ export const NOT_SUPPORTED_CRUISE_CONTROL: Readonly<Measure<'m/s'>> = Object.fre
  * The live projection (apps/desktop/src/live-v1.ts) substitutes it for a state of minor 0 to 3.
  */
 export const NOT_SUPPORTED_SPEED_LIMIT: Readonly<Measure<'m/s'>> = Object.freeze({available: false, reason: 'not-supported', unit: 'm/s'});
+/** Rest State on a connection below minor 5, which does not carry the channel. */
+export const NOT_SUPPORTED_REST_STATE: Readonly<Measure<'min'>> = Object.freeze({available: false, reason: 'not-supported', unit: 'min'});
 /** The live gearbox of a minor-0 connection: minor 0 transports no gearbox, so every part is `not-supported` (B7). */
 export const NOT_SUPPORTED_GEARBOX: Readonly<GearboxState> = Object.freeze({
   forwardGears: Object.freeze({available: false, reason: 'not-supported'}), reverseGears: Object.freeze({available: false, reason: 'not-supported'}),
@@ -510,19 +516,15 @@ export interface LiveObservationV1 {
 }
 const NOT_OBSERVED_WINDOW = Object.freeze({available: false, reason: 'not-observed'});
 /**
- * Strict validation of a live v1 observation with the same rules as the wire state, including the minor-1 gearbox, the
- * minor-2 next mandatory break, the minor-3 cruise control speed and the minor-4 speed limit, which the projection always
- * carries (`NOT_SUPPORTED_GEARBOX`, `NOT_SUPPORTED_BREAK`, `NOT_SUPPORTED_CRUISE_CONTROL` and `NOT_SUPPORTED_SPEED_LIMIT`
- * are valid values of those fields). A state that still carries a window, lacks one of them or has any key outside the
- * whitelist is rejected.
+ * Validate the live v1 projection using the latest wire state rules. The projection always carries fields from later minors
+ * and uses the corresponding unavailable values for unsupported readings. Reject a window or any key outside the whitelist.
  */
 export function validateLiveObservationV1(v: unknown): LiveObservationV1 {
   const o = record(v, ['source', 'seq', 'capture', 'state', 'sourceStatus', 'receivedMonotonicMs', 'hydration']);
   source(o.source); u64(o.seq); const cap = record(o.capture, ['clockId', 'monotonicNs']); uuid(cap.clockId); u64(cap.monotonicNs);
   const s = o.state;
   if (s === null || typeof s !== 'object' || Array.isArray(s) || Object.hasOwn(s, 'window')) fail();
-  // The minor-4 wire state validator (the superset shape) with a not-observed placeholder in place of the omitted window.
-  state({...(s as Record<string, unknown>), window: NOT_OBSERVED_WINDOW}, 4);
+  state({...(s as Record<string, unknown>), window: NOT_OBSERVED_WINDOW}, 5);
   const status = record(o.sourceStatus, ['gameMode', 'eventLoss']); gameMode(record(status.gameMode, GAME_MODE_KEYS)); lossCounts(status.eventLoss);
   num(o.receivedMonotonicMs, 0, Number.MAX_VALUE); bool(o.hydration);
   return v as LiveObservationV1;

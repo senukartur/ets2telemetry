@@ -36,17 +36,17 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
   'deadline': {parts: ['deadline']},
   'expected-income': {parts: ['expected-income']},
   'game-time': {parts: ['game-time']},
-  'mandatory-break': {parts: ['mandatory-break']}
+  'mandatory-break': {parts: ['mandatory-break']},
+  'rest-state': {parts: ['rest-state']}
 });
 /** The ET-008 baseline sections keep a visible dash while current without data (REG-009: unavailable is not zero). */
 const BASELINE_SECTIONS: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['speed', 'fuel']);
 /**
- * Sections that show a dash, not nothing, while current when a carried v1 observation gives them no value (ET-052 MB9): the
- * next mandatory break, the cruise control speed (ET-071) or the speed limit (ET-084) is "not supported" by an older plugin, "not observed" by the
- * game, invalid, or its v1 data is stale. Without a v1 observation the section follows ET-012a's L5 rule like every other
+ * Sections that show a dash, not nothing, while current when a carried v1 observation gives them no value (ET-052 MB9): a
+ * later-minor reading is unsupported by an older plugin, absent in the game, invalid or stale. Without a v1 observation the section follows ET-012a's L5 rule like every other
  * v1-only section.
  */
-const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['mandatory-break', 'cruise-control', 'speed-limit']);
+const DASH_WHEN_CARRIED: ReadonlySet<OverlaySectionId> = new Set<OverlaySectionId>(['mandatory-break', 'cruise-control', 'speed-limit', 'rest-state']);
 
 /**
  * The overlay's read-only display projection, built in main. Canonical v0 m/s and liters remain unchanged; values are
@@ -156,7 +156,7 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
     }
     if (id === 'game-time') {
       texts = texts.map(t => t.replace(/^Day \d+, /, ''));
-    } else if (id === 'deadline' || id === 'mandatory-break') {
+    } else if (id === 'deadline' || id === 'mandatory-break' || id === 'rest-state') {
       texts = texts.map(t => localizeDeadlineString(t, language));
     }
     if (!texts.length) {

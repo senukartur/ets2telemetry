@@ -243,7 +243,7 @@ describe('ET-010c card with the v1 smoke projection', () => {
   it('lists the v1 rows of the smoke as the combined rows that v0 does not carry', () => {
     const v0Ids = new Set(SYNTHETIC_V0_LIVE_ROWS.map(([id]) => id));
     expect(SYNTHETIC_V0V1_LIVE_ROWS.filter(([id]) => !v0Ids.has(id))).toEqual(SYNTHETIC_V1_LIVE_ROWS);
-    expect(SYNTHETIC_V1_VALUE_IDS).toEqual(['live-cruise-control', 'live-speed-limit', 'live-route-remaining', 'live-deadline', 'live-mandatory-break', 'live-source-city', 'live-source-company', 'live-destination-company',
+    expect(SYNTHETIC_V1_VALUE_IDS).toEqual(['live-cruise-control', 'live-speed-limit', 'live-route-remaining', 'live-deadline', 'live-mandatory-break', 'live-rest-state', 'live-source-city', 'live-source-company', 'live-destination-company',
       'live-cargo-mass', 'live-market', 'live-special-job', 'live-truck-plate', 'live-trailers', 'live-position', 'live-bearing', 'live-game-mode', 'live-event-loss']);
   });
   it('labels the v1 rows', () => {
@@ -267,7 +267,7 @@ describe('ET-052 next mandatory break row', () => {
   it('sits in the Time section after the deadline, with the game-time note, labelled in both languages', () => {
     for (const [language, label, note] of [['en', 'Next mandatory break', 'game time'], ['ru', 'До обязательного перерыва', 'игровое время']] as const) {
       const text = liveDashboardText(withBreak(available(95)), undefined, language);
-      expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time', 'deadline', 'mandatory-break']);
+      expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time', 'deadline', 'mandatory-break', 'rest-state']);
       expect(row(text, 'mandatory-break')).toMatchObject({testId: 'live-mandatory-break', label, note});
     }
   });
@@ -391,7 +391,7 @@ describe('ET-010c v1 rows under each source state', () => {
     const text = liveDashboardText(telemetry);
     expect(text.sections.find(section => section.id === 'job')).toEqual({id: 'job', testId: 'live-section-job', title: 'Job', missing: 'No job reported', rows: []});
     // The next mandatory break (ET-052) is not job-bound: v1 alone supplies it. This v1 fixture is minor 0, so it is not-supported.
-    expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time', 'mandatory-break']);
+    expect(text.sections.find(section => section.id === 'time')!.rows.map(entry => entry.id)).toEqual(['game-time', 'mandatory-break', 'rest-state']);
     expect(row(text, 'route-remaining')).toMatchObject({value: '151.0 km'});
   });
   it('shows the v1 job rows of another job as not current', () => {

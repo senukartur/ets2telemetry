@@ -26,6 +26,7 @@ export const APP_COPY_KEYS: Readonly<Record<string, I18nKey>> = Object.freeze(ch
   "Game time": "copy.game-time",
   "Delivery deadline": "copy.delivery-deadline",
   "Next mandatory break": "copy.next-mandatory-break",
+  "Rest State": "copy.rest-state",
   "Cargo": "copy.cargo",
   "Source city": "copy.source-city",
   "Source company": "copy.source-company",

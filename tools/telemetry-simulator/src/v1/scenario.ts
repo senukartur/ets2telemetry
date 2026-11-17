@@ -2,7 +2,7 @@
 // the v0 simulator; unknown keys, unordered steps and unsupported origins are rejected, and the returned scenario is
 // rebuilt from validated fields only. The format is documented in docs/simulator-v1.md.
 import {validateCaptureStep, validateProvenance, stepsDigest, type CaptureStep, type CaptureProvenance} from './cap0-schema';
-import {MAX_EVENT_SEQ, PROTOCOL_V1, validateServerMessage, type GameMode} from '../../../../packages/contracts/src/protocol-v1';
+import {MAX_EVENT_SEQ, PROTOCOL_V1, validateServerMessage, type GameMode, type V1Minor} from '../../../../packages/contracts/src/protocol-v1';
 import {isUint64} from '../../../../packages/contracts/src/protocol-v0';
 import {CHANNELS, type AttributeList, type FrameChannels, type SdkAttribute, type SdkType, type SourceConfig} from './source';
 import {type AckPolicy, type ClientPolicy, type CommitPolicy} from './client';
@@ -85,7 +85,7 @@ function channels(v: unknown, path: string): FrameChannels {
       const o = obj(raw, p, ['x', 'y', 'z', 'heading', 'pitch', 'roll']);
       out[name] = Object.fromEntries(['x', 'y', 'z', 'heading', 'pitch', 'roll'].map(k => [k, finite(o[k], `${p}.${k}`)]));
     } else if (name === 'game.time') out[name] = int(raw, p, 0, 4_294_967_295);
-    else if (name === 'displayed.gear' || name === 'mandatory.break') out[name] = int(raw, p, -2_147_483_648, 2_147_483_647);
+    else if (name === 'displayed.gear' || name === 'mandatory.break' || name === 'rest.stop') out[name] = int(raw, p, -2_147_483_648, 2_147_483_647);
     else out[name] = float32(raw, p);
   }
   return out;
@@ -124,7 +124,7 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
     const at = int(t, `${path}.probes[${i}]`, connectAt + 1, MAX_AT_MS); if (at < last + 1_000) fail(`${path}.probes[${i}]`, 'probes must be at least 1,000 ms apart'); last = at; return at;
   }), []);
   // ET-050b B1, ET-052, ET-071, ET-084: the hello's offer, 0 to 4; omitted, the client offers minor 4.
-  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 4) as 0 | 1 | 2 | 3 | 4 : undefined;
+  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 5) as V1Minor : undefined;
   return {durable, commit, ack, probes, ...(maxMinor === undefined ? {} : {maxMinor})};
 }
 
@@ -155,6 +155,7 @@ export function sourceStep(v: unknown, path: string, source: Scenario['source'])
       if (source.mandatoryBreak === 'not-supported' && Object.hasOwn(frame, 'mandatory.break')) fail(path, 'the mandatory.break callback is not registered in this session');
       if (source.cruiseControl === 'not-supported' && Object.hasOwn(frame, 'cruise_control')) fail(path, 'the cruise_control callback is not registered in this session');
       if (source.speedLimit === 'not-supported' && Object.hasOwn(frame, 'navigation.speed.limit')) fail(path, 'the navigation.speed.limit callback is not registered in this session');
+      if (source.restState === 'not-supported' && Object.hasOwn(frame, 'rest.stop')) fail(path, 'the rest.stop callback is not registered in this session');
       return {atMs: at(o), action, timerRestart: opt(o, 'timerRestart', raw => bool(raw, `${path}.timerRestart`), false), channels: frame};
     }
     case 'gameMode': {
@@ -204,7 +205,7 @@ export function validateScenario(input: unknown): Scenario {
   if (origin === 'replay' && !provenance) fail('$.provenance', 'replay requires capture provenance');
   const reg = arr(o.reg, '$.reg', 18).map((r, i) => { const s = str(r, `$.reg[${i}]`); if (!/^REG-0(0[1-9]|1[0-8])$/.test(s)) fail(`$.reg[${i}]`); return s; });
   if (!reg.length || new Set(reg).size !== reg.length) fail('$.reg', 'unique REG identifiers expected');
-  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq', 'mandatoryBreak', 'cruiseControl', 'speedLimit', 'highestMinor']);
+  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq', 'mandatoryBreak', 'cruiseControl', 'speedLimit', 'restState', 'highestMinor']);
   const v = obj(s.versions, '$.source.versions', ['telemetryApi', 'gameTelemetry', 'sdkArchive']);
   const pair = (p: unknown, path: string) => { const x = obj(p, path, ['major', 'minor']); return {major: int(x.major, `${path}.major`, 0, 65_535), minor: int(x.minor, `${path}.minor`, 0, 65_535)}; };
   const sdkArchive = str(v.sdkArchive, '$.source.versions.sdkArchive');
@@ -221,8 +222,9 @@ export function validateScenario(input: unknown): Scenario {
     ...(Object.hasOwn(s, 'cruiseControl') ? {cruiseControl: oneOf(s.cruiseControl, '$.source.cruiseControl', ['registered', 'not-supported'] as const)} : {}),
     // ET-084: omitted, the channel is registered.
     ...(Object.hasOwn(s, 'speedLimit') ? {speedLimit: oneOf(s.speedLimit, '$.source.speedLimit', ['registered', 'not-supported'] as const)} : {}),
-    // ET-052, ET-071, ET-084: a simulated older plugin; omitted, the plugin serves up to minor 4.
-    ...(Object.hasOwn(s, 'highestMinor') ? {highestMinor: int(s.highestMinor, '$.source.highestMinor', 0, 4) as 0 | 1 | 2 | 3 | 4} : {})
+    ...(Object.hasOwn(s, 'restState') ? {restState: oneOf(s.restState, '$.source.restState', ['registered', 'not-supported'] as const)} : {}),
+    // A simulated older plugin; omitted, the plugin serves up to minor 5.
+    ...(Object.hasOwn(s, 'highestMinor') ? {highestMinor: int(s.highestMinor, '$.source.highestMinor', 0, 5) as V1Minor} : {})
   };
   const steps = arr(o.steps, '$.steps', MAX_STEPS).map((x, i) => sourceStep(x, `$.steps[${i}]`, source));
   const faultInjection = opt(o, 'faultInjection', raw => bool(raw, '$.faultInjection'), false);

@@ -709,13 +709,13 @@ void gearbox_semantics(const Fixtures& f1) {
 void minor1_delivery(const Fixtures& f1, const Fixtures& f0) {
   // A caller maximum this contract does not implement is a caller error at every entry point.
   // ET-084: minor 4 is implemented, so the first unsupported maximum is 5.
-  rejects([&] { decode_payload(f0.bytes("welcome"), Sender::server, 5); }, "decode at maximum minor 5", "maximum");
-  rejects([&] { validate(f0.server("welcome").wire, Sender::server, 5); }, "validate at maximum minor 5", "maximum");
-  rejects([&] { encode_frame(f0.server("welcome"), 5); }, "encode at maximum minor 5", "maximum");
-  rejects([] { (void)FrameDecoder(Sender::server, 5); }, "frame decoder at maximum minor 5", "maximum");
-  rejects([&] { negotiate(f0.client("hello"), true, 5); }, "negotiation at maximum minor 5", "maximum");
-  rejects([] { (void)Consumer(true, 5); }, "consumer at maximum minor 5"); rejects([] { (void)AckValidator(P1, true, 5); }, "ACK validator at minor 5");
-  DurableAckCursor bad(P1); rejects([&] { bad.begin_connection(0, 5); }, "cursor connection at minor 5");
+  rejects([&] { decode_payload(f0.bytes("welcome"), Sender::server, 6); }, "decode at maximum minor 6", "maximum");
+  rejects([&] { validate(f0.server("welcome").wire, Sender::server, 6); }, "validate at maximum minor 6", "maximum");
+  rejects([&] { encode_frame(f0.server("welcome"), 6); }, "encode at maximum minor 6", "maximum");
+  rejects([] { (void)FrameDecoder(Sender::server, 6); }, "frame decoder at maximum minor 6", "maximum");
+  rejects([&] { negotiate(f0.client("hello"), true, 6); }, "negotiation at maximum minor 6", "maximum");
+  rejects([] { (void)Consumer(true, 6); }, "consumer at maximum minor 6"); rejects([] { (void)AckValidator(P1, true, 6); }, "ACK validator at minor 6");
+  DurableAckCursor bad(P1); rejects([&] { bad.begin_connection(0, 6); }, "cursor connection at minor 6");
 
   // Negotiation selects min(hello maxMinor, server maxMinor), keeping minor 0 by default.
   const auto hello = [&](double offered) { auto m = f0.client("hello"); field(field(m.wire, "data"), "maxMinor") = Json{offered}; return m; };
@@ -767,7 +767,7 @@ void minor1_delivery(const Fixtures& f1, const Fixtures& f0) {
   const auto mapped = compute_clock_mapping(reply, 1, CLIENT_CLOCK, 5000000000ULL, 5000800000ULL, 1);
   check(mapped && mapped->source_clock_id == SOURCE_CLOCK && mapped->offset_ns == "995449400000" && mapped->uncertainty_ns == 300000 && mapped->measured_at_client_ns == 5000800000ULL, "minor-1 clock mapping");
   rejects([&] { compute_clock_mapping(reply, 1, CLIENT_CLOCK, 5000000000ULL, 5000800000ULL); }, "minor-1 reply refused by default", "Unsupported protocol version");
-  rejects([&] { compute_clock_mapping(reply, 1, CLIENT_CLOCK, 5000000000ULL, 5000800000ULL, 5); }, "clock mapping at maximum minor 5", "maximum");
+  rejects([&] { compute_clock_mapping(reply, 1, CLIENT_CLOCK, 5000000000ULL, 5000800000ULL, 6); }, "clock mapping at maximum minor 6", "maximum");
 }
 
 // The shared stream corpus of one minor directory, read at its own maxMinor. `tag` names the corpus in failures.
@@ -1054,7 +1054,7 @@ void minor2_delivery(const Fixtures& f2, const Fixtures& f1, const Fixtures& f0)
   const auto ack = cursor.ack(); check(ack && ack->minor == 2 && canonical(ack->wire) == canonical(ack_message("1", P1, 2).wire), "minor-2 cursor ACK");
   check(canonical(validate(ack->wire, Sender::client, 2).wire) == canonical(ack->wire), "minor-2 ACK accepted by a minor-2 validator");
   rejects([&] { validate(ack->wire, Sender::client, 1); }, "minor-2 ACK refused at maximum 1", "Unsupported protocol version");
-  rejects([&] { cursor.begin_connection(1, 5); }, "cursor connection at minor 5");
+  rejects([&] { cursor.begin_connection(1, 6); }, "cursor connection at minor 6");
 
   // The producer-side validator: ACKs and clock probes only at the connection minor.
   AckValidator minor2(P1, true, 2); minor2.checkpoint(0); minor2.sent(2);
@@ -1234,7 +1234,7 @@ void cruise_semantics(const Fixtures& f3) {
   rejects([&] { decode_payload(f3.bytes("ack-minor-4"), Sender::client, 3); }, "ACK at minor 4", "Unsupported protocol version");
   // A caller maximum of 0 to 3 is accepted (ET-084: 4 is too now, checked with the minor-4 corpus); 5 is a caller error.
   for (unsigned max = 0; max <= 3; ++max) (void)FrameDecoder(Sender::client, max);
-  rejects([] { (void)FrameDecoder(Sender::client, 5); }, "frame decoder at maximum minor 5", "maximum");
+  rejects([] { (void)FrameDecoder(Sender::client, 6); }, "frame decoder at maximum minor 6", "maximum");
 }
 
 void minor3_delivery(const Fixtures& f3, const Fixtures& f2, const Fixtures& f0) {
@@ -1272,7 +1272,7 @@ void minor3_delivery(const Fixtures& f3, const Fixtures& f2, const Fixtures& f0)
   const auto ack = cursor.ack(); check(ack && ack->minor == 3 && canonical(ack->wire) == canonical(ack_message("1", P1, 3).wire), "minor-3 cursor ACK");
   check(canonical(validate(ack->wire, Sender::client, 3).wire) == canonical(ack->wire), "minor-3 ACK accepted by a minor-3 validator");
   rejects([&] { validate(ack->wire, Sender::client, 2); }, "minor-3 ACK refused at maximum 2", "Unsupported protocol version");
-  rejects([&] { cursor.begin_connection(1, 5); }, "cursor connection at minor 5");
+  rejects([&] { cursor.begin_connection(1, 6); }, "cursor connection at minor 6");
 
   // The producer-side validator: ACKs and clock probes only at the connection minor.
   AckValidator minor3(P1, true, 3); minor3.checkpoint(0); minor3.sent(2);
@@ -1421,7 +1421,7 @@ void limit_semantics(const Fixtures& f4) {
   check(checkpoint.state->cruise_control && checkpoint.state->cruise_control->reading.value == 22.5, "minor-4 checkpoint keeps cruise control");
   check(f4.server("checkpoint-minor-3").state->cruise_control && !f4.server("checkpoint-minor-3").state->speed_limit, "minor-3 checkpoint has no limit view");
   check(!f4.server("checkpoint-minor-0").state->gearbox && !f4.server("checkpoint-minor-0").state->speed_limit, "minor-0 checkpoint has no minor-1 or minor-4 view");
-  check(highest_minor == 4 && protocol_minor == 0, "highest implemented minor 4 and hello version 1.0");
+  check(highest_minor >= 4 && protocol_minor == 0, "minor 4 implemented and hello version 1.0");
 
   const auto base = f4.server("snapshot");
   const auto state_of = [](Message& m) -> Json::Object& { return std::get<Json::Object>(field(field(m.wire, "data"), "state").value); };
@@ -1461,7 +1461,7 @@ void limit_semantics(const Fixtures& f4) {
   rejects([&] { decode_payload(f4.bytes("ack-minor-5"), Sender::client, 4); }, "ACK at minor 5", "Unsupported protocol version");
   // A caller maximum of 0 to 4 is accepted, one above is a caller error.
   for (unsigned max = 0; max <= 4; ++max) (void)FrameDecoder(Sender::client, max);
-  rejects([] { (void)FrameDecoder(Sender::client, 5); }, "frame decoder at maximum minor 5", "maximum");
+  rejects([] { (void)FrameDecoder(Sender::client, 6); }, "frame decoder at maximum minor 6", "maximum");
 }
 
 void minor4_delivery(const Fixtures& f4, const Fixtures& f3, const Fixtures& f0) {
@@ -1499,7 +1499,7 @@ void minor4_delivery(const Fixtures& f4, const Fixtures& f3, const Fixtures& f0)
   const auto ack = cursor.ack(); check(ack && ack->minor == 4 && canonical(ack->wire) == canonical(ack_message("1", P1, 4).wire), "minor-4 cursor ACK");
   check(canonical(validate(ack->wire, Sender::client, 4).wire) == canonical(ack->wire), "minor-4 ACK accepted by a minor-4 validator");
   rejects([&] { validate(ack->wire, Sender::client, 3); }, "minor-4 ACK refused at maximum 3", "Unsupported protocol version");
-  rejects([&] { cursor.begin_connection(1, 5); }, "cursor connection at minor 5");
+  rejects([&] { cursor.begin_connection(1, 6); }, "cursor connection at minor 6");
 
   // The producer-side validator: ACKs and clock probes only at the connection minor.
   AckValidator minor4(P1, true, 4); minor4.checkpoint(0); minor4.sent(2);
@@ -1530,6 +1530,44 @@ unsigned streams_minor4(const Fixtures& f4) {
   std::vector<std::string> limit; for (std::size_t i = 1; i < result.messages.size(); ++i) limit.push_back(limit_text(result.messages[i]));
   check(limit == std::vector<std::string>{"25", "22.5", "0", "-1", "1000", "-1000", "not-observed", "not-supported", "invalid"}, "speed limit availability changes between snapshots");
   return count;
+}
+void minor5_rest_state(const Fixtures& f5, const Fixtures& f4) {
+  const auto rows5 = rows(read(f5.dir / "manifest.txt"));
+  for (const auto& row : rows5) {
+    const auto name = std::filesystem::path(row[0]).stem().string();
+    const auto bytes = f5.bytes(name);
+    const auto sender = name == "hello" || name == "ack-1" || name == "clock-probe" ? Sender::client : Sender::server;
+    if (row[1] == "valid") {
+      const auto m = decode_payload(bytes, sender, 5);
+      const auto frame = encode_frame(m, 5);
+      check(frame.size() - 4 <= (sender == Sender::server ? limits.server_frame_bytes : limits.client_frame_bytes), name + " fits the wire cap");
+      check(canonical(decode_payload(std::string(frame.begin() + 4, frame.end()), sender, 5).wire) == canonical(m.wire), name + " round trip");
+    } else {
+      check(row[1] == "invalid", name + " has a declared fixture expectation");
+      rejects([&] { decode_payload(bytes, sender, 5); }, name);
+    }
+  }
+  check(highest_minor >= 5 && protocol_minor == 0, "minor 5 implemented and hello remains 1.0");
+  check(negotiate(f5.client("hello"), true, 5).minor == 5 && negotiate(f5.client("hello"), true, 4).minor == 4, "minor 5 or 4 on the server's cap");
+  check(negotiate(f4.client("hello"), true, 5).minor == 4, "minor 5 server respects a minor 4 offer");
+  Consumer old(true, 5); old.accept(f4.server("welcome")); old.accept(f4.server("checkpoint"));
+  check(!f4.server("snapshot").state->rest_state, "minor 4 omits Rest State");
+  old.accept(f4.server("snapshot"));
+  rejects([&] { decode_payload(f5.bytes("checkpoint"), Sender::server, 4); }, "minor 4 reader rejects minor 5");
+  Consumer current(true, 5); current.accept(f5.server("welcome")); current.accept(f5.server("checkpoint"));
+  const auto checkpoint = f5.server("checkpoint");
+  check(checkpoint.state->rest_state && checkpoint.state->rest_state->unit == "min" && checkpoint.state->rest_state->reading.value == 660, "checkpoint Rest State");
+  const auto worst = f5.server("checkpoint-worst");
+  check(worst.state->rest_state->reading.value == -2147483648.0, "signed minimum as a value");
+  const auto zero = f5.server("snapshot-zero");
+  check(zero.state->rest_state->reading.value == 0 && zero.state->next_mandatory_break->reading.value == 95, "zero Rest State and independent mandatory break");
+  check(f5.server("snapshot-max").state->rest_state->reading.value == 2147483647.0, "signed maximum as a value");
+  for (const auto& [name, reason] : {std::pair{"snapshot-not-observed", Reason::not_observed}, std::pair{"snapshot-not-supported", Reason::not_supported}, std::pair{"snapshot-invalid", Reason::invalid}}) {
+    const auto m = f5.server(name);
+    check(!m.state->rest_state->reading.value && m.state->rest_state->reading.reason == reason, name);
+  }
+  AckValidator validator(P1, true, 5); validator.checkpoint(0); validator.sent(1);
+  check(validator.accept(f5.client("ack-1")) == 1u && validator.probe(f5.client("clock-probe")) == 1u, "minor-5 ACK and probe");
 }
 }
 
@@ -1572,6 +1610,8 @@ int main(int argc, char** argv) {
     const auto minor4_streams = streams_minor4(f4);
     std::cout << "minor 4: 47 payload fixtures; " << minor4_streams << " streams; " << minor4_splits << " two-way splits; C++ encoder worst checkpoint "
       << worst_minor4 << " bytes; negotiation, delivery and speed limit passed\n";
+    minor5_rest_state(Fixtures{f.dir / "minor5", 5}, f4);
+    std::cout << "minor 5: shared Rest State fixtures and negotiation passed\n";
     return 0;
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

@@ -359,8 +359,8 @@ it('connects V1Ingestion live-only through the v1 broker: a durableEvents false 
   expect(spawn).toHaveBeenCalledExactlyOnceWith(v1Configuration.executable, ['--game', 'ets2', '--discovery-dir', v1Configuration.discoveryDirectory, '--protocol', 'v1'], {windowsHide: true, stdio: 'pipe'});
   const child = children[0]; child.output(relay(v1Authority()));
   expect(child.writes).toHaveLength(2); expect(child.writes[1]).toEqual(Buffer.from([1]));
-  // ET-050b B1, ET-052, ET-071, ET-084: the hello offers minor 4; this broker relays a minor-0 plugin, so the probe below is {1,0}.
-  expect(decodePayload(child.writes[0].subarray(4), 'client')).toEqual({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: service.clientInstanceId, minMinor: 0, maxMinor: 4, durableEvents: false}});
+  // ET-050b B1, ET-052, ET-071, ET-084: the hello offers minor 5; this broker relays a minor-0 plugin, so the probe below is {1,0}.
+  expect(decodePayload(child.writes[0].subarray(4), 'client')).toEqual({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: service.clientInstanceId, minMinor: 0, maxMinor: 5, durableEvents: false}});
   child.output(asGame('welcome-live')); child.output(asGame('checkpoint-live')); child.output(asGame('snapshot-live'));
   // The welcome's credit; the checkpoint's probe goes out tagged before that frame's credit; the snapshot's credit.
   expect(child.writes.slice(1).map(bytes => bytes[0])).toEqual([1, 1, 2, 1, 1]);
@@ -394,8 +394,8 @@ it('relays a minor-2 plugin through the v1 broker: the tagged clock probe carrie
   const service = new V1({now: () => 0, nowNs: () => 1_000_000_000n, connectGame: (configuration, game) => new Client(configuration, game, undefined, 'v1'), broker: v1Configuration});
   v1Ingestions.push(service); service.select('ets2');
   const child = children[0]; child.output(relay({...v1Authority(), source}));
-  // The offer is minor 4 since ET-084; a minor-2 plugin answers minor 2, and a live-only hello is answered live-only.
-  expect(decodePayload(child.writes[0].subarray(4), 'client')).toMatchObject({kind: 'hello', data: {maxMinor: 4, durableEvents: false}});
+  // The offer is minor 5 since ET-118; a minor-2 plugin answers minor 2, and a live-only hello is answered live-only.
+  expect(decodePayload(child.writes[0].subarray(4), 'client')).toMatchObject({kind: 'hello', data: {maxMinor: 5, durableEvents: false}});
   welcome.data.durableEvents = false; checkpoint.data.status.delivery.durable = false;
   for (const message of [welcome, checkpoint]) child.output(Buffer.from(encodeV1Frame({...message, source}, {maxMinor: 2})));
   const probe = child.writes.find(bytes => bytes[0] === 2)!;
@@ -413,8 +413,8 @@ it('relays a minor-3 plugin through the v1 broker: the tagged clock probe carrie
   const service = new V1({now: () => 0, nowNs: () => 1_000_000_000n, connectGame: (configuration, game) => new Client(configuration, game, undefined, 'v1'), broker: v1Configuration});
   v1Ingestions.push(service); service.select('ets2');
   const child = children[0]; child.output(relay({...v1Authority(), source}));
-  // The offer is minor 4 since ET-084; a minor-3 plugin answers minor 3.
-  expect(decodePayload(child.writes[0].subarray(4), 'client')).toMatchObject({kind: 'hello', data: {maxMinor: 4, durableEvents: false}});
+  // The offer is minor 5 since ET-118; a minor-3 plugin answers minor 3.
+  expect(decodePayload(child.writes[0].subarray(4), 'client')).toMatchObject({kind: 'hello', data: {maxMinor: 5, durableEvents: false}});
   welcome.data.durableEvents = false; checkpoint.data.status.delivery.durable = false;
   for (const message of [welcome, checkpoint]) child.output(Buffer.from(encodeV1Frame({...message, source}, {maxMinor: 3})));
   const probe = child.writes.find(bytes => bytes[0] === 2)!;
@@ -433,7 +433,7 @@ it('relays a minor-4 plugin through the v1 broker: the tagged clock probe carrie
   const service = new V1({now: () => 0, nowNs: () => 1_000_000_000n, connectGame: (configuration, game) => new Client(configuration, game, undefined, 'v1'), broker: v1Configuration});
   v1Ingestions.push(service); service.select('ets2');
   const child = children[0]; child.output(relay({...v1Authority(), source}));
-  expect(decodePayload(child.writes[0].subarray(4), 'client')).toMatchObject({kind: 'hello', data: {maxMinor: 4, durableEvents: false}});
+  expect(decodePayload(child.writes[0].subarray(4), 'client')).toMatchObject({kind: 'hello', data: {maxMinor: 5, durableEvents: false}});
   welcome.data.durableEvents = false; checkpoint.data.status.delivery.durable = false;
   for (const message of [welcome, checkpoint]) child.output(Buffer.from(encodeV1Frame({...message, source}, {maxMinor: 4})));
   const probe = child.writes.find(bytes => bytes[0] === 2)!;

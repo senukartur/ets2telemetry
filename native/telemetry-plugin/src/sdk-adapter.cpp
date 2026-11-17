@@ -33,6 +33,7 @@ constexpr std::array<ChannelSpec, fields> specs{{
   {SCS_TELEMETRY_TRUCK_CHANNEL_cruise_control, SCS_VALUE_TYPE_float, "m/s", 1, 0, 1000},
   // ET-084: the navigation speed limit in m/s, as speed's bounds: zero or negative means no limit and stays a value.
   {SCS_TELEMETRY_TRUCK_CHANNEL_navigation_speed_limit, SCS_VALUE_TYPE_float, "m/s", 1, -1000, 1000},
+  {SCS_TELEMETRY_CHANNEL_next_rest_stop, SCS_VALUE_TYPE_s32, "min", 1, -2147483648.0, 2147483647.0},
   {SCS_TELEMETRY_TRUCK_CHANNEL_world_placement, SCS_VALUE_TYPE_dplacement, "game-world", 1, 0, 0}
 }};
 void increment(std::uint64_t& value) noexcept { if (value != UINT64_MAX) ++value; }
@@ -41,9 +42,9 @@ void add(std::atomic<std::uint64_t>& value, std::uint64_t count) noexcept {
   auto previous = value.load(std::memory_order_relaxed);
   while (!value.compare_exchange_weak(previous, count > UINT64_MAX - previous ? UINT64_MAX : previous + count, std::memory_order_relaxed)) {}
 }
-// The protocol v1-only channels (ET-052, ET-071, ET-084): optional at registration, and invisible to the v0 snapshot
+// The protocol v1-only channels: optional at registration, and invisible to the v0 snapshot
 // ordering and the v0 diagnostics, so a game that provides them produces the same v0 and CAP0 bytes as one that does not.
-constexpr bool v1_only(Field field) noexcept { return field == Field::mandatory_break || field == Field::cruise_control || field == Field::speed_limit; }
+constexpr bool v1_only(Field field) noexcept { return field == Field::mandatory_break || field == Field::cruise_control || field == Field::speed_limit || field == Field::rest_state; }
 bool equal(const char* a, const char* b) noexcept {
   if (!a || !b) return false;
   for (std::size_t i = 0; i <= 128; ++i) { if (a[i] != b[i]) return false; if (!a[i]) return true; }
@@ -411,7 +412,7 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
       const auto& spec = specs[i];
       const auto result = api_.register_for_channel(spec.name, SCS_U32_NIL, spec.type, SCS_TELEMETRY_CHANNEL_FLAG_each_frame | SCS_TELEMETRY_CHANNEL_FLAG_no_value, channel_callback, &contexts_[i]);
       producer_.channel_results[i] = result; registered_channels_[i] = result == SCS_RESULT_ok;
-      // ET-052, ET-071, ET-084: an optional v1-only channel never fails initialization. Any result other than ok means the game
+      // An optional v1-only channel never fails initialization. Any result other than ok means the game
       // does not provide it (an older game, a refused flag or an unknown code), which is not-supported; core channels stay strict.
       const bool optional = v1_only(static_cast<Field>(i));
       if (result == SCS_RESULT_not_found || result == SCS_RESULT_unsupported_type || result == SCS_RESULT_unsupported || (optional && result != SCS_RESULT_ok)) {
@@ -627,7 +628,7 @@ void Adapter::event(scs_event_t event_id, const void* info) {
   }
 }
 void Adapter::channel(Field field, const scs_value_t* value) {
-  // The break (ET-052), cruise control (ET-071) and speed limit (ET-084) channels are v1-only extensions: they advance no boundary order, so the
+  // The v1-only extensions advance no boundary order, so the
   // v0 snapshot, the v0 ordering and the CAP0 envelopes of a game that provides them are identical to those of a game
   // that does not. The callback only copies the value.
   if (!initialized_ || producer_.exhausted || (!v1_only(field) && !next_order())) return;
@@ -842,6 +843,7 @@ void Adapter::publish_v1() noexcept {
     s.next_mandatory_break_min = v1_reading_s32(state.channels[static_cast<std::size_t>(Field::mandatory_break)]);
     s.cruise_control_mps = sdk_value(Field::cruise_control);
     s.speed_limit_mps = sdk_value(Field::speed_limit);
+    s.rest_state_min = v1_reading_s32(state.channels[static_cast<std::size_t>(Field::rest_state)]);
     const auto& gear = state.channels[static_cast<std::size_t>(Field::gear)];
     s.gear = gear.status == Availability::available ? v1::Field<std::int32_t>{static_cast<std::int32_t>(gear.value), v1::FieldState::available} : v1::Field<std::int32_t>{0, v1_state(gear.status)};
     v1_game_time(s.game_time); s.capture_utc_unix_ms = utc_unix_ms(); s.boundary_order = producer_.boundary_order;

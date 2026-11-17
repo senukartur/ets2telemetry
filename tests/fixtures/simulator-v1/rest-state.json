@@ -1,0 +1,89 @@
+{
+  "format": "ets2telemetry-simulator-v1",
+  "schemaVersion": 1,
+  "id": "rest-state",
+  "purpose": "A signed in-game duration changes independently of the mandatory-break countdown and remains live only.",
+  "reg": [
+    "REG-009",
+    "REG-010"
+  ],
+  "origin": "synthetic",
+  "game": "ets2",
+  "seed": "et118-rest-state",
+  "provenance": null,
+  "source": {
+    "versions": {
+      "telemetryApi": {
+        "major": 1,
+        "minor": 1
+      },
+      "gameTelemetry": {
+        "major": 1,
+        "minor": 20
+      },
+      "sdkArchive": "scs-sdk-1.15"
+    },
+    "gameplayEvents": "not-supported",
+    "currency": "unknown",
+    "gameMode": "unknown"
+  },
+  "steps": [
+    {
+      "atMs": 0,
+      "action": "frame",
+      "channels": {
+        "speed": 20,
+        "mandatory.break": 95,
+        "rest.stop": 500
+      }
+    },
+    {
+      "atMs": 110,
+      "action": "frame",
+      "channels": {
+        "rest.stop": 0
+      }
+    },
+    {
+      "atMs": 210,
+      "action": "frame",
+      "channels": {
+        "rest.stop": -1
+      }
+    },
+    {
+      "atMs": 310,
+      "action": "frame",
+      "channels": {
+        "rest.stop": null
+      }
+    },
+    {
+      "atMs": 410,
+      "action": "frame",
+      "channels": {
+        "rest.stop": "invalid"
+      }
+    },
+    {
+      "atMs": 510,
+      "action": "frame",
+      "channels": {
+        "rest.stop": 660
+      }
+    }
+  ],
+  "transport": [
+    {
+      "atMs": 50,
+      "action": "connect",
+      "client": {
+        "durable": true
+      }
+    },
+    {
+      "atMs": 600,
+      "action": "disconnect"
+    }
+  ]
+}
