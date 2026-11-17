@@ -341,6 +341,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.odometer-jumped": "скачок одометра",
   "copy.game-time-jumped": "скачок игрового времени",
   "copy.position-jumped": "скачок положения",
+  "copy.possible-roadside-assistance": "вероятная техпомощь",
   "copy.refuelled": "заправка",
   "copy.samples-could-not-be-stored-in-time": "отсчёты не удалось сохранить вовремя",
   "copy.database-behind-the-plugin": "база данных отстаёт от плагина",
