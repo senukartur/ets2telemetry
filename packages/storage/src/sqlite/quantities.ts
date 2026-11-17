@@ -320,20 +320,24 @@ function decideRollback(db: Database.Database, row: Row, {coverage, sameJob, sco
   const fail = () => finishRollback(coverage, false);
   if (!sameJob || coverage.member !== String(row.id) || y.sourceClockId !== pending.sourceClockId || y.gameClockId !== pending.toClockId
     || elapsed > PROOF_WAIT_NS || !previous || previous.trip !== current.trip || previous.clock !== current.clock
-    || !completeAnchor(y) || y.gameMinutes !== pending.toMinutes || (profile && profile.scope !== scope)) return fail();
+    || !completeAnchor(y) || (profile && profile.scope !== scope)) return fail();
 
   const admitted = profile && BigInt(profile.afterMonotonicNs) > BigInt(pending.atNs);
   if (pending.sample === null) {
     const x = previous.anchor;
-    if (restoredMinute !== pending.toMinutes || x.gameClockId !== pending.fromClockId || BigInt(x.monotonicNs) >= BigInt(pending.atNs)) return fail();
+    if (y.gameMinutes !== pending.toMinutes || restoredMinute !== pending.toMinutes || x.gameClockId !== pending.fromClockId
+      || BigInt(x.monotonicNs) >= BigInt(pending.atNs)) return fail();
     if (admitted) return finishRollback(coverage, true);
     return stopped(y) ? {...coverage, rollback: {...pending, sample: String(current.id)}} : fail();
   }
 
   const firstId = BigInt(pending.sample), first = stored(db, firstId, truckOf(db, sampleTruckRef(db, firstId)));
   const stepNs = BigInt(y.monotonicNs) - BigInt(previous.anchor.monotonicNs);
+  // The cut itself still requires the exact loaded minute. After it, one forward stationary tick can occur before proof arrives.
+  const minute = y.gameMinutes!, lastMinute = previous.anchor.gameMinutes;
   if (!link(previous) || previous.anchor.gameClockId !== pending.toClockId || stepNs <= 0n || stepNs >= LINK_NS
-    || !stopped(y) || !matchesSavedEndpoint(first.anchor, y)) return fail();
+    || lastMinute === null || BigInt(minute) < BigInt(lastMinute) || !stopped(y)
+    || !matchesSavedEndpoint(first.anchor, y, true, minute)) return fail();
   return admitted ? finishRollback(coverage, true) : undefined;
 }
 /**
