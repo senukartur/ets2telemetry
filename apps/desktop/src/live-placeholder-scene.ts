@@ -87,14 +87,22 @@ export const GROUND: SvgNode[] = [group(topPlane([0, 0, 0]), [
 export const LANE: SvgNode[] = [group(topPlane([0, 0, 0]),
   Array.from({length: 26}, (_, i) => rect(-40 + i * 4, -0.73, 2.2, 0.26, 'ph-lane')))];
 
+/**
+ * A fir: a trunk and two stacked cones. On screen a cone's base spans from its leftmost point (−x, +y) through the point
+ * nearest the viewer (+x, +y) to its rightmost (+x, −y); the lit half is left of the axis, the shaded half right.
+ */
 function tree(x: number, y: number, h: number): SvgNode[] {
-  const base = project([x, y, 0]), mid = project([x, y, h * 0.45]), top = project([x, y, h]), r = h * 0.38;
-  const left = project([x, y - r, h * 0.45]), right = project([x + r, y, h * 0.45]), front = project([x + r * 0.7, y + r * 0.7, h * 0.45]);
-  const pts = (...list: Vec[]) => list.map(p => p.map(round).join(',')).join(' ');
+  const pts = (...list: Point[]) => list.map(p => project(p).map(round).join(',')).join(' ');
+  const cone = (z0: number, z1: number, r: number): SvgNode[] => {
+    const k = r / Math.SQRT2, top: Point = [x, y, z1];
+    const left: Point = [x - k, y + k, z0], front: Point = [x + k, y + k, z0], right: Point = [x + k, y - k, z0];
+    return [{tag: 'polygon', attrs: {points: pts(top, left, front), className: 'ph-tree-light'}},
+      {tag: 'polygon', attrs: {points: pts(top, front, right), className: 'ph-tree-dark'}}];
+  };
+  const [bx, by] = project([x, y, 0]), [mx, my] = project([x, y, h * 0.3]);
   return [
-    {tag: 'line', attrs: {x1: round(base[0]), y1: round(base[1]), x2: round(mid[0]), y2: round(mid[1]), className: 'ph-trunk', strokeWidth: 3, strokeLinecap: 'round'}},
-    {tag: 'polygon', attrs: {points: pts(top, left, front), className: 'ph-tree-light'}},
-    {tag: 'polygon', attrs: {points: pts(top, front, right), className: 'ph-tree-dark'}}
+    {tag: 'line', attrs: {x1: round(bx), y1: round(by), x2: round(mx), y2: round(my), className: 'ph-trunk', strokeWidth: 3, strokeLinecap: 'round'}},
+    ...cone(h * 0.22, h * 0.78, h * 0.32), ...cone(h * 0.5, h, h * 0.24)
   ];
 }
 /** Three rows of trees beyond the far road edge, repeating every tree period. */
