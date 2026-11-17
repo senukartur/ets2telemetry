@@ -170,7 +170,7 @@ Open **Settings → Overlay** and change **Show overlay** (Russian: **Показ
 
 The **Preview** card uses invented example data, never your live game telemetry. It follows the selected layout, size, background opacity and enabled sections, including size and opacity drafts while you edit. Large layouts fit within the preview; Strip wraps whole items. This illustrates appearance rather than the exact position in a game window. The Sections card groups all eighteen switches under Driving, Fuel, Job and Time and counts the enabled ones; its presets change those same switches.
 
-The **Rest State** row in the Live Game session card and the overlay uses a bed icon and shows remaining alertness in game hours and minutes. Use **Settings → Overlay → Time** to toggle its overlay section, which starts enabled. A dash means the reading is unavailable. The mandatory-break countdown has its own indicator.
+The **Rest State** indicator in the Live Game session card and the overlay uses a bed icon and shows the time until the next rest stop in game hours and minutes, as reported by the game's `rest.stop` channel. With fatigue simulation disabled, the game may report the time that would apply with fatigue simulation enabled or provide no reading. A dash means the reading is unavailable. Use **Settings → Overlay → Time** to toggle its overlay section, which starts enabled. The mandatory-break countdown has its own indicator.
 
 ## Next mandatory break on the overlay (ET-052)
 
