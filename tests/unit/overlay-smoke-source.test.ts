@@ -173,6 +173,14 @@ describe('ET-012c strip containment observation', () => {
     const {OVERLAY_PRESETS, OVERLAY_SECTION_IDS} = await import('../../apps/desktop/src/overlay-sections');
     expect(DRIVING_ONLY_SECTIONS).toEqual(OVERLAY_SECTION_IDS.filter(id => OVERLAY_PRESETS['driving-only'][id]));
   });
+  it('keeps the serialized strip observation aligned with the product order, including hidden speed', async () => {
+    const {OVERLAY_SECTION_IDS} = await import('../../apps/desktop/src/overlay-sections');
+    const {STRIP_SECTION_IDS} = await import('../../apps/desktop/src/overlay-strip');
+    for (const enabled of [[...OVERLAY_SECTION_IDS], OVERLAY_SECTION_IDS.filter(id => id !== 'speed')]) {
+      const sections = STRIP_SECTION_IDS.filter(id => enabled.includes(id));
+      expect(await observeStrip({sections}, enabled)).toMatchObject({sections});
+    }
+  });
   it('names the sections the synthetic checkpoint fixture shows in the strip', async () => {
     const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);
     expect(STRIP_SMOKE_SECTIONS).toEqual(EXPECTED);

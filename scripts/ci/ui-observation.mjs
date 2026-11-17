@@ -126,6 +126,7 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
       const box = node.getBoundingClientRect();
       return {id: node.id, width: box.width, height: box.height, checked: node.getAttribute('aria-checked')};
     }));
+    assert.equal(radios.length, layouts.length, 'UI_LAYOUT_RADIO_COUNT');
     for (const radio of radios) {
       assert.ok(Math.abs(radio.width - radio.height) < 0.1, `UI_LAYOUT_RADIO_CIRCLE_${radio.id}: ${radio.width} x ${radio.height}`);
       assert.ok(Math.abs(radio.height - 12) < 0.1, `UI_LAYOUT_RADIO_SIZE_${radio.id}`);

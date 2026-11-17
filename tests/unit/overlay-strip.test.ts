@@ -58,13 +58,13 @@ it.each([
   // which joined range before, starts a fourth: twelve rows, 458.
   // ET-084: at 1280, 1279, 1258, 1248 and 1247 the first row now ends at range (1166), the others are those of ET-071: four rows.
   // At 768 the sign after speed lets consumption end the second row at 742; the row table below includes rest state. At
-  // 928 (inner 902) the first row ends at the sign (808) and the others at cargo 902, distance driven 778, income 698 and
-  // the indicator 478, still 5. At 944 (inner 918) they end at 808, 902, 778, game time 912 and the indicator 264, still 5.
+  // 928 (inner 902) the first row ends at cruise control (808) and the others at cargo 902, distance driven 778, income 698 and
+  // the indicator 642, still 5. At 944 (inner 918) they end at 808, 902, 778, game time 912 and the indicator 428, still 5.
   // At the 480 minimum (inner 454) the sign joins speed on the first row (406), still twelve rows.
   {name: 'every section at 1280 (1920 x 1080)', sections: ALL, width: 1280, rows: 4, height: 154},
   {name: 'every section at 1248 (1280 x 720)', sections: ALL, width: 1248, rows: 4, height: 154},
   // With the sign after speed: rows end at RPM (654), consumption (742), origin (614), distance remaining (628),
-  // income (534), and Hard Mode (742, including game time, mandatory break and rest state): six rows, inner width 742.
+  // income (534), and Hard Mode (642, including game time, mandatory break and rest state): six rows, inner width 742.
   {name: 'every section at 768 (800 x 600)', sections: ALL, width: 768, rows: 6, height: 230},
   {name: 'every section at 928 (960 x 540)', sections: ALL, width: 928, rows: 5, height: 192},
   {name: 'every section at 1247 (fractional client)', sections: ALL, width: 1247, rows: 4, height: 154},

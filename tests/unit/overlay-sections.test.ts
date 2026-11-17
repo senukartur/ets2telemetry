@@ -22,7 +22,7 @@ it('lists eighteen sections in canonical order and groups each exactly once, in 
     ['job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']],
     ['time', ['game-time', 'mandatory-break', 'rest-state']]
   ]);
-  // The strip packs its rows in canonical order and renders them in group order, so the two must be the same (ET-071).
+  // Settings groups retain canonical order; the strip's separate rendered order is checked in overlay-strip.test.ts.
   expect(OVERLAY_GROUPS.flatMap(group => group.sections)).toEqual(OVERLAY_SECTION_IDS);
 });
 
