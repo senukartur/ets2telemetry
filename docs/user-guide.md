@@ -27,7 +27,7 @@ The independent panel appears only inside the active selected game's client area
 
 ### Connecting to a game
 
-Start ETS2 or ATS and open **Live**. **Automatic** is the default source: **Waiting for game** stays visible until a verified game plugin is available. Either launch order works. If both games are available before connection, choose **Euro Truck Simulator 2** or **American Truck Simulator** on Live. Another game appearing during an attached session does not switch away from it. After an automatic session ends, the application waits for the next game again.
+Start ETS2 or ATS and open **Live**. **Automatic** is the default source: the top bar shows **Waiting for game** and Live shows the driving truck until a verified game plugin is available. Either launch order works. If both games are available before connection, choose **Euro Truck Simulator 2** or **American Truck Simulator** on Live. Another game appearing during an attached session does not switch away from it. After an automatic session ends, the application waits for the next game again.
 
 An incomplete connection means one telemetry stream is still waiting; the available stream stays attached. A source mismatch or a verification failure stays visible and requires reconnecting or choosing a source again. **Settings → Diagnostics** retains explicit ETS2/ATS selection and isolated synthetic/replay fixtures for diagnostics. An explicit game selection waits only for that game; choose **Automatic** to resume automatic selection. Fixture launches never fall back to a real game when a fixture is missing or disconnects.
 

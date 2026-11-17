@@ -246,7 +246,8 @@ describe('Rest State (REG-009)', () => {
 describe('placeholder', () => {
   const CAPTION = {en: 'The instruments appear when you get behind the wheel', ru: 'Приборы появятся, когда вы сядете за руль'} as const;
   const display = (html: string) => /data-live-display="([a-z]+)"/.exec(html)?.[1];
-  const caption = (html: string) => /data-testid="live.placeholder.caption">([^<]*)<\/p>/.exec(html)?.[1];
+  const ENTITIES: Record<string, string> = {'&gt;': '>', '&lt;': '<', '&amp;': '&', '&quot;': '"', '&#x27;': "'"};
+  const caption = (html: string) => /data-testid="live.placeholder.caption">([^<]*)<\/p>/.exec(html)?.[1]?.replace(/&(?:gt|lt|amp|quot|#x27);/g, entity => ENTITIES[entity]);
   it.each(['en', 'ru'] as const)('waiting and stale show the scene and one caption, without connection details, in %s', language => {
     for (const [live, expected] of [[undefined, 'waiting'], [stalePair(), 'stale']] as const) {
       const html = render(live, language);
@@ -275,13 +276,34 @@ describe('placeholder', () => {
     expect(html.match(/class="yu-ph-puff/g)).toHaveLength(2);
     for (const layer of ['yu-ph-lane', 'yu-ph-trees', 'yu-ph-truck']) expect(html).toContain(`class="yu-ph-layer ${layer}"`);
   });
-  it('an incompatible plugin replaces the caption with its reason', () => {
-    const live = smokePair(); live.status = 'incompatible'; live.fresh = false; live.reason = 'Game protocol target mismatch';
-    live.v1 = {selection: 'synthetic', status: 'incompatible', reason: 'Game protocol target mismatch', fresh: false};
-    const html = render(live, 'en');
-    expect(display(html)).toBe('placeholder');
-    expect(caption(html)).not.toBe(CAPTION.en);
-    expect(caption(html)).toBeTruthy();
+  /** No current data with the given status and reason: no observation and no v1 stream unless a case adds one. */
+  const without = (status: LiveTelemetry['status'], reason: string, v1?: LiveTelemetry['v1']) => {
+    const live = smokePair(); Object.assign(live, {status, fresh: false, reason, observation: undefined, v1}); return live;
+  };
+  // Expected texts are written by hand from strings.ts; an unmapped service reason is shown as the service wrote it.
+  const MISMATCH = {en: 'The game sources do not match. Reconnect or choose a source in Settings > Diagnostics.', ru: 'Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Диагностика».'};
+  const AMBIGUOUS = {en: 'Multiple instances of a game were found. Close the extra instance to connect.', ru: 'Найдено несколько экземпляров игры. Закройте лишний экземпляр для подключения.'};
+  const REJECTED = {en: 'The game connection could not be verified. Check Settings > Game plugin.', ru: 'Не удалось проверить подключение к игре. Откройте «Настройки > Игровой плагин».'};
+  const FAILED = 'Telemetry service failed after repeated restarts';
+  it.each(['en', 'ru'] as const)('a condition the driver must act on replaces the caption with its exact text in %s', language => {
+    const cases: [LiveTelemetry, string][] = [
+      [without('incompatible', 'Game protocol target mismatch', {selection: 'synthetic', status: 'incompatible', reason: 'Game protocol target mismatch', fresh: false}), MISMATCH[language]],
+      [without('incompatible', 'Game protocol target mismatch'), MISMATCH[language]],
+      [without('service-failed', FAILED), FAILED],
+      [without('waiting', 'Multiple game instances are ambiguous'), AMBIGUOUS[language]],
+      [without('waiting', 'Native source authority or transport failed'), REJECTED[language]],
+      [without('disconnected', 'Verified native game pipe client is not configured'), REJECTED[language]]
+    ];
+    for (const [live, expected] of cases) {
+      const html = render(live, language);
+      expect(display(html), live.reason).toBe('placeholder');
+      expect(caption(html), live.reason).toBe(expected);
+    }
+  });
+  it.each(['en', 'ru'] as const)('a passing connection step keeps the one caption in %s', language => {
+    for (const reason of ['Waiting for game', 'Discovering selected game process', 'Game protocol targets changed; retrying discovery', 'Main has no recent SDK capture']) {
+      expect(caption(render(without(reason === 'Main has no recent SDK capture' ? 'stale' : 'waiting', reason), language)), reason).toBe(CAPTION[language]);
+    }
   });
   it('keeps the game choice above the scene', () => {
     const live = smokePair(); Object.assign(live, {status: 'waiting', fresh: false, selection: 'game', reason: 'Both games are available; choose ETS2 or ATS', observation: undefined}); live.v1 = undefined;
