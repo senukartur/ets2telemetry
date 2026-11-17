@@ -44,7 +44,7 @@ The contract is [packages/contracts/src/journal.ts](../packages/contracts/src/jo
 - the list fields (game, game-mode evidence, outcome, close reason, recording completeness, UTC labels, observed distance, fuel used, a job summary with the source and destination cities and companies, the cargo, the raw SDK job market, the special-job flag, the planned distance and the expected income), the plugin session, how the trip opened (`openedBy` `event` with its `openedEventSeq`, or `checkpoint` with `openedEventSeq` null), the outcome eventSeq, and the close carrier (`closedBy`, null while open and for trips closed under schema version 1);
 - the job values in canonical units from the normalized job row, with its source (`event` with its eventSeq, or `checkpoint` with the checkpoint's nextEventSeq);
 - the truck and the latest 10 trailer configurations in commit order (not eventSeq order: a later plugin session's eventSeqs start at 1 again) from their configuration events, with the trip's trailer total, and the gameplay outcome record (`job.delivered` with its revenue or `job.cancelled` with its penalty);
-- money totals (below), the timeline window (below), the first 50 completeness intervals with the trip's total and the next cursor;
+- money totals (below), optional confirmed replenishment (`refuels: {dieselL, electricKWh, omitted}`), the timeline window (below), and the first 50 completeness intervals with the trip's total and the next cursor;
 - the trip's sample count with the UTC labels of its first and last sample;
 - the export bounds fixed at this read (J17): the trip session's committed coverage and the trip's largest sample and interval ids.
 
@@ -116,6 +116,8 @@ The `journal` reply type sits before main's fatal default for unknown service me
 ## The Journal tab (J12–J14)
 
 The trip detail reports the recorded total's `energyPowertrain`, and each sample reports its own `powertrain`. The Journal uses the diesel display profile or kWh and kWh/100 km for electric readings. When the evidence includes more than one unit or the unit cannot be established, the total is unavailable. The sample table preserves each sample's own units. The chart displays speed. A recorded charge increase is labelled as such because telemetry alone cannot establish whether it came from external charging or regeneration.
+
+The trip detail's confirmed fuel and charge increases sum only consecutive measured increments with both endpoints on the retained route. A saved point at the pump can retain part of a refill. The timeline and JSON export keep the original annotations and amounts, including earlier annotations without measurement endpoints.
 
 ET-016 PR-4 adds the Journal tab to the main window. The window has two shadcn Tabs: **Live**, the existing dashboard and the default, and **Journal**. The Live panel stays mounted while Journal is open, so its cards keep their state, and its inactive state hides it (Radix does not hide a force-mounted panel). The Journal panel mounts when it opens and holds nothing while closed. The tab list is one compact row above the first card, so the status, speed and fuel lines stay inside the first 800 × 500 viewport (B6); the journal smoke measures them.
 

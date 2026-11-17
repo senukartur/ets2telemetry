@@ -34,6 +34,12 @@ const fuel = (tripUuid: string, value: number | 'invalid', observedDistanceM?: n
 const partial = (tripUuid: string): TripEffect => ({kind: 'trip.update', tripUuid, set: {recordingCompleteness: 'partial'}});
 const attr = (tripUuid: string | null, attribution: 'trip' | 'free-driving'): TripEffect => ({kind: 'event.attribute', tripUuid, attribution});
 const note = (tripUuid: string, detail: Record<string, unknown>): TripEffect => ({kind: 'completeness.add', interval: {tripUuid, kind: 'discontinuity', detail: {annotation: true, ...detail}}});
+function refuelNote(script: Script, tripUuid: string, readings: [number, number][], addedLiters: number, continues = false): TripEffect {
+  return {kind: 'completeness.add', interval: {tripUuid, kind: 'discontinuity', startUtcMs: BASE_UTC + readings[1][0],
+    detail: {annotation: true, cause: 'refuel', powertrain: 'diesel', addedLiters, atMonotonicNs: ns(readings[1][0]),
+      readingClock: script.clockId, readingGameClock: GAME_CLOCK_1, refuelReadings: readings.map(([ms, level]) => [ns(ms), level]),
+      ...(readings.length > 2 ? {lastAtMonotonicNs: ns(readings.at(-1)![0])} : {}), ...(continues ? {continues: true} : {})}}};
+}
 const delivered = (tripUuid: string, completeness: 'complete' | 'partial', endedUtcMs: number): TripEffect =>
   ({kind: 'trip.close', tripUuid, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: completeness, endedUtcMs});
 
@@ -391,17 +397,25 @@ describe('fuel (T16)', () => {
       [reading(s, {ms: 6000, odometer: 1000, fuel: 520})],
       // ET-016 PR-6 (J8): the carrier's update also persists fuel used, 1.4921875 L as computed below.
       [s.event(r.paused(), paused), [fuel(trip, 1.4921875, 0),
-        note(trip, {cause: 'refuel', powertrain: 'diesel', addedLiters: 100.4921875, atMonotonicNs: ns(3000), lastAtMonotonicNs: ns(4000)}),
-        note(trip, {cause: 'refuel', powertrain: 'diesel', addedLiters: 21, atMonotonicNs: ns(6000)})]]]);
+        refuelNote(s, trip, [[2000, 399.5078125], [3000, 450], [4000, 500]], 100.4921875),
+        refuelNote(s, trip, [[5000, 499], [6000, 520]], 21)]]]);
     // Consumed 0.5 + 1 L minus the 0.0078125 L increase; refuels 50.4921875 + 50 + 21 L in two episodes.
     expect(tripView(state, 'ets2').current).toMatchObject({fuelUsedL: {state: 'value', value: 1.4921875}, refuelledL: 121.4921875, refuels: 2});
   });
   it('marks a refuel episode that continues after its annotation was sent (fix round 1) [synthetic-inference]', () => {
     const {s, trip, rows} = opened();
     play([...rows, [reading(s, {ms: 2000, fuel: 400})], [reading(s, {ms: 3000, fuel: 450})],
-      [s.event(r.paused(), {...paused, advanceMs: 1100}), [note(trip, {cause: 'refuel', powertrain: 'diesel', addedLiters: 50, atMonotonicNs: ns(3000)})]],
+      [s.event(r.paused(), {...paused, advanceMs: 1100}), [refuelNote(s, trip, [[2000, 400], [3000, 450]], 50)]],
       [reading(s, {ms: 4000, fuel: 500, simulation: 'paused'})],
-      [s.event(r.started(), {advanceMs: 1000}), [note(trip, {cause: 'refuel', powertrain: 'diesel', addedLiters: 50, atMonotonicNs: ns(4000), continues: true})]]]);
+      [s.event(r.started(), {advanceMs: 1000}), [refuelNote(s, trip, [[3000, 450], [4000, 500]], 50, true)]]]);
+  });
+  it('splits a long refill into measured chunks with one shared endpoint', () => {
+    const {s, trip, rows} = opened();
+    const readings: [number, number][] = Array.from({length: 70}, (_, i) => [3000 + i * 50, 100 + i]);
+    const state = play([...rows, ...readings.map(([ms, fuel]): Row => [reading(s, {ms, fuel})]),
+      [s.event(r.paused(), {...paused, advanceMs: 5000}),
+        [refuelNote(s, trip, readings.slice(0, 64), 63), refuelNote(s, trip, readings.slice(63), 6, true)]]]);
+    expect(tripView(state, 'ets2').current).toMatchObject({refuelledL: 69, refuels: 1});
   });
   it('reports fuel used as not observed before a continuous fuel step [synthetic-inference]', () => {
     const {s, rows} = opened();
@@ -631,7 +645,7 @@ describe('fix round 2', () => {
     const b = opened(new Script(ETS2_B));
     play([...b.rows, [reading(b.s, {ms: 2000, fuel: 400, position: at0})], [reading(b.s, {ms: 3000, fuel: 450, position: at0})],
       [reading(b.s, {ms: 3050, fuel: 460, position: far})], [reading(b.s, {ms: 3100, fuel: 470, position: far})],
-      [b.s.event(r.paused(), {...paused, advanceMs: 1200}), [note(b.trip, {cause: 'refuel', powertrain: 'diesel', addedLiters: 70, atMonotonicNs: ns(3000), lastAtMonotonicNs: ns(3100)}),
+      [b.s.event(r.paused(), {...paused, advanceMs: 1200}), [refuelNote(b.s, b.trip, [[2000, 400], [3000, 450], [3050, 460], [3100, 470]], 70),
         note(b.trip, {cause: 'position-jump', label: 'possible-teleport', meters: 10_000, atMonotonicNs: ns(3050)})]]]);
   });
   it('a hole never extends a waiting hole of an earlier connection [synthetic-inference]', () => {
@@ -678,7 +692,7 @@ describe('fix round 3', () => {
     const state = play([...rows, [reading(s, {ms: 2000, fuel: 400})], [reading(s, {ms: 3000, fuel: 450})],
       [{kind: 'disconnected'}], [sessionInput(s.welcome(), '2')], [reading(s, {ms: 60_000, fuel: 600})], [reading(s, {ms: 61_000, fuel: 650})],
       [s.event(r.paused(), {...paused, advanceMs: 60_000}), [partial(trip), notConnected(s, trip),
-        note(trip, {cause: 'refuel', powertrain: 'diesel', addedLiters: 50, atMonotonicNs: ns(3000)}), note(trip, {cause: 'refuel', powertrain: 'diesel', addedLiters: 50, atMonotonicNs: ns(61_000)})]]]);
+        refuelNote(s, trip, [[2000, 400], [3000, 450]], 50), refuelNote(s, trip, [[60_000, 600], [61_000, 650]], 50)]]]);
     expect(tripView(state, 'ets2').current).toMatchObject({refuelledL: 100, refuels: 2});
   });
 });

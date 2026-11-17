@@ -195,6 +195,17 @@ describe('format version 6 (J15, REG-014)', () => {
     expect(document.job.values.market).toEqual({available: true, value: 'freight_market'});
     for (const label of ['Freight market', 'Грузоперевозки']) expect(serialize(detail, {})).not.toContain(label);
   });
+  it('exports the original refill amount without Journal accounting data', () => {
+    const trip = {...detail, refuels: {dieselL: 20, electricKWh: 0, omitted: true}};
+    const refill = {...INTERVAL, annotation: true, cause: 'refuel', kind: 'discontinuity' as const, detail: {
+      annotation: true, cause: 'refuel', powertrain: 'diesel', addedLiters: 60, atMonotonicNs: '20',
+      refuelReadings: [['10', 100], ['20', 160]], readingClock: 'source', readingGameClock: 'game'
+    }};
+    const document = JSON.parse(serialize(trip, {intervals: [[refill]]})) as Record<string, unknown>;
+    expect(document).not.toHaveProperty('refuels');
+    expect(document.intervals).toEqual([{...refill, detail: {annotation: true, cause: 'refuel', powertrain: 'diesel', atMonotonicNs: '20',
+      amountAdded: {value: 60, unit: 'L'}}}]);
+  });
   it('writes empty sections as empty arrays', () => {
     const closed = changed(detail, d => { d.exportBounds = {committedThroughEventSeq: '4', lastSampleId: null, lastIntervalId: null}; d.samples = {count: 0, firstUtcMs: null, lastUtcMs: null};
       d.intervals = {items: [], total: 0, nextCursor: null}; });

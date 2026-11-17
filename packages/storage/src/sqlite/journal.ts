@@ -21,6 +21,7 @@ import type {StorageConnection} from './connection';
 import {statement} from './writes';
 import {journalSync} from './journal-sync';
 import {tripEnergyPowertrain} from './truck-energy';
+import {journalRefuels} from './journal-refuels';
 
 const MAX_ROW_ID = 9_223_372_036_854_775_807n;
 const MONEY_TYPES: Readonly<Record<string, JournalMoneyCategory>> = {'player.fined': 'fine', 'player.tollgate.paid': 'toll', 'player.use.ferry': 'ferry', 'player.use.train': 'train'};
@@ -367,6 +368,7 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
   const trailerRows=snap?all(db,`SELECT e.event_seq,e.payload_json,s.plugin_session_uuid,t.trip_uuid ${trailerScope} ORDER BY e.id DESC LIMIT ?`,...trailerArgs,JOURNAL_DETAIL_TRAILERS)
     :all(db,JOURNAL_QUERIES.trailers,id,JOURNAL_DETAIL_TRAILERS);
   const qualifiedTrailers=snap && Number(get(db,`SELECT count(*) AS total FROM logical_snapshot_memberships WHERE logical_ref=? AND trip_ref<=? AND from_revision<? AND (through_revision IS NULL OR through_revision>=?)`,...trailerArgs.slice(0,4))!.total)>1;
+  const refuels = journalRefuels(db, id, snap);
   return {
     database: database(db),
     trip: {...listItem(db, trip, snap ? {logical: snap.logical, head: snap.head} : undefined), pluginSessionId: String(session.plugin_session_uuid), openedBy: trip.opened_by as 'event' | 'checkpoint',
@@ -375,6 +377,7 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
     job: {source: job.source as 'event' | 'checkpoint', eventSeq: job.source === 'event' ? fromU64Key(event(job.event_ref).event_seq) : null,
       checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null, values: jobValues(job)},
     energyPowertrain: tripEnergyPowertrain(db, trip.game as 'ets2' | 'ats', trip.truck_configuration_ref, snap?.head ?? null, id, trip.opened_event_ref, snap?.events),
+    ...(refuels ? {refuels} : {}),
     truck: truck === null ? null : {eventSeq: fromU64Key(truck.event_seq), values: valuesOf<TruckConfiguration>(payloadOf(truck).record)},
     trailers: {items: trailerRows.reverse()
       .map(r => ({...(qualifiedTrailers?{pluginSessionId:String(r.plugin_session_uuid),rawTripUuid:String(r.trip_uuid)}:{}),eventSeq: fromU64Key(r.event_seq), values: valuesOf<TrailerConfiguration>(payloadOf(r).record)})),

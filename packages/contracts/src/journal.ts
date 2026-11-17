@@ -176,6 +176,8 @@ export interface JournalMoneyUnavailable {category: JournalMoneyCategory; reason
 export interface JournalMoneyTotals {incomplete: boolean; totals: JournalMoneyTotal[]; unavailable: JournalMoneyUnavailable[]}
 
 export type JournalOutcomeRecord = Extract<EventRecord, {type: 'job.delivered'} | {type: 'job.cancelled'}>;
+/** Measured energy increases supported by the selected route; raw refuel annotations may cover more. */
+export interface JournalRefuels {dieselL: number; electricKWh: number; omitted: boolean}
 export interface JournalTripDetail {
   database: JournalDatabase;
   trip: JournalTripListItem & {
@@ -201,6 +203,7 @@ export interface JournalTripDetail {
   /** The gameplay outcome event with its revenue or penalty; null unless the trip was delivered or cancelled. */
   outcomeDetails: {eventSeq: Uint64; record: JournalOutcomeRecord} | null;
   money: JournalMoneyTotals;
+  refuels?: JournalRefuels;
   window: JournalWindow;
   /** The first JOURNAL_DETAIL_INTERVALS intervals, the trip's total and the cursor of the next `journalIntervals` page. */
   intervals: {items: JournalInterval[]; total: number; nextCursor: string | null};
@@ -508,8 +511,13 @@ export function validateJournalIntervalPage(value: unknown, limit = Math.max(...
 /** Validates a `journalTrip` answer exactly; throws JournalContractError otherwise. */
 export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   const o = exact(value, ['database', 'trip', 'job', 'truck', 'trailers', 'outcomeDetails', 'money', 'window', 'intervals', 'samples', 'exportBounds',
-    ...(isRecord(value) && Object.hasOwn(value, 'energyPowertrain') ? ['energyPowertrain'] : [])]);
+    ...(isRecord(value) && Object.hasOwn(value, 'energyPowertrain') ? ['energyPowertrain'] : []),
+    ...(isRecord(value) && Object.hasOwn(value, 'refuels') ? ['refuels'] : [])]);
   if (Object.hasOwn(o, 'energyPowertrain') && !isTruckPowertrain(o.energyPowertrain)) bad();
+  if (Object.hasOwn(o, 'refuels')) {
+    const refuels = exact(o.refuels, ['dieselL', 'electricKWh', 'omitted']);
+    nonNegative(refuels.dieselL); nonNegative(refuels.electricKWh); boolean(refuels.omitted);
+  }
   database(o.database);
   const trip = exact(o.trip, [...listKeys(o.trip), 'pluginSessionId', 'openedBy', 'openedEventSeq', 'outcomeEventSeq', 'closedBy']);
   listItem(trip); uuid(trip.pluginSessionId); oneOf(trip.openedBy, ['event', 'checkpoint']); nullable(trip.openedEventSeq, eventSeq); nullable(trip.outcomeEventSeq, eventSeq);

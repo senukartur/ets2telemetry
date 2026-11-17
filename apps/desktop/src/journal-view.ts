@@ -96,7 +96,8 @@ export interface JournalSampleText {columns: JournalColumn[]; rows: JournalSampl
 /** One row of a trip's side card. */
 export interface JournalSideRow {id: string; label: string; value: string}
 /** The route line and the side cards of a trip (mockup T4); every value is the same text as the trip's full field list. */
-export interface JournalTripSideText {route: string; money: {rows: JournalSideRow[]; notes: string[]}; vehicle: {rows: JournalSideRow[]; notes: string[]}}
+interface JournalSideCard {rows: JournalSideRow[]; notes: string[]}
+export interface JournalTripSideText {route: string; money: JournalSideCard; refuels?: JournalSideCard; vehicle: JournalSideCard}
 export type JournalTimelineTone = 'info' | 'ok' | 'warn' | 'error' | 'neutral';
 /** One timeline row: an event, a recording gap or a refuel. The cells keep the event table's order. */
 export interface JournalTimelineItem {kind: 'event' | 'gap' | 'refuel'; key: string; tone: JournalTimelineTone; eventSeq: string; time: string; type: string; detail: string; attribution: string}
@@ -302,6 +303,14 @@ function moneyLines(totals: JournalMoneyTotals): {fields: JournalField[]; notes:
   return {fields, notes: []};
 }
 
+function refuelCard(refuels: NonNullable<JournalTripDetail['refuels']>, units: DisplayUnits): JournalSideCard {
+  const rows: JournalSideRow[] = [];
+  if (refuels.dieselL > 0) rows.push({id: 'fuelAdded', label: t('energy.fuelAdded', undefined, language), value: amount(units, 'diesel')(refuels.dieselL)});
+  if (refuels.electricKWh > 0) rows.push({id: 'chargeAdded', label: t('energy.chargeAdded', undefined, language), value: amount(units, 'electric')(refuels.electricKWh)});
+  if (rows.length === 0) rows.push({id: 'energyAdded', label: t('energy.confirmedAmount', undefined, language), value: t('energy.noConfirmedIncrease', undefined, language)});
+  return {rows, notes: refuels.omitted ? [t('energy.refuelHistory', undefined, language)] : []};
+}
+
 /** The trip detail's summary sections (J13). */
 function journalDetailText(detail: JournalTripDetail, options: JournalTextOptions = {}): JournalDetailText {
   const {trip, job: {values: job}} = detail, language = options.language ?? 'en';
@@ -395,6 +404,7 @@ function journalTripSideText(detail: JournalTripDetail, options: JournalTextOpti
   return {
     route: `${joined(', ', job.sourceCity, job.sourceCompany)} → ${joined(', ', job.destinationCity, job.destinationCompany)} · ${started}`,
     money: {rows: money.fields.map(({id, label, value}) => ({id, label, value})), notes: money.notes},
+    ...(detail.refuels ? {refuels: refuelCard(detail.refuels, units)} : {}),
     vehicle: {
       rows: [
         ...(truck ? [{id: 'truck', label: t('tr.truckLabel', undefined, language), value: joined(' ', truck.brand, truck.name)}] : []),

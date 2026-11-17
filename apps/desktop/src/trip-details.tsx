@@ -97,7 +97,7 @@ export function TripSite({row, language, options}: {row: JournalSyncRow; languag
     <p className="yu-trip-note" data-testid="trip.site.hint">{journalSyncView(row, language).hint}</p>
   </SideCard>;
 }
-/** The side column: Hard Mode, the money that left the trip, the vehicle and, when sync is configured, the site. */
+/** The side column of the trip detail. */
 export function TripSide({detail, side, site, language, options}: {detail: JournalTripDetail; side: JournalTripSideText; site: JournalSyncRow | null; language: AppLanguage; options?: JournalTextOptions}) {
   return <div className="yu-trip-side">
     <div data-testid="trip.hardMode"><HardModeTrip qualified={detail.trip.isHardMode} details={detail.trip.hardModeDetails} delivered={detail.trip.outcome === 'delivered'} language={language} /></div>
@@ -105,6 +105,10 @@ export function TripSide({detail, side, site, language, options}: {detail: Journ
       {side.money.rows.length ? <SideRows rows={side.money.rows} testId="trip.money" /> : null}
       {side.money.notes.map(note => <p className="yu-trip-note" key={note}>{note}</p>)}
     </SideCard>
+    {side.refuels ? <SideCard title={t('energy.added', undefined, language)} testId="trip.refuels">
+      <SideRows rows={side.refuels.rows} testId="trip.refuels" />
+      {side.refuels.notes.map(note => <p className="yu-trip-note" key={note}>{note}</p>)}
+    </SideCard> : null}
     <SideCard title={t('tr.truck', undefined, language)} testId="trip.vehicle">
       <SideRows rows={side.vehicle.rows} testId="trip.vehicle" />
       {side.vehicle.notes.map(note => <p className="yu-trip-note" key={note}>{note}</p>)}

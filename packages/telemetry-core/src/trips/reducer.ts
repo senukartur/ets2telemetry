@@ -8,7 +8,7 @@ import type {CompletenessInterval} from '../../../storage/src/api';
 import type {StepSample} from '../derived';
 import {liveTruckPowertrain} from '../truck-powertrain';
 import {
-  accumulate, advanceGameTime, classifyStep, accountingUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, startRunClock, switchRunClock,
+  accumulate, advanceGameTime, classifyStep, accountingUpdate, isFastAdvance, isReadingHole, jumpLabel, newAccounting, odometerDeltaM, readingPoint, REFUEL_READING_LIMIT, startRunClock, switchRunClock,
   type GameTimeJump, type ReadingPoint, type ReadingStep
 } from './accounting';
 import {attachTripUuidFor, canonicalJson, jobKey, tripUuidFor} from './identity';
@@ -922,16 +922,22 @@ function accountStep(slot: GameSlot, trip: OpenTrip, session: SessionState, prev
   if (step.positionJump !== null) {
     notes.push(readingNote(trip.tripUuid, next, {cause: 'position-jump', label: jumpLabel(session.lastTransfer, prev.capture.monotonicNs, next, 'possible-teleport'), meters: step.positionJump.meters}));
   }
-  if (refuel !== null) {
-    // One refuel episode is one annotation: its litres grow while the annotation still waits to be sent; an episode
-    // that continues after it was sent gets a new one marked `continues`.
+  if (refuel !== null && prev.fuel.state === 'value' && next.fuel.state === 'value') {
+    // A continuation shares only its baseline with the preceding annotation. Each measured increase belongs to one chunk.
     const waiting = refuel.episode ? undefined : waitingNote(slot, trip.tripUuid, 'refuel');
-    if (waiting !== undefined) {
+    const readings = waiting?.interval.detail?.refuelReadings as [string, number][] | undefined;
+    const end: [string, number] = [next.capture.monotonicNs, next.fuel.value];
+    if (waiting !== undefined && readings && readings.length < REFUEL_READING_LIMIT && readings.at(-1)?.[0] === prev.capture.monotonicNs) {
       const detail = waiting.interval.detail!;
+      readings.push(end);
       waiting.interval.detail = {...detail, addedLiters: (detail.addedLiters as number) + refuel.addedLiters, lastAtMonotonicNs: next.capture.monotonicNs};
     } else {
       const powertrain = liveTruckPowertrain(session.game, next.truck);
-      notes.push(readingNote(trip.tripUuid, next, {cause: 'refuel', addedLiters: refuel.addedLiters, powertrain, ...(refuel.episode ? {} : {continues: true})}));
+      notes.push({kind: 'completeness.add', interval: {tripUuid: trip.tripUuid, kind: 'discontinuity',
+        ...(next.utcMs === null ? {} : {startUtcMs: next.utcMs}),
+        detail: {annotation: true, cause: 'refuel', addedLiters: refuel.addedLiters, powertrain, atMonotonicNs: next.capture.monotonicNs,
+          readingClock: next.capture.clockId, readingGameClock: next.gameTime.clockId,
+          refuelReadings: [[prev.capture.monotonicNs, prev.fuel.value], end], ...(refuel.episode ? {} : {continues: true})}}});
     }
   }
   queueAnnotations(slot, notes);
