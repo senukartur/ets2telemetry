@@ -129,6 +129,12 @@ describe('coherent hidden-renderer observations', () => {
 });
 
 describe('ET-012c strip containment observation', () => {
+  it('accepts the speed limit after speed and rejects its old position after cruise control', async () => {
+    const canonical = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel'];
+    const sections = ['speed', 'speed-limit', 'gear', 'rpm', 'cruise-control', 'fuel'];
+    expect(await observeStrip({sections}, canonical)).toMatchObject({sections});
+    expect(await observeStrip({sections: canonical}, canonical)).toBe(false);
+  });
   // Hand-derived from tests/fixtures/protocol-v0/checkpoint.json: range stays hidden because its estimate is not observed.
   const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time'];
   type Box = {left: number; top: number; width: number; height: number};
@@ -166,6 +172,14 @@ describe('ET-012c strip containment observation', () => {
     const {DRIVING_ONLY_SECTIONS} = await import(observationModule);
     const {OVERLAY_PRESETS, OVERLAY_SECTION_IDS} = await import('../../apps/desktop/src/overlay-sections');
     expect(DRIVING_ONLY_SECTIONS).toEqual(OVERLAY_SECTION_IDS.filter(id => OVERLAY_PRESETS['driving-only'][id]));
+  });
+  it('keeps the serialized strip observation aligned with the product order, including hidden speed', async () => {
+    const {OVERLAY_SECTION_IDS} = await import('../../apps/desktop/src/overlay-sections');
+    const {STRIP_SECTION_IDS} = await import('../../apps/desktop/src/overlay-strip');
+    for (const enabled of [[...OVERLAY_SECTION_IDS], OVERLAY_SECTION_IDS.filter(id => id !== 'speed')]) {
+      const sections = STRIP_SECTION_IDS.filter(id => enabled.includes(id));
+      expect(await observeStrip({sections}, enabled)).toMatchObject({sections});
+    }
   });
   it('names the sections the synthetic checkpoint fixture shows in the strip', async () => {
     const {STRIP_SMOKE_SECTIONS, STRIP_SMOKE_WINDOW} = await import(observationModule);

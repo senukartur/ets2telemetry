@@ -57,7 +57,7 @@ export function journalJobFilterOf(market: Available<string>): JournalJobFilter 
  * A `journalTrips` query. Every filter is applied in SQL before the page limit. `cursor` is the opaque `nextCursor` of
  * the previous page read with the same filter.
  */
-export interface JournalTripsQuery {cursor?: string; game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness; mode?: JournalGameMode['mode']; jobType?: JournalJobFilter}
+export interface JournalTripsQuery {cursor?: string; game?: JournalGame; outcome?: JournalOutcome; completeness?: JournalCompleteness; mode?: JournalGameMode['mode']; jobType?: JournalJobFilter; search?: string; sort?: 'started' | 'cargo' | 'distance'; direction?: 'asc' | 'desc'; includeNetIncome?: true}
 /** A page of a trip's timeline or completeness intervals. `limit` must be one of the allowed values of that read. */
 export interface JournalPageQuery {cursor?: string; limit: number}
 
@@ -117,6 +117,8 @@ export interface JournalTripListItem {
    * job. Read when the page is read, like the sync badges; never exported.
    */
   membership?: 'pending';
+  /** Requested list-only estimate: expected job income less recorded costs in the same known currency. Null when unsupported. */
+  netIncome?: {raw: string; currency: Currency} | null;
   job: JournalJobSummary;
 }
 export interface JournalSyncRow {
@@ -234,7 +236,10 @@ export const isJournalRowCursor = (value: unknown): value is string => typeof va
 export const isJournalEventCursor = (value: unknown): value is string => typeof value === 'string' && EVENT_CURSOR.test(value) && BigInt(value) <= MAX_EVENT_SEQ;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Versioned source-qualified page token. Numeric row/event cursors remain accepted for legacy pages. */
-export const isJournalListCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 160
+export const isJournalSortedCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 4096
+  && /^l6:[0-9a-f-]{36}:(0|[1-9][0-9]{0,18}):[1-9][0-9]{0,18}:[0-9a-f]{64}:[0-9a-f]*$/.test(value)
+  && BigInt(value.split(':')[2]) <= MAX_ROW_ID && BigInt(value.split(':')[3]) <= MAX_ROW_ID && value.split(':')[5].length % 2 === 0;
+export const isJournalListCursor = (value: unknown): value is string => isJournalSortedCursor(value) || typeof value === 'string' && value.length <= 160
   && /^l5:[0-9a-f-]{36}:(0|[1-9][0-9]{0,18}):[1-9][0-9]{0,18}:(ets2|ats|any)\.(open|delivered|cancelled|none|any)\.(complete|partial|unknown|any)\.(single-player|truckersmp|haulmp|convoy|unknown|any)\.(quick-job|cargo-market|freight-market|world-of-trucks|other|any)$/.test(value)
   && BigInt(value.split(':')[2]) <= MAX_ROW_ID && BigInt(value.split(':')[3]) <= MAX_ROW_ID;
 export const isJournalSnapshotCursor = (value: unknown): value is string => typeof value === 'string' && value.length <= 240
@@ -254,10 +259,13 @@ const MODES: readonly unknown[] = ['single-player', 'truckersmp', 'haulmp', 'con
 /** A strict `journalTrips` query: absent, or an object of only the listed filters with listed values and a valid cursor. */
 export function isJournalTripsQuery(value: unknown): value is JournalTripsQuery | undefined {
   if (value === undefined) return true;
-  if (!isRecord(value) || !onlyKeys(value, ['cursor', 'game', 'outcome', 'completeness', 'mode', 'jobType'])) return false;
+  if (!isRecord(value) || !onlyKeys(value, ['cursor', 'game', 'outcome', 'completeness', 'mode', 'jobType', 'search', 'sort', 'direction', 'includeNetIncome'])) return false;
   return (value.cursor === undefined || (isJournalRowCursor(value.cursor) || isJournalListCursor(value.cursor))) && (value.game === undefined || GAMES.includes(value.game))
     && (value.outcome === undefined || OUTCOMES.includes(value.outcome)) && (value.completeness === undefined || COMPLETENESS.includes(value.completeness))
-    && (value.mode === undefined || MODES.includes(value.mode)) && (value.jobType === undefined || JOB_TYPES.includes(value.jobType));
+    && (value.mode === undefined || MODES.includes(value.mode)) && (value.jobType === undefined || JOB_TYPES.includes(value.jobType))
+    && (value.search === undefined || typeof value.search === 'string' && value.search.length <= 120 && [...value.search].every(char => char.charCodeAt(0) >= 32))
+    && (value.sort === undefined || ['started', 'cargo', 'distance'].includes(value.sort as string)) && (value.direction === undefined || ['asc', 'desc'].includes(value.direction as string))
+    && (value.includeNetIncome === undefined || value.includeNetIncome === true);
 }
 /** A strict page query: a `limit` from the allowed set and an optional cursor of the given kind. */
 export function isJournalPageQuery(value: unknown, limits: readonly number[], cursor: 'row' | 'event'): value is JournalPageQuery {
@@ -346,7 +354,7 @@ function gameMode(value: unknown): void {
 }
 const LIST_KEYS = ['isHardMode', 'hardModeDetails', 'tripUuid', 'game', 'gameMode', 'gameModeAmbiguous', 'outcome', 'closeReason', 'recordingCompleteness', 'startedUtcMs', 'endedUtcMs', 'observedDistanceM', 'fuelUsedL', 'job'];
 /** The list row keys of `value`: the optional accounting and membership only when present. */
-const listKeys = (value: unknown) => [...LIST_KEYS, ...(['accounting', 'membership'] as const).filter(key => isRecord(value) && Object.hasOwn(value, key))];
+const listKeys = (value: unknown) => [...LIST_KEYS, ...(['accounting', 'membership', 'netIncome'] as const).filter(key => isRecord(value) && Object.hasOwn(value, key))];
 const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];
 /** Known names, each once and in the order of `names`. */
 function ordered(value: unknown, names: readonly string[]): void {
@@ -382,6 +390,12 @@ function listItem(o: Record<string, unknown>): void {
   available(o.observedDistanceM, nonNegative); available(o.fuelUsedL, nonNegative);
   if (Object.hasOwn(o, 'accounting')) accounting(o.accounting, o.observedDistanceM, o.fuelUsedL);
   if (Object.hasOwn(o, 'membership') && o.membership !== 'pending') bad();
+  if (Object.hasOwn(o, 'netIncome') && o.netIncome !== null) {
+    const net = exact(o.netIncome, ['raw', 'currency']);
+    if (typeof net.raw !== 'string' || !/^(0|-?[1-9][0-9]{0,25})$/.test(net.raw)) bad();
+    currency(net.currency);
+    if ((net.currency as Currency).status !== 'sdk-documented') bad();
+  }
   const job = exact(o.job, ['source', 'sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo', 'market', 'isSpecialJob', 'plannedDistance', 'expectedIncome']);
   oneOf(job.source, ['event', 'checkpoint']);
   for (const key of ['sourceCity', 'sourceCompany', 'destinationCity', 'destinationCompany', 'cargo', 'market']) available(job[key], text);

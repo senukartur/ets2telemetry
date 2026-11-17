@@ -35,17 +35,17 @@ const local = utcMs => {
 const JOB_TYPE = 'Freight market';
 /** The anchors on page 3 of the unfiltered list, newest first, with their hand-written row texts (ETS2 metric, ATS US customary). */
 const ANCHOR_ROWS = [
-  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
+  {trip: T.manySamples, started: local(BASE_UTC + 205_000), game: 'ATS', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: '—', cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
   {trip: T.zeroValues, started: local(BASE_UTC + 203_000), game: 'ATS', route: '(empty) → unavailable (not provided by the game)', outcome: 'Delivered', completeness: 'Complete',
     observed: '0.0 mi', cargo: NOT_OBSERVED, jobType: JOB_TYPE},
-  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: NOT_OBSERVED, cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
-  {trip: T.restartClosed, started: local(BASE_UTC + 27_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — the game or plugin restarted', completeness: 'Partial', observed: NOT_OBSERVED,
+  {trip: T.open, started: local(BASE_UTC + 101_000), game: 'ETS2', route: ROUTE, outcome: 'In progress', completeness: 'Unknown', observed: '—', cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
+  {trip: T.restartClosed, started: local(BASE_UTC + 27_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — the game or plugin restarted', completeness: 'Partial', observed: '—',
     cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
-  {trip: T.gapClosed, started: local(BASE_UTC + 22_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — events were lost', completeness: 'Partial', observed: NOT_OBSERVED,
+  {trip: T.gapClosed, started: local(BASE_UTC + 22_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — events were lost', completeness: 'Partial', observed: '—',
     cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
-  {trip: T.differentJob, started: local(BASE_UTC + 20_000), game: 'ETS2', route: ROUTE, outcome: 'No outcome — a different job started', completeness: 'Partial', observed: NOT_OBSERVED,
+  {trip: T.differentJob, started: local(BASE_UTC + 20_000), game: 'ETS2', route: ROUTE, outcome: 'Cancelled', completeness: 'Partial', observed: '—',
     cargo: 'Synthetic Cargo', jobType: JOB_TYPE},
-  {trip: T.cancelled, started: local(BASE_UTC + 12_000), game: 'ETS2', route: ROUTE, outcome: 'Cancelled', completeness: 'Complete', observed: NOT_OBSERVED,
+  {trip: T.cancelled, started: local(BASE_UTC + 12_000), game: 'ETS2', route: ROUTE, outcome: 'Cancelled', completeness: 'Complete', observed: '—',
     cargo: 'Synthetic Cancel Cargo', jobType: JOB_TYPE},
   {trip: T.delivered, started: local(BASE_UTC + 4_000), game: 'ETS2', route: ROUTE, outcome: 'Delivered', completeness: 'Complete', observed: '152.0 km', cargo: 'Synthetic Cargo', jobType: JOB_TYPE}
 ];
@@ -60,7 +60,7 @@ const ANCHOR_DETAILS = [
   {trip: T.cancelled, title: `ETS2: ${ROUTE}`, outcome: 'Cancelled', completeness: 'Complete', fields: {'money-penalty': '12000 EUR (SDK-documented)',
     'money-fine': '9007199254741238 EUR (SDK-documented), 3 amounts; 50 (currency unknown), 1 amount', 'money-toll': '20 USD (SDK-documented), 1 amount; 1 unavailable (not observed)',
     'distance-deliveredDistance': 'none (not delivered)', 'samples-sampleCount': '0'}, notes: {}},
-  {trip: T.differentJob, title: `ETS2: ${ROUTE}`, outcome: 'No outcome — a different job started', completeness: 'Partial', fields: {'money-toll': '10 EUR (SDK-documented), 1 amount',
+  {trip: T.differentJob, title: `ETS2: ${ROUTE}`, outcome: 'Cancelled', completeness: 'Partial', fields: {'money-toll': '10 EUR (SDK-documented), 1 amount',
     'money-revenueOrPenalty': 'none (no delivery or cancellation)', 'truck-licensePlate': 'SYN 0001'}, notes: {trailers: [NO_TRAILER]}},
   {trip: T.gapClosed, title: `ETS2: ${ROUTE}`, outcome: 'No outcome — events were lost', completeness: 'Partial', fields: {'money-fine': '70 EUR (SDK-documented), 1 amount',
     'truck-licensePlate': 'SYN 0003', 'trip-ended': local(BASE_UTC + 24_000)}, notes: {trailers: [NO_TRAILER]}},
@@ -70,7 +70,7 @@ const ANCHOR_DETAILS = [
     'money-toll': '5 EUR (SDK-documented), 1 amount', 'samples-sampleCount': '2'}, notes: {truck: [NO_TRUCK], trailers: [NO_TRAILER]}},
   {trip: T.zeroValues, title: 'ATS: (empty) → unavailable (not provided by the game)', outcome: 'Delivered', completeness: 'Complete', fields: {'distance-plannedDistance': '0.0 mi',
     'distance-observedDistance': '0.0 mi', 'distance-deliveredDistance': 'unavailable (not provided by the game)', 'fuel-fuelUsed': NOT_OBSERVED,
-    'money-expectedIncome': '0 USD (SDK-documented)', 'money-revenue': '0 USD (SDK-documented)', 'delivery-earnedXp': '0', 'delivery-cargoDamage': '0%',
+    'money-expectedIncome': '0 USD', 'money-revenue': '0 USD (SDK-documented)', 'delivery-earnedXp': '0', 'delivery-cargoDamage': '0%',
     'job-cargoMass': 'unavailable (not provided by the game)', 'job-cargoLoaded': 'unavailable (invalid reading)', 'samples-sampleCount': '1'}, notes: {}},
   {trip: T.manySamples, title: `ATS: ${ROUTE}`, outcome: 'In progress', completeness: 'Unknown', fields: {'distance-plannedDistance': '94.4 mi', 'truck-fuelCapacity': '264.2 US gal',
     'samples-sampleCount': '650'}, notes: {trailers: [NO_TRAILER]}}
@@ -87,7 +87,7 @@ function listState(expected) {
   if (d.querySelector('[data-testid="journal-list-loading"]')) return false;
   const rows = [...d.querySelectorAll('[data-testid="journal-list"] [data-testid="journal-row"]')].map(row => {
     const cell = id => row.querySelector(`[data-testid="${id}"]`)?.textContent ?? null;
-    return {trip: row.getAttribute('data-trip'), started: cell('journal-row-started'), game: cell('journal-row-game-name'), route: cell('journal-row-route'), outcome: cell('journal-row-outcome'),
+    return {trip: row.getAttribute('data-trip'), started: row.querySelector('[data-testid="journal-row-started"] time')?.getAttribute('title') ?? null, game: cell('journal-row-game-name'), route: cell('journal-row-route'), outcome: cell('journal-row-outcome'),
       completeness: cell('journal-row-completeness'), observed: cell('journal-row-observed'), cargo: cell('journal-row-cargo'),
       jobType: cell('journal-row-job-type')};
   });

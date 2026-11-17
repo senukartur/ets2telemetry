@@ -592,6 +592,7 @@ export type I18nKey =
   | 'col.started' | 'col.game' | 'col.cargo' | 'col.route' | 'col.distance' | 'col.money' | 'col.outcome' | 'col.recording' | 'col.sync'
   | 'col.gameMode' | 'col.jobType' | 'col.open' | 'col.income' | 'j.filters' | 'j.tripsTable' | 'j.mode' | 'j.anyMode' | 'j.anyJobType' | 'j.jobOther' | 'j.modeUnknown'
   | 'j.openTrip' | 'j.showing' | 'j.syncNote' | 'j.trips.one' | 'j.trips.few' | 'j.trips.many' | 'j.trips.other' | 'j.hours'
+  | 'j.clearFilter' | 'j.reset' | 'j.found' | 'j.range' | 'j.pages' | 'j.previousPage' | 'j.nextPage' | 'j.retry'
   | 'j.of' | 'j.expected' | 'j.page' | 'j.prev' | 'j.next' | 'j.count'
   | 'out.open' | 'out.delivered' | 'out.late' | 'out.cancelled' | 'out.none'
   | 'sync.sent' | 'sync.queued' | 'sync.error' | 'sync.none'

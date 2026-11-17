@@ -17,13 +17,17 @@ import {
 // the sequence tags 96, 96, speed 140, gear 90, RPM 130, cruise control 140, fuel 190, range 140, SDK consumption 230, cargo,
 // origin and destination 300, distance driven and remaining 150, deadline 220, income 300, game time 200, the break 150 and
 // the indicator 100, each after a 14 px gap.
-// ET-084: the speed limit sign is a fixed 32 px item after cruise control. The rows it changes are marked ET-084 and re-derived
-// by hand with the sequence tags 96, 96, speed 140, gear 90, RPM 130, cruise control 140, speed limit 32, fuel 190, range 140, SDK
+// ET-084: the speed limit sign is a fixed 32 px item immediately after speed. The rows are derived
+// by hand with the sequence tags 96, 96, speed 140, speed limit 32, gear 90, RPM 130, cruise control 140, fuel 190, range 140, SDK
 // consumption 230, cargo, origin and destination 300, distance driven and remaining 150, deadline 220, income 300, game time 200,
 // the break 150 and the indicator 100, each after a 14 px gap: the line of every section is 3720 CSS px.
 const only = (...ids: OverlaySectionId[]): OverlaySections =>
   Object.freeze(Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, ids.includes(id)])) as Record<OverlaySectionId, boolean>);
 const ALL = DEFAULT_OVERLAY_SECTIONS;
+// Expected rendered order, independent of the production strip order constant.
+const STRIP_ORDER: readonly OverlaySectionId[] = ['speed', 'speed-limit', 'gear', 'rpm', 'cruise-control', 'fuel', 'range',
+  'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income',
+  'game-time', 'mandatory-break', 'rest-state'];
 
 it('fixes the hand-written maximum widths of every strip item', () => {
   expect(STRIP_ITEM_MAX_WIDTH_CSS).toEqual({'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'speed-limit': 32, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300,
@@ -53,14 +57,15 @@ it.each([
   // gear, RPM and cruise control fill the second row (388), so fuel and range share the third (344) and SDK consumption,
   // which joined range before, starts a fourth: twelve rows, 458.
   // ET-084: at 1280, 1279, 1258, 1248 and 1247 the first row now ends at range (1166), the others are those of ET-071: four rows.
-  // At 768 (inner 742) the rows end at RPM 608, range 544 (SDK consumption would reach 788; it just fitted before), cargo 544,
-  // destination 614, the deadline 548, the break 678, so the indicator (792) takes a seventh row: 268 (six, 230, before). At
-  // 928 (inner 902) the first row ends at the sign (808) and the others at cargo 902, distance driven 778, income 698 and
-  // the indicator 478, still 5. At 944 (inner 918) they end at 808, 902, 778, game time 912 and the indicator 264, still 5.
-  // At the 480 minimum (inner 454) the sign joins the second row (434), still twelve rows.
+  // At 768 the sign after speed lets consumption end the second row at 742; the row table below includes rest state. At
+  // 928 (inner 902) the first row ends at cruise control (808) and the others at cargo 902, distance driven 778, income 698 and
+  // the indicator 642, still 5. At 944 (inner 918) they end at 808, 902, 778, game time 912 and the indicator 428, still 5.
+  // At the 480 minimum (inner 454) the sign joins speed on the first row (406), still twelve rows.
   {name: 'every section at 1280 (1920 x 1080)', sections: ALL, width: 1280, rows: 4, height: 154},
   {name: 'every section at 1248 (1280 x 720)', sections: ALL, width: 1248, rows: 4, height: 154},
-  {name: 'every section at 768 (800 x 600)', sections: ALL, width: 768, rows: 7, height: 268},
+  // With the sign after speed: rows end at RPM (654), consumption (742), origin (614), distance remaining (628),
+  // income (534), and Hard Mode (642, including game time, mandatory break and rest state): six rows, inner width 742.
+  {name: 'every section at 768 (800 x 600)', sections: ALL, width: 768, rows: 6, height: 230},
   {name: 'every section at 928 (960 x 540)', sections: ALL, width: 928, rows: 5, height: 192},
   {name: 'every section at 1247 (fractional client)', sections: ALL, width: 1247, rows: 4, height: 154},
   {name: 'every section at the 480 minimum', sections: ALL, width: 480, rows: 12, height: 458},
@@ -113,9 +118,9 @@ it('reserves the speed limit sign its own 32 px slot (ET-084)', () => {
   expect(stripRowCount(only('speed-limit'), 391)).toBe(2);
   // At 1280 it costs no row: the first row ends at range, 1166 of the inner 1254, where SDK consumption did not fit before either.
   expect(stripRowCount(ALL, 1280)).toBe(stripRowCount({...ALL, 'speed-limit': false}, 1280));
-  // At 768 (inner 742) it does: without it SDK consumption ends the second row exactly at 742 and every section takes six rows.
+  // At 768 (inner 742), placing the sign after speed keeps consumption on the second row and the total at six rows.
   expect(stripRowCount({...ALL, 'speed-limit': false}, 768)).toBe(6);
-  expect(stripRowCount(ALL, 768)).toBe(7);
+  expect(stripRowCount(ALL, 768)).toBe(6);
 });
 
 it('reserves the next mandatory break its own 150 px slot (ET-052)', () => {
@@ -199,7 +204,7 @@ it('reserves at least as many rows as any rendered strip with values up to their
   const next = random(0x012c);
   for (let run = 0; run < 5000; run++) {
     const width = 480 + Math.floor(next() * 801), inner = width - 26;
-    let enabled = OVERLAY_SECTION_IDS.filter(() => next() < 0.5);
+    let enabled = STRIP_ORDER.filter(() => next() < 0.5);
     if (!enabled.length) enabled = [OVERLAY_SECTION_IDS[Math.floor(next() * OVERLAY_SECTION_IDS.length)]];
     // Zero, one or two tags; every value somewhere between empty and its maximum width; the Hard Mode indicator last (ET-070).
     const tags = Array.from({length: Math.floor(next() * 3)}, () => next() * STRIP_TAG_MAX_WIDTH_CSS);
@@ -215,7 +220,7 @@ it('reserves at least as many rows as any rendered strip needs at every scale, w
     // A DIP width and a scale with two decimals; the real CSS inner width is width / scale minus the snapped borders.
     const scale = Math.round((0.5 + next() * 1.5) * 100) / 100, width = Math.round(480 * scale) + Math.floor(next() * 801 * scale);
     const inner = width / scale - 2 * Math.max(1, 1 / scale) - 24;
-    let enabled = OVERLAY_SECTION_IDS.filter(() => next() < 0.5);
+    let enabled = STRIP_ORDER.filter(() => next() < 0.5);
     if (!enabled.length) enabled = [OVERLAY_SECTION_IDS[Math.floor(next() * OVERLAY_SECTION_IDS.length)]];
     // Values at their maximum width half of the time, so lines land on the boundary.
     const size = (cap: number) => next() < 0.5 ? cap : next() * cap;

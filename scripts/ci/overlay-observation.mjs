@@ -59,7 +59,9 @@ export function stripLayoutObservation(expected) {
   if (root.getAttribute('data-layout') !== 'strip' || root.getAttribute('data-freshness') !== 'current') return false;
   const nodes = Array.from(root.querySelectorAll('[data-testid^="overlay-section-"]'));
   const sections = nodes.map(node => String(node.getAttribute('data-testid')).slice('overlay-section-'.length));
-  if (sections.length !== expected.sections.length || sections.some((id, index) => id !== expected.sections[index])) return false;
+  const order = ['speed', 'speed-limit', ...expected.sections.filter(id => id !== 'speed' && id !== 'speed-limit')]
+    .filter(id => expected.sections.includes(id));
+  if (sections.length !== order.length || sections.some((id, index) => id !== order[index])) return false;
   const indicators = Array.from(root.querySelectorAll('[data-testid="overlay-hard-mode"]'));
   if (indicators.length !== 1) return false;
   const row = root.querySelector('.overlay-strip-row');

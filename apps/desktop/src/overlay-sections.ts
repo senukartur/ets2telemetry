@@ -8,9 +8,8 @@ import {staleOverlayHardMode} from './overlay-hard-mode';
 
 export const OVERLAY_LAYOUTS: readonly OverlayLayout[] = Object.freeze(['strip', 'card', 'cluster', 'hud']);
 /**
- * Canonical order: the settings file, the projection and every layout list sections in this order, which is also the
- * group order below (the strip packs its rows in canonical order and renders them in group order). A new section goes at
- * the end of its group. Parsing reads stored keys by name.
+ * Canonical settings, projection and group order. The strip uses STRIP_SECTION_IDS to place the speed limit immediately
+ * after speed; other layouts keep this order. A new section goes at the end of its group. Parsing reads stored keys by name.
  */
 export const OVERLAY_SECTION_IDS: readonly OverlaySectionId[] = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo',
   'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state']);
