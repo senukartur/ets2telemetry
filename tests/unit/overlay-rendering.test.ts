@@ -394,3 +394,15 @@ it('fixes every sign box, border and font in the stylesheet per layout and shape
     expect(tokens, name).toContain(`${name}: ${value};`); expect(design, name).toContain(`${name}: ${value};`);
   }
 });
+
+it('renders Rest State with an accessible label and a decorative bed in every overlay layout (REG-009, REG-016)', () => {
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    const view = overlayView({...base, layout, language: 'ru', sections: [{id: 'rest-state', state: 'value', text: '8 h 20 min'}]});
+    const html = renderToStaticMarkup(React.createElement(OverlayContent, {view}));
+    expect(html, layout).toContain('lucide-bed');
+    expect(html, layout).toContain('Запас бодрости');
+    expect(html, layout).toContain('8 ч 20 мин');
+    expect(html, layout).not.toContain('data-urgency');
+    if (layout === 'strip') expect(html).toContain('class="overlay-visually-hidden">Запас бодрости</span>');
+  }
+});

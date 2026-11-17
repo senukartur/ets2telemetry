@@ -272,7 +272,7 @@ void failure_cleanup() {
     host.throw_event = 0; host.fail_event = 0;
     require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "failed init allows retry");
     host.throw_cleanup = true; adapter->shutdown(); auto stopped = read(*adapter);
-    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 19, "throwing unregister isolates all cleanup operations"); // 13 channels (ET-052 adds the break channel, ET-071 cruise control, ET-084 the speed limit) and 6 events
+    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 20, "throwing unregister isolates all fourteen channel and six event cleanup operations");
   }
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); host.erroneous = "truck.engine.rpm";
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_generic_error && host.channels.empty() && host.events.empty(), "unexpected channel registration errors fail closed");
@@ -655,7 +655,7 @@ std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0, Field
   std::vector<IsolationFrame> frames;
   const auto end_frame = [&] {
     if (break_mode == 2) {
-      auto value = optional == Field::mandatory_break ? s32(static_cast<std::int32_t>(frames.size()) * 7 - 3) : floating(static_cast<float>(frames.size()) * 2.5F);
+      auto value = (optional == Field::mandatory_break || optional == Field::rest_state) ? s32(static_cast<std::int32_t>(frames.size()) * 7 - 3) : floating(static_cast<float>(frames.size()) * 2.5F);
       host.channel(optional, &value);
     }
     host.frame_end(); IsolationFrame output; output.snapshot = std::make_unique<Snapshot>(); require(adapter->read_latest(*output.snapshot), "v0 frame published");
@@ -1544,6 +1544,38 @@ void speed_limit(const std::filesystem::path& fixtures) {
     require(delivered && observations > 20, "the limit was delivered and the script exercised diagnostics");
   }
 }
+void rest_state() {
+  for (const bool supported : {true, false}) {
+    BreakRig rig([&](Host& h) { if (!supported) h.missing = "rest.stop"; }, SCS_RESULT_ok);
+    const auto callback = rig.host.channels.find("rest.stop");
+    require((callback != rig.host.channels.end()) == supported, "optional Rest State registration");
+    const auto rest = [&] { return v1_read(*rig.adapter)->state.rest_state_min; };
+    require(rest().state == (supported ? v1::FieldState::not_observed : v1::FieldState::not_supported), "initial Rest State availability");
+    if (!supported) continue;
+    require(callback->second.type == SCS_VALUE_TYPE_s32, "SDK Rest State requests s32");
+    for (const std::int32_t minutes : {660, 0, INT32_MIN, INT32_MAX}) {
+      auto value = s32(minutes);
+      rig.start(); rig.host.channel(Field::rest_state, &value); rig.host.frame_end();
+      require(rest().available() && rest().value == minutes, "Rest State preserves the signed SDK value");
+    }
+    rig.start(); rig.host.channel(Field::rest_state, nullptr); rig.host.frame_end();
+    require(rest().state == v1::FieldState::not_observed, "NULL Rest State is not-observed");
+    auto wrong = floating(42);
+    rig.start(); rig.host.channel(Field::rest_state, &wrong); rig.host.frame_end();
+    require(rest().state == v1::FieldState::invalid, "wrong Rest State type is invalid");
+  }
+  const auto absent = isolation_run(true, 1, Field::rest_state), present = isolation_run(true, 2, Field::rest_state);
+  require(absent.size() == present.size() && present.size() == 8, "Rest State isolation frames");
+  const auto index = static_cast<std::size_t>(Field::rest_state);
+  bool delivered = false;
+  for (std::size_t i = 0; i < present.size(); ++i) {
+    same_v0(*absent[i].snapshot, *present[i].snapshot, index);
+    delivered = delivered || present[i].snapshot->state.channels[index].status == Availability::available;
+    require(absent[i].evidence.size() == present[i].evidence.size(), "Rest State preserves CAP0 envelope count");
+    for (std::size_t e = 0; e < present[i].evidence.size(); ++e) same_cap0(absent[i].evidence[e], present[i].evidence[e]);
+  }
+  require(delivered, "the isolation script delivered Rest State");
+}
 }
 int main(int argc, char** argv) {
   try {
@@ -1563,6 +1595,7 @@ int main(int argc, char** argv) {
     else if (argc == 3 && std::string(argv[1]) == "cruise-control") cruise_control(argv[2]);
     // ET-084: the optional speed limit channel; needs tests/fixtures for the hand-written minor-4 corpus.
     else if (argc == 3 && std::string(argv[1]) == "speed-limit") speed_limit(argv[2]);
+    else if (argc == 2 && std::string(argv[1]) == "rest-state") rest_state();
     else {
       game_mode_evidence(); lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();

@@ -170,6 +170,7 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.game-time": "Игровое время",
   "copy.delivery-deadline": "Срок доставки",
   "copy.next-mandatory-break": "До обязательного перерыва",
+  "copy.rest-state": "Запас бодрости",
   "copy.cargo": "Груз",
   "copy.source-city": "Город отправления",
   "copy.source-company": "Компания отправления",

@@ -24,7 +24,7 @@ const ALL = DEFAULT_OVERLAY_SECTIONS;
 // another (a panel row in the cluster). ET-084's seventeenth, the speed limit, adds one to the card and the HUD and none to the
 // cluster, whose sign has no panel row. The historical rows below keep the sixteen sections of ET-071, the fifteen of ET-052 and
 // the fourteen of ET-012d, so their hand-written numbers still test the same sets.
-const WITHOUT_LIMIT = {...ALL, 'speed-limit': false};
+const WITHOUT_LIMIT = {...ALL, 'rest-state': false, 'speed-limit': false};
 const WITHOUT_CRUISE = {...WITHOUT_LIMIT, 'cruise-control': false};
 const WITHOUT_BREAK = {...WITHOUT_CRUISE, 'mandatory-break': false};
 const WITHOUT_DRIVEN = {...WITHOUT_BREAK, 'distance-driven': false};
@@ -47,7 +47,7 @@ it('fixes the hand-written row constants of each layout', () => {
 it.each([
   // ET-084: 72 + 24 × 17 = 480, 57 + 21 × 13 = 330 (the sign takes no panel row) and 42 + 24 × 17 = 450. With speed, gear and RPM
   // on the sign's hero needs no surplus.
-  {name: 'every section', sections: ALL, n: 17, m: 13, card: 480, cluster: 330, hud: 450},
+  {name: 'every section', sections: ALL, n: 18, m: 14, card: 504, cluster: 351, hud: 474},
   // ET-071: 72 + 24 × 16 = 456, 57 + 21 × 13 = 330 (speed, gear and RPM are in the gauge; cruise control is a panel row) and
   // 42 + 24 × 16 = 426.
   {name: 'every section but the speed limit', sections: WITHOUT_LIMIT, n: 16, m: 13, card: 456, cluster: 330, hud: 426},
@@ -80,8 +80,8 @@ it('counts every enabled section in the cluster panel when no gauge section is e
   // Cruise control to the break are thirteen panel sections and the Hard Mode row: 36 + 21 × 14 = 330, as with every section
   // (ET-070, ET-071). The speed limit sign (ET-084) stands in the gauge's place, not in a panel row.
   const panelOnly = {...ALL, speed: false, gear: false, rpm: false};
-  expect(layoutRowCount('cluster', panelOnly)).toBe(14);
-  expect(layoutReservedCss('cluster', panelOnly)).toBe(330);
+  expect(layoutRowCount('cluster', panelOnly)).toBe(15);
+  expect(layoutReservedCss('cluster', panelOnly)).toBe(351);
   // Gear alone shows only the gauge: the panel keeps only the Hard Mode row, 36 + 21 = 57; fuel adds a second, 78.
   expect(layoutReservedCss('cluster', only('gear'))).toBe(57);
   expect(layoutReservedCss('cluster', only('fuel'))).toBe(78);

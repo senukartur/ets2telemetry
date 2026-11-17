@@ -112,5 +112,7 @@ export interface NormalizedLiveState {
    * unavailable. v1 minor 4 carries it; a source below minor 4 reports `not-supported`; v0 does not carry it.
    */
   speedLimit: Reading<number>;
+  /** Signed SDK Rest State in game minutes from protocol v1 minor 5. */
+  restState: Reading<number>;
   configurationRevision: string;
 }

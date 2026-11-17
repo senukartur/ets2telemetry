@@ -170,6 +170,7 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   "copy.game-time": "Game time",
   "copy.delivery-deadline": "Delivery deadline",
   "copy.next-mandatory-break": "Next mandatory break",
+  "copy.rest-state": "Rest State",
   "copy.cargo": "Cargo",
   "copy.source-city": "Source city",
   "copy.source-company": "Source company",

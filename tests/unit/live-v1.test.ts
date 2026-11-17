@@ -10,7 +10,7 @@ import {smokePair, v1Projection, v1SourceState} from '../shared/live-v1-fixtures
 
 const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
   'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox', 'nextMandatoryBreak',
-  'cruiseControl', 'speedLimit'];
+  'cruiseControl', 'speedLimit', 'restState'];
 /** ET-052 MB5: a minor-0 or minor-1 state carries no break, so the projection reports it not-supported. */
 const NOT_SUPPORTED_BREAK = {available: false, reason: 'not-supported', unit: 'min'};
 /** ET-071: a state below minor 3 carries no cruise control, so the projection reports it not-supported. */
@@ -145,6 +145,16 @@ describe('liveV1Projection', () => {
     }
     // Cruise control rides along unchanged beside it.
     expect(liveV1Projection(minor4SourceState('snapshot')).observation!.state.cruiseControl).toEqual(minor4('snapshot').data.state.cruiseControl);
+  });
+  it('preserves the minor-5 Rest State reading and substitutes not-supported for an older source (REG-009)', () => {
+    for (const name of ['checkpoint', 'snapshot-zero', 'snapshot-max', 'snapshot-not-observed', 'snapshot-not-supported', 'snapshot-invalid']) {
+      const wire = decodePayload(new Uint8Array(readFileSync('tests/fixtures/protocol-v1/minor5/' + name + '.json')), 'server', {maxMinor: 5});
+      if (wire.kind !== 'checkpoint' && wire.kind !== 'snapshot') throw new Error('Expected a state fixture');
+      const live = liveV1Projection(sourceStateOf(wire));
+      expect(live.observation!.state.restState, name).toEqual(wire.data.state.restState);
+      expect(parseLiveV1(structuredClone(live), 'synthetic'), name).toBeDefined();
+    }
+    expect(liveV1Projection(minor4SourceState('snapshot')).observation!.state.restState).toEqual({available: false, reason: 'not-supported', unit: 'min'});
   });
   it('omits the observation before the first one', () => {
     expect(liveV1Projection(v1SourceState('snapshot-live', {status: 'waiting', reason: 'Awaiting selected source', fresh: false, observation: undefined})))

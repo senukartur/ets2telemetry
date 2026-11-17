@@ -333,7 +333,7 @@ try {
       await handle.dispose();
     };
     // ET-012d (decisions K10 and K11): the card, HUD and cluster with every v1 section the pair shows. The saved sections
-    // are first set to exactly those thirteen, so each window reserves no row for a hidden section (range and distance
+    // are first set to exactly those sixteen, so each window reserves no row for a hidden section (range and distance
     // driven); without a game window the controller never places the overlay, so the hidden window is sized here
     // (LAYOUT_SMOKE_WINDOWS for those sections at the scale setting 1 and its zoom LAYOUT_SMOKE_ZOOM, tied to
     // overlayWindowSize and overlayZoom by a unit test). Each observation is stored before it is verified, so a failed
@@ -420,9 +420,12 @@ try {
     result.telemetry.liveFields = await waitForCompleteLive(window, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V0V1_HIDDEN_ROWS);
     result.telemetry.v1Fields = Object.fromEntries(SYNTHETIC_V1_LIVE_ROWS.map(([id]) => [id, result.telemetry.liveFields[id]]));
     result.telemetry.overlayV1 = {current: await waitForOverlayV1(overlay, SYNTHETIC_V1_OVERLAY_CURRENT)};
+    assert.equal(await window.getByTestId('live.session.restState').innerText(), '8 h 20 min');
+    assert.equal(await window.getByTestId('live.session').locator('svg.lucide-bed[aria-hidden=true]').count(), 1);
+    assert.equal(await overlay.getByTestId('overlay-section-rest-state').locator('svg.lucide-bed[aria-hidden=true]').count(), 1);
     // ET-052: the 95-minute break is soon, so the strip item carries the urgency, the state word in its name and the orange token.
     result.telemetry.overlayV1.breakCue = await waitForOverlayBreakCue(overlay, SYNTHETIC_V1_BREAK_CUE);
-    // ET-012c reserves strip rows for every enabled section: with the v1 sections all thirteen shown must lie inside the
+    // ET-012c reserves strip rows for every enabled section: with the v1 sections all sixteen shown must lie inside the
     // overlay window. This is an assertion; the overflow record below stays for review.
     result.telemetry.stripLayout = verifyStripLayout(await waitForStripLayout(overlay, {sections: SYNTHETIC_V1_STRIP_SECTIONS}));
     result.telemetry.overlayOverflow = await overlay.evaluate(overlayOverflow);

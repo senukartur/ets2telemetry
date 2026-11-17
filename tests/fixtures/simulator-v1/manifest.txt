@@ -27,3 +27,4 @@ wire-faults
 pipe-reconnect
 pipe-stalled-reader
 speed-limit
+rest-state

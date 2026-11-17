@@ -29,6 +29,14 @@ html:has(.overlay-body) { background: transparent; }
    max-width, and a longer value ends in an ellipsis. The surface takes its content height at the top of the window; the
    unused reserved rows stay transparent. */
 .overlay-strip { justify-content: center; align-items: flex-start; }
+.overlay-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
 .overlay-strip-row > * { height: 38px; }
 .overlay-strip-row > .overlay-tag { height: auto; align-self: center; }

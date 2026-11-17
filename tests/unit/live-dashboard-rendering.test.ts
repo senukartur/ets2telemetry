@@ -217,3 +217,26 @@ it('keeps the fuel text contract and renders every field test id in the details 
     expect(html.indexOf('data-testid="live.details"')).toBeGreaterThan(html.indexOf('data-testid="live.session"'));
   }
 });
+
+describe('Rest State (REG-009)', () => {
+  it.each([
+    ['en', 'Rest State', '8 h 20 min', '0 min'],
+    ['ru', 'Запас бодрости', '8 ч 20 мин', '0 мин']
+  ] as const)('shows a localized bed and Rest State outside a job (%s)', (language, label, expected, zero) => {
+    for (const [minutes, reading] of [[500, expected], [0, zero], [-3, zero], [null, '—']] as const) {
+      const live = smokePair({restState: minutes === null ? {available: false, unit: 'min', reason: 'not-observed'} : {available: true, unit: 'min', value: minutes}});
+      live.observation!.state.configuration.job = {available: false, reason: 'not-observed'};
+      const html = render(live, language);
+      const session = between(html, 'live.session', 'live.details');
+      expect(session).toMatch(new RegExp('class="lucide lucide-bed[^"]*" aria-hidden="true"[^>]*>|aria-hidden="true"[^>]*class="lucide lucide-bed[^"]*"'));
+      expect(session).toContain(label);
+      expect(session).toContain(`data-testid="live.session.restState">${reading}</dd>`);
+      expect(html).toContain('data-testid="live-rest-state"');
+      expect(html).not.toContain('data-testid="live.job.break"');
+    }
+  });
+  it('shows a dash for stale readings and omits the row until a v1 source is carried', () => {
+    expect(render(smokePair({status: 'stale', fresh: false}))).toContain('data-testid="live.session.restState">—</dd>');
+    expect(render(smokeV0())).not.toContain('data-testid="live.session.restState"');
+  });
+});

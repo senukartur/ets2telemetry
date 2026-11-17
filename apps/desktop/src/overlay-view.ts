@@ -114,13 +114,13 @@ export const OVERLAY_PLACEHOLDER: OverlayPresentation = Object.freeze({source: '
   fuel: '—', fuelUnit: null, freshness: 'unavailable', layout: 'strip', paused: false, sections: Object.freeze([]), editing: false, language: 'en'});
 const DASH = '—';
 /**
- * ET-052: the longest expected break text, "00 h 00 min" in the viewer's language, in the strip's CSS reserve like the other
+ * The expected reserve width for remaining game time, "00 h 00 min" in the viewer's language, in the strip's CSS reserve like the other
  * stable widths (ET-045d), so a value change such as "9 min" to "1 h 05 min" never resizes the section. It is built with
  * the same localization as the value, so the Russian "ч" and "мин" are never under-reserved.
  */
-const BREAK_RESERVE = '00 h 00 min';
+const DURATION_RESERVE = '00 h 00 min';
 const reserveFor = (id: OverlaySectionId, language: AppLanguage): string | undefined =>
-  id === 'mandatory-break' ? localizeDeadlineString(BREAK_RESERVE, language) : VALUE_RESERVES[id];
+  id === 'mandatory-break' || id === 'rest-state' ? localizeDeadlineString(DURATION_RESERVE, language) : VALUE_RESERVES[id];
 /**
  * Stable value widths of the strip (ET-045d W1): a three-digit speed, the widest reserved gear form in the active font and a four-digit RPM. A wider value grows under the section's cap and ellipsis.
  * ET-050 (GD6): the gear reserve does not depend on the gear display mode. It lists the reverse form and both manual
@@ -212,7 +212,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     if (available) {
       if (section.id === 'game-time') {
         value = localizeGameTimeString(value, language);
-      } else if (section.id === 'deadline' || section.id === 'mandatory-break') {
+      } else if (section.id === 'deadline' || section.id === 'mandatory-break' || section.id === 'rest-state') {
         value = localizeDeadlineString(value, language);
       } else if (['sdk-consumption', 'range', 'distance-driven', 'distance-remaining', 'expected-income'].includes(section.id)) {
         value = localizedMeasurement(value, language);

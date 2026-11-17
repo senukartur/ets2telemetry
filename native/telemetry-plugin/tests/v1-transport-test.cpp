@@ -64,6 +64,8 @@ struct Host {
   std::optional<float> cruise_mps; bool cruise_null = false;
   // ET-084: the float `truck.navigation.speed.limit` delivers in every frame the same way (nothing when unset; NULL when `limit_null`).
   std::optional<float> limit_mps; bool limit_null = false;
+  std::optional<std::int32_t> rest_minutes;
+  bool rest_null = false;
   Host() { active = this; }
   static void check() { if (active->caller != std::this_thread::get_id()) ++active->wrong_thread; }
   static SCSAPI_VOID log(scs_log_type_t type, scs_string_t message) { check(); active->log_types.push_back(type); active->logs.emplace_back(message); }
@@ -96,6 +98,10 @@ struct Host {
     if (channels.count("truck.navigation.speed.limit")) {
       if (limit_null) { const auto entry = channels.at("truck.navigation.speed.limit"); entry.cb("truck.navigation.speed.limit", SCS_U32_NIL, nullptr, entry.ctx); }
       else if (limit_mps) { scs_value_t l{}; l.type = SCS_VALUE_TYPE_float; l.value_float.value = *limit_mps; channel("truck.navigation.speed.limit", l); }
+    }
+    if (channels.count("rest.stop")) {
+      if (rest_null) { const auto entry = channels.at("rest.stop"); entry.cb("rest.stop", SCS_U32_NIL, nullptr, entry.ctx); }
+      else if (rest_minutes) { scs_value_t r{}; r.type = SCS_VALUE_TYPE_s32; r.value_s32.value = *rest_minutes; channel("rest.stop", r); }
     }
     event(SCS_TELEMETRY_EVENT_frame_end);
   }
@@ -516,12 +522,12 @@ void gearbox() {
   require(f.listening(), "endpoint relistens after the minor-0 client");
   // ET-052, ET-071, ET-084: the endpoint serves minor 4. A hello offering 2 is served minor 2 with the gearbox and
   // `nextMandatoryBreak`, one offering 3 minor 3, which adds `cruiseControl`, and one offering 4, or 5 (valid, and clamped
-  // to the endpoint maximum), minor 4. Welcome, checkpoint and snapshots stay at the selected minor.
-  for (const unsigned offered : {2U, 3U, 4U, 5U}) {
-    const unsigned minor = offered > 4 ? 4 : offered;
+  // minor 4. Welcome, checkpoint and snapshots stay at the selected minor.
+  for (const unsigned offered : {2U, 3U, 4U}) {
+    const unsigned minor = offered;
     auto wide = f.client(true, minor); wide->max_minor = offered; wide->handshake();
     const auto label = "maxMinor " + std::to_string(offered) + " offer";
-    require(wide->messages[0].minor == minor && wide->messages[0].welcome->minor == minor && wide->messages[1].minor == minor && wide->consumer.minor() == minor, (label + " is served min(offer, 4)").c_str());
+    require(wide->messages[0].minor == minor && wide->messages[0].welcome->minor == minor && wide->messages[1].minor == minor && wide->consumer.minor() == minor, (label + " is served at its offered minor").c_str());
     require(wide->messages[1].state->gearbox && wide->messages[1].state->gearbox->forward_gears.value == 8u && wide->messages[1].state->next_mandatory_break, (label + ": a gearbox and a break").c_str());
     require(std::get<v0::Json::Object>(wide->messages[1].wire.at("data").at("state").value).count("nextMandatoryBreak") == 1, (label + ": a nextMandatoryBreak key").c_str());
     require(static_cast<bool>(wide->messages[1].state->cruise_control) == (minor >= 3), (label + ": cruise control from minor 3").c_str());
@@ -613,7 +619,7 @@ std::vector<std::vector<std::uint8_t>> v0_snapshot_bytes(bool provide, const std
   std::vector<std::vector<std::uint8_t>> frames;
   f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("job", job);
   for (unsigned i = 0; i < 8; ++i) {
-    f.host.break_minutes = 100 - static_cast<std::int32_t>(i) * 7; f.host.cruise_mps = static_cast<float>(i) * 2.5F; f.host.limit_mps = static_cast<float>(i) * 2.5F;
+    f.host.break_minutes = 100 - static_cast<std::int32_t>(i) * 7; f.host.cruise_mps = static_cast<float>(i) * 2.5F; f.host.limit_mps = static_cast<float>(i) * 2.5F; f.host.rest_minutes = 500 - static_cast<std::int32_t>(i);
     if (i == 3) f.host.config("truck", truck);
     f.host.frame(static_cast<float>(i) * 3);
     sdk::Snapshot snapshot; require(f.adapter->read_latest(snapshot), "a v0 publication per frame");
@@ -629,6 +635,9 @@ std::vector<std::vector<std::uint8_t>> v0_snapshot_bytes(bool provide, const std
   } else if (channel == "truck.navigation.speed.limit") {
     const auto v1_limit = f.current()->state.speed_limit_mps;
     require(provide ? (v1_limit.available() && v1_limit.value == 17.5) : v1_limit.state == v1::FieldState::not_supported, "the scripted game provided or refused the speed limit channel");
+  } else if (channel == "rest.stop") {
+    const auto rest = f.current()->state.rest_state_min;
+    require(provide ? (rest.available() && rest.value == 493) : rest.state == v1::FieldState::not_supported, "the scripted game provided or refused Rest State");
   } else {
     const auto v1_cruise = f.current()->state.cruise_control_mps;
     require(provide ? (v1_cruise.available() && v1_cruise.value == 17.5) : v1_cruise.state == v1::FieldState::not_supported, "the scripted game provided or refused the cruise control channel");
@@ -641,19 +650,18 @@ void mandatory_break_v0() {
 }
 
 // ET-071: minor 3 over an actual pipe. The hello's maxMinor selects its offer up to the endpoint maximum: 0, 1 and 2 keep
-// their original bytes (no cruise control), 3 gets minor 3 with `state.cruiseControl` in m/s and ET-084's 4 and 5 (clamped)
-// get minor 4, which keeps it. The expected values are written by hand.
+// their original bytes (no cruise control). Both minor 3 and 4 carry `state.cruiseControl` in m/s. The expected values are written by hand.
 void cruise_control() {
   Fixture f; f.host.break_minutes = 95; f.host.cruise_mps = 25.0F;
   scs_named_value_t truck[]{named("id", text("vehicle.synthetic_truck")), named("gears.forward", u32(8)), named("gears.reverse", u32(4)), scs_named_value_t{}};
   f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("truck", truck); f.host.frame();
   f.start();
   std::set<std::string> keys[5];
-  for (const unsigned offered : {0U, 1U, 2U, 3U, 4U, 5U}) {
-    const unsigned minor = offered > 4 ? 4 : offered; const auto label = "maxMinor " + std::to_string(offered);
+  for (const unsigned offered : {0U, 1U, 2U, 3U, 4U}) {
+    const unsigned minor = offered; const auto label = "maxMinor " + std::to_string(offered);
     auto c = f.client(true, minor); c->max_minor = offered; c->handshake();
     const auto welcome = c->messages[0], checkpoint = c->messages[1];
-    require(welcome.minor == minor && welcome.welcome->minor == minor && checkpoint.minor == minor && c->consumer.minor() == minor, (label + " selects min(offer, 4)").c_str());
+    require(welcome.minor == minor && welcome.welcome->minor == minor && checkpoint.minor == minor && c->consumer.minor() == minor, (label + " selects its offered minor").c_str());
     require(static_cast<bool>(checkpoint.state->next_mandatory_break) == (minor >= 2) && static_cast<bool>(checkpoint.state->cruise_control) == (minor >= 3), (label + ": break from minor 2, cruise control from minor 3").c_str());
     keys[minor] = state_keys(checkpoint);
     require(keys[minor].count("cruiseControl") == (minor >= 3 ? 1U : 0U), (label + ": the state key set").c_str());
@@ -716,18 +724,18 @@ void cruise_control_v0() {
 
 
 // ET-084: minor 4 over an actual pipe. The hello's maxMinor selects min(offer, 4): 0 to 3 keep their original bytes (no
-// limit), 4 and 5 get minor 4 with `state.speedLimit` in m/s. The expected values are written by hand.
+// limit), and 4 gets `state.speedLimit` in m/s. The expected values are written by hand.
 void speed_limit() {
   Fixture f; f.host.break_minutes = 95; f.host.cruise_mps = 22.5F; f.host.limit_mps = 25.0F;
   scs_named_value_t truck[]{named("id", text("vehicle.synthetic_truck")), named("gears.forward", u32(8)), named("gears.reverse", u32(4)), scs_named_value_t{}};
   f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("truck", truck); f.host.frame();
   f.start();
   std::set<std::string> keys[5];
-  for (const unsigned offered : {0U, 1U, 2U, 3U, 4U, 5U}) {
-    const unsigned minor = offered > 4 ? 4 : offered; const auto label = "maxMinor " + std::to_string(offered);
+  for (const unsigned offered : {0U, 1U, 2U, 3U, 4U}) {
+    const unsigned minor = offered; const auto label = "maxMinor " + std::to_string(offered);
     auto c = f.client(true, minor); c->max_minor = offered; c->handshake();
     const auto welcome = c->messages[0], checkpoint = c->messages[1];
-    require(welcome.minor == minor && welcome.welcome->minor == minor && checkpoint.minor == minor && c->consumer.minor() == minor, (label + " selects min(offer, 4)").c_str());
+    require(welcome.minor == minor && welcome.welcome->minor == minor && checkpoint.minor == minor && c->consumer.minor() == minor, (label + " selects its offered minor").c_str());
     require(static_cast<bool>(checkpoint.state->cruise_control) == (minor >= 3) && static_cast<bool>(checkpoint.state->speed_limit) == (minor >= 4), (label + ": cruise control from minor 3, the limit from minor 4").c_str());
     keys[minor] = state_keys(checkpoint);
     require(keys[minor].count("speedLimit") == (minor >= 4 ? 1U : 0U), (label + ": the state key set").c_str());
@@ -752,7 +760,6 @@ void speed_limit() {
       require(c->pump(f.host, [&] { return c->count("event") >= events_before + 2; }), "events delivered at minor 4");
       c->consumer.expect_clock_reply(1); send(c->pipe.get(), framed(probe_payload(1, 4)));
       require(c->read_until([&] { return c->count("clock.reply") == 1; }), "a minor-4 probe gets a clock reply");
-      // The offer-5 pass reconnects after the offer-4 pass acknowledged its events, so the cursor starts from the producer's cursor.
       const auto acked = checkpoint.state->status.delivery.acked_through_event_seq; v1::DurableAckCursor cursor(c->session(), acked); cursor.begin_connection(acked, 4); std::size_t committed = 0;
       const auto through = commit_and_ack(*c, cursor, committed);
       require(through >= acked + 2 && c->status_until(f.host, [&](const v1::StateView& s) { return s.status.delivery.acked_through_event_seq == through; }), "a minor-4 ACK releases the store");
@@ -786,6 +793,39 @@ void speed_limit_unsupported() {
 void speed_limit_v0() {
   const auto refused = v0_snapshot_bytes(false, "truck.navigation.speed.limit"), provided = v0_snapshot_bytes(true, "truck.navigation.speed.limit");
   require(refused.size() == 8 && refused == provided, "v0 snapshot bytes are identical with and without the speed limit channel");
+}
+
+void rest_state() {
+  for (const bool supported : {true, false}) {
+    Fixture f(true, supported ? "" : "rest.stop");
+    f.host.rest_minutes = 660; f.host.break_minutes = 95;
+    f.host.event(SCS_TELEMETRY_EVENT_started); f.host.frame(); f.start();
+    auto old = f.client(true, 4); old->handshake();
+    const auto previous = old->messages[1];
+    require(previous.minor == 4 && !previous.state->rest_state, "minor-4 checkpoint omits Rest State");
+    require(old->status_until(f.host, [](const v1::StateView& s) { return !s.rest_state; }), "minor-4 snapshots omit Rest State");
+    old.reset(); require(f.listening(), "endpoint relistens");
+
+    auto current = f.client(true, 5); current->max_minor = 6; current->handshake();
+    const auto checkpoint = current->messages[1];
+    require(checkpoint.minor == 5 && checkpoint.state->rest_state && checkpoint.state->rest_state->unit == "min", "wide offer selects minor 5 with Rest State in game minutes");
+    auto keys = state_keys(previous); keys.insert("restState");
+    require(state_keys(checkpoint) == keys, "minor 5 only adds restState");
+    require(checkpoint.state->next_mandatory_break->reading.value == 95, "mandatory break stays independent");
+    const auto& rest = checkpoint.state->rest_state->reading;
+    if (supported) {
+      require(rest.value == 660, "full Rest State is available");
+      f.host.rest_minutes = 0;
+      require(current->status_until(f.host, [](const v1::StateView& s) { return s.rest_state && s.rest_state->reading.value == 0; }), "zero reaches the next snapshot");
+      f.host.rest_null = true;
+      require(current->status_until(f.host, [](const v1::StateView& s) { return s.rest_state && !s.rest_state->reading.value && s.rest_state->reading.reason == v1::Reason::not_observed; }), "NULL reaches the next snapshot as unavailable");
+    } else {
+      require(!rest.value && rest.reason == v1::Reason::not_supported, "a refused SDK channel stays unavailable");
+    }
+    current->consumer.expect_clock_reply(1); send(current->pipe.get(), framed(probe_payload(1, 5)));
+    require(current->read_until([&] { return current->count("clock.reply") == 1; }), "a minor-5 probe receives its reply");
+  }
+  require(v0_snapshot_bytes(false, "rest.stop") == v0_snapshot_bytes(true, "rest.stop"), "Rest State does not enter v0 snapshot bytes");
 }
 
 void live_only() {
@@ -1639,7 +1679,7 @@ void dll_lifecycle(const char* path) {
 int main(int argc, char** argv) {
   try {
     const std::map<std::string, std::function<void()>> cases{
-      {"game-mode", game_mode_evidence}, {"handshake", handshake}, {"gearbox", gearbox}, {"mandatory-break", mandatory_break}, {"mandatory-break-unsupported", mandatory_break_unsupported}, {"mandatory-break-v0", mandatory_break_v0}, {"cruise-control", cruise_control}, {"cruise-control-unsupported", cruise_control_unsupported}, {"cruise-control-v0", cruise_control_v0}, {"speed-limit", speed_limit}, {"speed-limit-unsupported", speed_limit_unsupported}, {"speed-limit-v0", speed_limit_v0}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
+      {"game-mode", game_mode_evidence}, {"handshake", handshake}, {"gearbox", gearbox}, {"mandatory-break", mandatory_break}, {"mandatory-break-unsupported", mandatory_break_unsupported}, {"mandatory-break-v0", mandatory_break_v0}, {"cruise-control", cruise_control}, {"cruise-control-unsupported", cruise_control_unsupported}, {"cruise-control-v0", cruise_control_v0}, {"speed-limit", speed_limit}, {"speed-limit-unsupported", speed_limit_unsupported}, {"speed-limit-v0", speed_limit_v0}, {"rest-state", rest_state}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
       {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_end_failed(); invariant_stop_budget(); }}

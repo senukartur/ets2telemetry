@@ -913,9 +913,9 @@ function Test-UiReceipt {
     }
     if ($ExpectedUiCase -ceq 'overlay') {
         $previewNames = @('strip','card','cluster','hud','narrow-strip','large-strip','large-card')
-        $previewSections = 'speed,gear,rpm,cruise-control,speed-limit,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break'
+        $previewSections = 'speed,gear,rpm,cruise-control,speed-limit,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break,rest-state'
         # ET-084: the card and the cluster draw the speed limit sign with speed, gear and RPM, so it precedes cruise control in their DOM.
-        $previewSectionsHero = 'speed,gear,rpm,speed-limit,cruise-control,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break'
+        $previewSectionsHero = 'speed,gear,rpm,speed-limit,cruise-control,fuel,range,sdk-consumption,cargo,origin,destination,distance-driven,distance-remaining,deadline,expected-income,game-time,mandatory-break,rest-state'
         if (@($ui.overlayPreview).Count -ne 14) { return $false }
         foreach ($language in @('en','ru')) {
             foreach ($name in $previewNames) {
@@ -937,7 +937,7 @@ function Test-UiReceipt {
                 if ($observation.width -gt $observation.viewportWidth) { return $false }
                 if ($layout -ceq 'card') {
                     $rows = $observation.cardRows
-                    if ($null -eq $rows -or !(Test-ReceiptInteger -Value $rows.count -Minimum 14 -Maximum 14) -or
+                    if ($null -eq $rows -or !(Test-ReceiptInteger -Value $rows.count -Minimum 15 -Maximum 15) -or
                         (@($rows.display) -join ',') -cne 'inline' -or (@($rows.verticalAlign) -join ',') -cne '-2px' -or
                         $rows.sameLine -isnot [bool] -or !$rows.sameLine -or $rows.matchesActual -isnot [bool] -or !$rows.matchesActual) { return $false }
                 }

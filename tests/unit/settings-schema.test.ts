@@ -43,17 +43,17 @@ const v14 = (language: unknown, autostart: unknown, units: unknown, overlay: unk
 // ET-084: the requirement for the current format changed to v15, which adds the overlay section `speed-limit` after
 // `cruise-control`; the tests of the current format below moved from v14 to v15 documents, every expected value gains the
 // key, and newer-version seeds moved to 16. A v14 document (the v14 helper) carries only the sixteen earlier section keys.
-const v15 = (language: unknown, autostart: unknown, units: unknown, overlay: unknown, extra: Record<string, unknown> = {}) =>
-  utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 15, nowPlaying: DEFAULT_NOW_PLAYING, language, autostart, theme: 'system', units, gearDisplay: AUTO, overlay, ...extra}));
+const v16 = (language: unknown, autostart: unknown, units: unknown, overlay: unknown, extra: Record<string, unknown> = {}) =>
+  utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 16, nowPlaying: DEFAULT_NOW_PLAYING, language, autostart, theme: 'system', units, gearDisplay: AUTO, overlay, ...extra}));
 
-// Hand-written expectations: the seventeen section ids in canonical order, all enabled by default; the fourteen of formats
+// Hand-written expectations: the eighteen section ids in canonical order, all enabled by default; the fourteen of formats
 // before v11 (OLD_ALL_ON) are the same without `cruise-control`, `speed-limit` and `mandatory-break`, the fifteen of v11 and
 // v12 (V12_ALL_ON) without `cruise-control` and `speed-limit`, and the sixteen of v13 and v14 (V14_ALL_ON) without `speed-limit`.
 const OLD_ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
   'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true};
 const V12_ALL_ON = {...OLD_ALL_ON, 'mandatory-break': true};
 const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'cruise-control': true, 'speed-limit': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
-  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true};
+  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true, 'rest-state': true};
 // The ET-012a anchors at scale 1, in canonical layout order.
 const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}};
 const MOVED = {...PLACEMENTS, card: {x: 0.25, y: 0.75, scale: 1.5}};
@@ -62,8 +62,8 @@ const OLD_DRIVING_ONLY = {...OLD_ALL_ON, 'sdk-consumption': false, 'cargo': fals
   'distance-remaining': false, 'deadline': false, 'expected-income': false, 'game-time': false};
 // A current user who switched the break, cruise control and the speed limit off as well as everything but driving; and the
 // same user migrated from an older format, where the migrations switch those three on and keep every other choice.
-const DRIVING_ONLY = {...OLD_DRIVING_ONLY, 'cruise-control': false, 'speed-limit': false, 'mandatory-break': false};
-const MIGRATED_DRIVING_ONLY = {...OLD_DRIVING_ONLY, 'cruise-control': true, 'speed-limit': true, 'mandatory-break': true};
+const DRIVING_ONLY = {...OLD_DRIVING_ONLY, 'cruise-control': false, 'speed-limit': false, 'mandatory-break': false, 'rest-state': false};
+const MIGRATED_DRIVING_ONLY = {...OLD_DRIVING_ONLY, 'cruise-control': true, 'speed-limit': true, 'mandatory-break': true, 'rest-state': true};
 // The overlay block an older format wrote (fourteen sections, every one on), and the one a v11 or v12 build wrote (fifteen).
 const OLD_OVERLAY = {...DEFAULT_OVERLAY, sections: OLD_ALL_ON};
 const V12_OVERLAY = {...DEFAULT_OVERLAY, sections: V12_ALL_ON};
@@ -72,12 +72,12 @@ const without = (record: Record<string, unknown>, key: string) => Object.fromEnt
 it('migrates v4 purely to enabled v11 without adopting a previously unknown flag', () => {
   const old = {format: 'ets2telemetry.settings', version: 4, language: 'ru', units: {ets2: 'metric', ats: 'metric'}, overlay: {...OLD_OVERLAY, enabled: false}};
   const before = structuredClone(old);
-  expect(migrateToCurrent(old, 4)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', autostart: false, gearDisplay: AUTO, overlay: {...old.overlay, enabled: true, backgroundOpacity: 80, sections: ALL_ON}});
+  expect(migrateToCurrent(old, 4)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', autostart: false, gearDisplay: AUTO, overlay: {...old.overlay, enabled: true, backgroundOpacity: 80, sections: ALL_ON}});
   expect(old).toEqual(before);
   expect(parseSettings(utf8(JSON.stringify(old)))).toMatchObject({state: 'loaded', migratedFrom: 4, settings: {overlay: {enabled: true}}});
 });
 it.each([undefined, null, 0, 1, 'false', {}, []])('falls back independently for invalid current enabled flag %j', enabled => {
-  expect(parseSettings(v15('ru', true, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, enabled}))).toEqual({state: 'loaded-with-fallbacks',
+  expect(parseSettings(v16('ru', true, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, enabled}))).toEqual({state: 'loaded-with-fallbacks',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}, fallbackFields: ['overlay.enabled']});
 });
 it('roundtrips committed false in canonical v11 without falling back', () => {
@@ -87,8 +87,8 @@ it('roundtrips committed false in canonical v11 without falling back', () => {
   expect(parseSettings(utf8(serialized))).toEqual({state: 'loaded', settings});
 });
 
-it('reads a valid current v11 file, ignoring unknown keys', () => {
-  expect(parseSettings(v15('ru', false, {ets2: 'us-customary', ats: 'metric', future: 'x'},
+it('reads a valid current v16 file, ignoring unknown keys', () => {
+  expect(parseSettings(v16('ru', false, {ets2: 'us-customary', ats: 'metric', future: 'x'},
     {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: {...DRIVING_ONLY, future: true}, placements: {...MOVED, future: {x: 0, y: 0, scale: 1}}, theme: 'x'}, {accent: 'dark'})))
     .toEqual({state: 'loaded', settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: false, theme: 'system', units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: DRIVING_ONLY, placements: MOVED}}});
 });
@@ -117,37 +117,37 @@ it('migrates v1, v2, v3 and v4 purely without mutating their input, and leaves c
   const document = {format: 'ets2telemetry.settings', version: 1, units: {ets2: 'metric', ats: 'metric'}};
   const snapshot = structuredClone(document);
   const migrated = migrateToCurrent(document, 1);
-  expect(migrated).toEqual({format: 'ets2telemetry.settings', nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY});
+  expect(migrated).toEqual({format: 'ets2telemetry.settings', nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY});
   expect(document).toEqual(snapshot);
   expect(migrated).not.toBe(document);
 
   const second = {format: 'ets2telemetry.settings', version: 2, units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: OLD_DRIVING_ONLY}};
   const secondSnapshot = structuredClone(second);
   const upgraded = migrateToCurrent(second, 2);
-  expect(upgraded).toEqual({...second, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', language: 'en', autostart: false, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: MIGRATED_DRIVING_ONLY, placements: PLACEMENTS}});
+  expect(upgraded).toEqual({...second, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', language: 'en', autostart: false, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: MIGRATED_DRIVING_ONLY, placements: PLACEMENTS}});
   expect(second).toEqual(secondSnapshot); expect(upgraded!.overlay).not.toBe(second.overlay);
 
   const third = {format: 'ets2telemetry.settings', version: 3, units: {ets2: 'metric', ats: 'metric'}, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: OLD_DRIVING_ONLY, placements: PLACEMENTS}};
   const thirdSnapshot = structuredClone(third);
   const upgradedThird = migrateToCurrent(third, 3);
-  expect(upgradedThird).toEqual({...third, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', language: 'en', autostart: false, gearDisplay: AUTO, overlay: {...third.overlay, sections: MIGRATED_DRIVING_ONLY}});
+  expect(upgradedThird).toEqual({...third, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', language: 'en', autostart: false, gearDisplay: AUTO, overlay: {...third.overlay, sections: MIGRATED_DRIVING_ONLY}});
   expect(third).toEqual(thirdSnapshot);
 
   const fourth = {format: 'ets2telemetry.settings', version: 4, language: 'ru', autostart: false, units: {ets2: 'metric', ats: 'metric'}, overlay: {layout: 'card', sections: OLD_DRIVING_ONLY, placements: PLACEMENTS}};
   const fourthSnapshot = structuredClone(fourth);
   const upgradedFourth = migrateToCurrent(fourth, 4);
-  expect(upgradedFourth).toEqual({...fourth, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', autostart: false, gearDisplay: AUTO, overlay: {...fourth.overlay, enabled: true, backgroundOpacity: 80, sections: MIGRATED_DRIVING_ONLY}});
+  expect(upgradedFourth).toEqual({...fourth, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', autostart: false, gearDisplay: AUTO, overlay: {...fourth.overlay, enabled: true, backgroundOpacity: 80, sections: MIGRATED_DRIVING_ONLY}});
   expect(fourth).toEqual(fourthSnapshot);
 
   // A v2 overlay that is not an object stays as it is.
-  expect(migrateToCurrent({format: 'ets2telemetry.settings', version: 2, overlay: 'strip'}, 2)).toEqual({format: 'ets2telemetry.settings', nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', language: 'en', autostart: false, gearDisplay: AUTO, overlay: 'strip'});
-  const current = {format: 'ets2telemetry.settings', version: 15};
-  expect(migrateToCurrent(current, 15)).toBe(current);
+  expect(migrateToCurrent({format: 'ets2telemetry.settings', version: 2, overlay: 'strip'}, 2)).toEqual({format: 'ets2telemetry.settings', nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', language: 'en', autostart: false, gearDisplay: AUTO, overlay: 'strip'});
+  const current = {format: 'ets2telemetry.settings', version: 16};
+  expect(migrateToCurrent(current, 16)).toBe(current);
   expect(migrateToCurrent({format: 'ets2telemetry.settings'}, 0)).toBeUndefined();
 });
 
 it('accepts a leading UTF-8 byte order mark', () => {
-  const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...v15('en', false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY)]);
+  const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...v16('en', false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY)]);
   expect(parseSettings(bytes)).toEqual({state: 'loaded', settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}});
 });
 
@@ -157,7 +157,7 @@ it.each([
   {name: 'uppercase language', language: 'EN', expected: 'en', fields: ['language']},
   {name: 'missing language', language: undefined, expected: 'en', fields: ['language']}
 ])('falls back per language field for $name', ({language, expected, fields}) => {
-  expect(parseSettings(v15(language, false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY))).toEqual({
+  expect(parseSettings(v16(language, false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY))).toEqual({
     state: 'loaded-with-fallbacks',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: expected, autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY},
     fallbackFields: fields
@@ -170,7 +170,7 @@ it.each([
   {name: 'null autostart', autostart: null, expected: false, fields: ['autostart']},
   {name: 'missing autostart', autostart: undefined, expected: false, fields: ['autostart']}
 ])('falls back per autostart field for $name', ({autostart, expected, fields}) => {
-  expect(parseSettings(v15('en', autostart, {ets2: 'metric', ats: 'us-customary'}, {...DEFAULT_OVERLAY, enabled: false}))).toEqual({
+  expect(parseSettings(v16('en', autostart, {ets2: 'metric', ats: 'us-customary'}, {...DEFAULT_OVERLAY, enabled: false}))).toEqual({
     state: 'loaded-with-fallbacks',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: expected, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, enabled: false}},
     fallbackFields: fields
@@ -183,7 +183,7 @@ it.each([
   {name: 'units not an object', units: ['metric'], expected: {ets2: 'metric', ats: 'us-customary'}, fields: ['units.ets2', 'units.ats']},
   {name: 'a profile in the wrong case', units: {ets2: 'Metric', ats: 'metric'}, expected: {ets2: 'metric', ats: 'metric'}, fields: ['units.ets2']}
 ])('falls back per unit field for $name', ({units, expected, fields}) => {
-  expect(parseSettings(v15('en', false, units, DEFAULT_OVERLAY))).toEqual({state: 'loaded-with-fallbacks', settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: expected, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}, fallbackFields: fields});
+  expect(parseSettings(v16('en', false, units, DEFAULT_OVERLAY))).toEqual({state: 'loaded-with-fallbacks', settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: expected, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}, fallbackFields: fields});
 });
 
 it('lets an invalid v1 unit fall back alone after migration', () => {
@@ -220,7 +220,7 @@ it.each([
   {name: 'a non-boolean cruise-control value', overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: {...DRIVING_ONLY, 'cruise-control': 0}, placements: MOVED},
     expected: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: {...DRIVING_ONLY, 'cruise-control': true}, placements: MOVED}, fields: ['overlay.sections.cruise-control']}
 ])('falls back per overlay field for $name', ({overlay, expected, fields}) => {
-  expect(parseSettings(v15('en', false, {ets2: 'metric', ats: 'metric'}, overlay))).toEqual({state: 'loaded-with-fallbacks',
+  expect(parseSettings(v16('en', false, {ets2: 'metric', ats: 'metric'}, overlay))).toEqual({state: 'loaded-with-fallbacks',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: expected}, fallbackFields: fields});
 });
 
@@ -239,13 +239,13 @@ it.each([
   {name: 'invalid strip and cluster placements', placements: {...MOVED, strip: null, cluster: {x: 0, y: 1, scale: 0}},
     expected: MOVED, fields: ['overlay.placements.strip', 'overlay.placements.cluster']}
 ])('falls back per placement for $name', ({placements, expected, fields}) => {
-  expect(parseSettings(v15('en', false, {ets2: 'metric', ats: 'metric'}, {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_ON, placements}))).toEqual({state: 'loaded-with-fallbacks',
+  expect(parseSettings(v16('en', false, {ets2: 'metric', ats: 'metric'}, {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_ON, placements}))).toEqual({state: 'loaded-with-fallbacks',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_ON, placements: expected}}, fallbackFields: fields});
 });
 
 it('normalises placements read from the file and accepts the range bounds', () => {
   const placements = {strip: {x: 0, y: 1, scale: 0.5}, card: {x: 1, y: 0, scale: 3}, cluster: {x: 0.123456, y: 0.99999, scale: 1.234}, hud: {x: 0, y: 0, scale: 2.5}};
-  expect(parseSettings(v15('en', false, {ets2: 'metric', ats: 'metric'}, {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: ALL_ON, placements}))).toEqual({state: 'loaded',
+  expect(parseSettings(v16('en', false, {ets2: 'metric', ats: 'metric'}, {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: ALL_ON, placements}))).toEqual({state: 'loaded',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: ALL_ON,
       placements: {...placements, cluster: {x: 0.1235, y: 1, scale: 1.23}}}}});
 });
@@ -266,7 +266,7 @@ it.each([
 });
 
 it('rejects a file above 64 KiB and accepts one of exactly 64 KiB', () => {
-  const base = new TextDecoder().decode(v15('en', false, {ets2: 'us-customary', ats: 'metric'}, {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: DRIVING_ONLY, placements: MOVED}));
+  const base = new TextDecoder().decode(v16('en', false, {ets2: 'us-customary', ats: 'metric'}, {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: DRIVING_ONLY, placements: MOVED}));
   const exact = utf8(base + ' '.repeat(MAX_SETTINGS_BYTES - base.length));
   expect(exact.byteLength).toBe(65536);
   expect(parseSettings(exact)).toEqual({state: 'loaded', settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: DRIVING_ONLY, placements: MOVED}}});
@@ -275,16 +275,16 @@ it('rejects a file above 64 KiB and accepts one of exactly 64 KiB', () => {
 
 // ET-049 made version 7 current; ET-045e made version 8 current; ET-050 made version 9 current; ET-050b made version 10 current;
 // ET-052 made version 11 current, ET-061 version 12, ET-071 version 13 and ET-082 version 14; ET-084 makes version 15 current, so
-// version 16 is newer-version (the requirement changed from 15), and a build from before ET-084 reads version 15 as newer-version
-// (read-only defaults) while versions 9 to 14 migrate.
+// Version 17 is newer-version. Version 16 is current and version 15 still migrates.
 it('classifies missing and older versions as unsupported-older and later ones as newer-version', () => {
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","units":{"ets2":"metric","ats":"metric"}}'))).toEqual({state: 'unsupported-older'});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":0,"units":{}}'))).toEqual({state: 'unsupported-older'});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":-3}'))).toEqual({state: 'unsupported-older'});
-  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":16,"units":{"ets2":"metric","ats":"metric"}}'))).toEqual({state: 'newer-version'});
-  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":16,"gearDisplay":{"ets2":"manual","ats":"manual"}}'))).toEqual({state: 'newer-version'});
-  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":15,"units":{"ets2":"metric","ats":"metric"}}'))).toEqual(expect.objectContaining({state: 'loaded-with-fallbacks'}));
-  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":15,"units":{"ets2":"metric","ats":"metric"}}'))).not.toHaveProperty('migratedFrom');
+  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":17,"units":{"ets2":"metric","ats":"metric"}}'))).toEqual({state: 'newer-version'});
+  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":17,"gearDisplay":{"ets2":"manual","ats":"manual"}}'))).toEqual({state: 'newer-version'});
+  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":16,"units":{"ets2":"metric","ats":"metric"}}'))).toEqual(expect.objectContaining({state: 'loaded-with-fallbacks'}));
+  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":16,"units":{"ets2":"metric","ats":"metric"}}'))).not.toHaveProperty('migratedFrom');
+  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":15,"units":{"ets2":"metric","ats":"metric"}}'))).toMatchObject({state: 'loaded-with-fallbacks', migratedFrom: 15});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":14,"units":{"ets2":"metric","ats":"metric"}}'))).toMatchObject({state: 'loaded-with-fallbacks', migratedFrom: 14});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":13,"units":{"ets2":"metric","ats":"metric"}}'))).toMatchObject({state: 'loaded-with-fallbacks', migratedFrom: 13});
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":12,"units":{"ets2":"metric","ats":"metric"}}'))).toMatchObject({state: 'loaded-with-fallbacks', migratedFrom: 12});
@@ -295,14 +295,14 @@ it('classifies missing and older versions as unsupported-older and later ones as
   expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":4,"units":{"ets2":"metric","ats":"metric"}}'))).toMatchObject({state: 'loaded-with-fallbacks'});
 });
 
-it('serializes the exact v15 bytes: language, autostart, theme, units, gear display, sections and placements in canonical order, two-space indentation and a trailing newline', () => {
+it('serializes the exact v16 bytes: language, autostart, theme, units, gear display, sections and placements in canonical order, two-space indentation and a trailing newline', () => {
   expect(serializeSettings({nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: false, theme: 'light', units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: {ets2: 'manual', ats: 'automatic'},
     overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: {...ALL_ON, rpm: false}, placements: MOVED}})).toBe([
-    '{', '  "format": "ets2telemetry.settings",', '  "version": 15,', '  "language": "ru",', '  "autostart": false,', '  "theme": "light",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "metric"', '  },',
+    '{', '  "format": "ets2telemetry.settings",', '  "version": 16,', '  "language": "ru",', '  "autostart": false,', '  "theme": "light",', '  "units": {', '    "ets2": "us-customary",', '    "ats": "metric"', '  },',
     '  "gearDisplay": {', '    "ets2": "manual",', '    "ats": "automatic"', '  },',
     '  "overlay": {', '    "enabled": true,', '    "backgroundOpacity": 80,', '    "layout": "card",', '    "sections": {', '      "speed": true,', '      "gear": true,', '      "rpm": false,', '      "cruise-control": true,', '      "speed-limit": true,', '      "fuel": true,',
     '      "range": true,', '      "sdk-consumption": true,', '      "cargo": true,', '      "origin": true,', '      "destination": true,',
-    '      "distance-driven": true,', '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true,', '      "mandatory-break": true',
+    '      "distance-driven": true,', '      "distance-remaining": true,', '      "deadline": true,', '      "expected-income": true,', '      "game-time": true,', '      "mandatory-break": true,', '      "rest-state": true',
     '    },', '    "placements": {',
     '      "strip": {', '        "x": 0.5,', '        "y": 0,', '        "scale": 1', '      },',
     '      "card": {', '        "x": 0.25,', '        "y": 0.75,', '        "scale": 1.5', '      },',
@@ -331,7 +331,7 @@ it('migrates accepted v5 autostart true purely while preserving all prior settin
   const old = {format: 'ets2telemetry.settings', version: 5, language: 'ru', autostart: true,
     units: {ets2: 'us-customary', ats: 'metric'}, overlay: {layout: 'card', sections: OLD_DRIVING_ONLY, placements: MOVED}};
   const before = structuredClone(old);
-  expect(migrateToCurrent(old, 5)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', gearDisplay: AUTO, overlay: {...old.overlay, enabled: true, backgroundOpacity: 80, sections: MIGRATED_DRIVING_ONLY}});
+  expect(migrateToCurrent(old, 5)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', gearDisplay: AUTO, overlay: {...old.overlay, enabled: true, backgroundOpacity: 80, sections: MIGRATED_DRIVING_ONLY}});
   expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 5,
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'dark', units: old.units, gearDisplay: AUTO, overlay: {...old.overlay, enabled: true, backgroundOpacity: 80, sections: MIGRATED_DRIVING_ONLY}}});
   expect(old).toEqual(before);
@@ -342,13 +342,13 @@ it('migrates v6 to the unchanged 80% appearance while retaining every existing p
   const old = {format: 'ets2telemetry.settings', version: 6, language: 'ru', autostart: true,
     units: {ets2: 'us-customary', ats: 'metric'}, overlay: {...OLD_OVERLAY, enabled: false, layout: 'card', placements: MOVED, backgroundOpacity: 42}};
   const before = structuredClone(old);
-  expect(migrateToCurrent(old, 6)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', gearDisplay: AUTO, overlay: {...old.overlay, backgroundOpacity: 80, sections: ALL_ON}});
+  expect(migrateToCurrent(old, 6)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', gearDisplay: AUTO, overlay: {...old.overlay, backgroundOpacity: 80, sections: ALL_ON}});
   expect(old).toEqual(before);
   expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 6,
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'dark', units: old.units, gearDisplay: AUTO, overlay: {...old.overlay, backgroundOpacity: 80, sections: ALL_ON}}});
 });
 it.each([undefined, null, '60', false, 39, 101, 80.5, {}, []])('falls back only opacity for invalid stored value %j', backgroundOpacity => {
-  expect(parseSettings(v15('ru', true, {ets2: 'metric', ats: 'us-customary'}, {...DEFAULT_OVERLAY, backgroundOpacity})))
+  expect(parseSettings(v16('ru', true, {ets2: 'metric', ats: 'us-customary'}, {...DEFAULT_OVERLAY, backgroundOpacity})))
     .toEqual({state: 'loaded-with-fallbacks', fallbackFields: ['overlay.backgroundOpacity'],
       settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}});
 });
@@ -365,7 +365,7 @@ it('migrates a v7 file through v8, v9 and v10 to v11 with identical placement nu
   const overlay = {enabled: true, backgroundOpacity: 65, layout: 'strip', sections: OLD_DRIVING_ONLY, placements: OWNER_PLACEMENTS};
   const old = {format: 'ets2telemetry.settings', version: 7, language: 'ru', autostart: true, units: {ets2: 'metric', ats: 'us-customary'}, overlay};
   const before = structuredClone(old);
-  expect(migrateToCurrent(old, 7)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', gearDisplay: AUTO, overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
+  expect(migrateToCurrent(old, 7)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', gearDisplay: AUTO, overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
   expect(old).toEqual(before);
   expect(parseSettings(v7('ru', true, {ets2: 'metric', ats: 'us-customary'}, overlay))).toEqual({state: 'loaded', migratedFrom: 7,
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'dark', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}}});
@@ -379,9 +379,9 @@ it('accepts a hand-edited v7 scale in (2, 3] after the migration and still refus
 });
 it('reads current v11 placements at 2.5 and 3 unchanged and lets 3.01 fall back alone', () => {
   const placements = {...PLACEMENTS, strip: {x: 0.8485, y: 1, scale: 3}, hud: {x: 0, y: 0, scale: 2.5}};
-  expect(parseSettings(v15('en', false, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, placements}))).toEqual({state: 'loaded',
+  expect(parseSettings(v16('en', false, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, placements}))).toEqual({state: 'loaded',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, placements}}});
-  expect(parseSettings(v15('en', false, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, placements: {...placements, strip: {x: 0.8485, y: 1, scale: 3.01}}})))
+  expect(parseSettings(v16('en', false, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, placements: {...placements, strip: {x: 0.8485, y: 1, scale: 3.01}}})))
     .toEqual({state: 'loaded-with-fallbacks', fallbackFields: ['overlay.placements.strip'],
       settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, placements: {...placements, strip: PLACEMENTS.strip}}}});
 });
@@ -393,7 +393,7 @@ it('migrates a v8 file purely through v9 and v10 to v11 with automatic gears, re
     gearDisplay: {ets2: 'manual', ats: 'manual'}};
   const before = structuredClone(old);
   const migrated = migrateToCurrent(old, 8);
-  expect(migrated).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', gearDisplay: AUTO, overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
+  expect(migrated).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', gearDisplay: AUTO, overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
   expect(migrated!.gearDisplay).not.toBe(old.gearDisplay);
   expect(old).toEqual(before);
   expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 8,
@@ -403,7 +403,7 @@ it('migrates a v8 file purely through v9 and v10 to v11 with automatic gears, re
 });
 it('reads per-game v11 gear display modes and round trips them', () => {
   const gearDisplay = {ets2: 'manual', ats: 'automatic'} as const;
-  expect(parseSettings(v15('en', false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY, {gearDisplay: {...gearDisplay, future: 'x'}}))).toEqual({state: 'loaded',
+  expect(parseSettings(v16('en', false, {ets2: 'metric', ats: 'us-customary'}, DEFAULT_OVERLAY, {gearDisplay: {...gearDisplay, future: 'x'}}))).toEqual({state: 'loaded',
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay, overlay: DEFAULT_OVERLAY}});
   for (const modes of [{ets2: 'manual', ats: 'manual'}, {ets2: 'automatic', ats: 'manual'}, AUTO, {ets2: 'crawler', ats: 'automatic'}, {ets2: 'crawler', ats: 'crawler'}] as const) {
     const settings = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru' as const, autostart: true, theme: 'system' as const, units: {ets2: 'metric' as const, ats: 'metric' as const}, gearDisplay: modes, overlay: {...DEFAULT_OVERLAY, layout: 'cluster' as const}};
@@ -421,7 +421,7 @@ it.each([
   {name: 'a non-string mode', gearDisplay: {ets2: true, ats: 1}, expected: AUTO, fields: ['gearDisplay.ets2', 'gearDisplay.ats']},
   {name: 'a missing game', gearDisplay: {ats: 'manual'}, expected: {ets2: 'automatic', ats: 'manual'}, fields: ['gearDisplay.ets2']}
 ])('falls back per gear display field for $name without coercion', ({gearDisplay, expected, fields}) => {
-  const bytes = utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 15, nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay, overlay: DEFAULT_OVERLAY}));
+  const bytes = utf8(JSON.stringify({format: 'ets2telemetry.settings', version: 16, nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay, overlay: DEFAULT_OVERLAY}));
   expect(parseSettings(bytes)).toEqual({state: 'loaded-with-fallbacks', fallbackFields: fields,
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: expected, overlay: DEFAULT_OVERLAY}});
 });
@@ -433,7 +433,7 @@ it('migrates a v9 file purely through v10 to v11 keeping its gear display modes,
   const old = {format: 'ets2telemetry.settings', version: 9, language: 'ru', autostart: false, units: {ets2: 'metric', ats: 'us-customary'},
     gearDisplay: {ets2: 'manual', ats: 'automatic'}, overlay};
   const before = structuredClone(old);
-  expect(migrateToCurrent(old, 9)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
+  expect(migrateToCurrent(old, 9)).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
   expect(old).toEqual(before);
   const migratedOverlay = {...overlay, sections: MIGRATED_DRIVING_ONLY};
   expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 9,
@@ -451,7 +451,7 @@ it('migrates a v10 file purely to v11: the break is on, every other choice is ke
     gearDisplay: {ets2: 'crawler', ats: 'automatic'}, overlay};
   const before = structuredClone(old);
   const migrated = migrateToCurrent(old, 10)!;
-  expect(migrated).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
+  expect(migrated).toEqual({...old, nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', overlay: {...overlay, sections: MIGRATED_DRIVING_ONLY}});
   expect((migrated.overlay as {sections: unknown}).sections).not.toBe(old.overlay.sections);
   expect(old).toEqual(before);
   expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 10,
@@ -466,7 +466,7 @@ it('migrates a v10 file that holds only one section on, keeping that choice and 
 });
 it('replaces a stray mandatory-break key of a v10 file, which a v10 build ignored, with true', () => {
   expect(migrateToCurrent({format: 'ets2telemetry.settings', version: 10, overlay: {sections: {...OLD_ALL_ON, 'mandatory-break': false}}}, 10))
-    .toEqual({format: 'ets2telemetry.settings', nowPlaying: DEFAULT_NOW_PLAYING, version: 15, theme: 'dark', overlay: {sections: ALL_ON}});
+    .toEqual({format: 'ets2telemetry.settings', nowPlaying: DEFAULT_NOW_PLAYING, version: 16, theme: 'dark', overlay: {sections: ALL_ON}});
 });
 it.each([
   ['a missing overlay block', undefined], ['an overlay block that is not an object', 'strip'], ['an overlay block as an array', [OLD_ALL_ON]],
@@ -474,22 +474,22 @@ it.each([
 ])('leaves %s of a v10 file to the existing fallbacks and adds nothing', (_name, overlay) => {
   const old = {format: 'ets2telemetry.settings', version: 10, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay};
   const migrated = migrateToCurrent(old, 10)!;
-  expect(migrated.version).toBe(15);
+  expect(migrated.version).toBe(16);
   expect(migrated.overlay).toEqual(overlay);
   expect(parseSettings(utf8(JSON.stringify(old)))).toMatchObject({state: 'loaded-with-fallbacks', migratedFrom: 10});
 });
-it('keeps a stored mandatory-break false of a v11 file and writes it last', () => {
+it('keeps a disabled mandatory-break and retains Rest State after it', () => {
   const settings = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en' as const, autostart: false, theme: 'system' as const, units: {ets2: 'metric' as const, ats: 'metric' as const}, gearDisplay: AUTO,
     overlay: {...DEFAULT_OVERLAY, layout: 'strip' as const, sections: {...ALL_ON, 'mandatory-break': false}}};
   const text = serializeSettings(settings);
-  expect(text).toContain('"game-time": true,\n      "mandatory-break": false\n    },');
+  expect(text).toContain('"game-time": true,\n      "mandatory-break": false,\n      "rest-state": true\n    },');
   expect(parseSettings(utf8(text))).toEqual({state: 'loaded', settings});
   // The first save of a migrated v10 file writes v11 with the break on.
   const migrated = parseSettings(v10('en', false, {ets2: 'metric', ats: 'metric'}, {...OLD_OVERLAY, sections: OLD_DRIVING_ONLY}));
   expect(migrated.state).toBe('loaded');
   const rewritten = serializeSettings((migrated as {settings: Parameters<typeof serializeSettings>[0]}).settings);
-  expect(JSON.parse(rewritten)).toMatchObject({version: 15, overlay: {sections: MIGRATED_DRIVING_ONLY}});
-  expect(rewritten).toContain('"game-time": false,\n      "mandatory-break": true\n    },');
+  expect(JSON.parse(rewritten)).toMatchObject({version: 16, overlay: {sections: MIGRATED_DRIVING_ONLY}});
+  expect(rewritten).toContain('"game-time": false,\n      "mandatory-break": true,\n      "rest-state": true\n    },');
 });
 
 // ET-071 (REG-017): v12 -> v13 adds the overlay section `cruise-control`, on, on a copy of the saved section record, so the
@@ -502,13 +502,13 @@ it('migrates a v12 file purely to v13: cruise control is on, every other choice 
     gearDisplay: {ets2: 'crawler', ats: 'manual'}, overlay};
   const before = structuredClone(old);
   const migrated = migrateToCurrent(old, 12)!;
-  expect(migrated).toEqual({...old, version: 15, theme: 'dark', overlay: {...overlay, sections: {...OWNER_V12_SECTIONS, 'cruise-control': true, 'speed-limit': true}}});
+  expect(migrated).toEqual({...old, version: 16, theme: 'dark', overlay: {...overlay, sections: {...OWNER_V12_SECTIONS, 'cruise-control': true, 'speed-limit': true, 'rest-state': true}}});
   expect((migrated.overlay as {sections: unknown}).sections).not.toBe(old.overlay.sections);
   expect(migrated.overlay).not.toBe(old.overlay);
   expect(old).toEqual(before);
   expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 12,
     settings: {nowPlaying, language: 'ru', autostart: true, theme: 'dark', units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: {ets2: 'crawler', ats: 'manual'},
-      overlay: {...overlay, sections: {...OWNER_V12_SECTIONS, 'cruise-control': true, 'speed-limit': true}}}});
+      overlay: {...overlay, sections: {...OWNER_V12_SECTIONS, 'cruise-control': true, 'speed-limit': true, 'rest-state': true}}}});
   expect(parseSettings(v12('en', false, {ets2: 'metric', ats: 'us-customary'}, V12_OVERLAY))).toEqual({state: 'loaded', migratedFrom: 12,
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'dark', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}});
 });
@@ -524,7 +524,7 @@ it('migrates a v12 file that holds only one section on, keeping that choice and 
 });
 it('replaces a stray cruise-control key of a v12 file, which a v12 build ignored, with true', () => {
   expect(migrateToCurrent({format: 'ets2telemetry.settings', version: 12, overlay: {sections: {...V12_ALL_ON, 'cruise-control': false}}}, 12))
-    .toEqual({format: 'ets2telemetry.settings', version: 15, theme: 'dark', overlay: {sections: ALL_ON}});
+    .toEqual({format: 'ets2telemetry.settings', version: 16, theme: 'dark', overlay: {sections: ALL_ON}});
 });
 it.each([
   ['a missing overlay block', undefined], ['an overlay block that is not an object', 'strip'], ['an overlay block as an array', [V12_ALL_ON]],
@@ -532,7 +532,7 @@ it.each([
 ])('leaves %s of a v12 file to the existing fallbacks and adds nothing', (_name, overlay) => {
   const old = {format: 'ets2telemetry.settings', version: 12, nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay};
   const migrated = migrateToCurrent(old, 12)!;
-  expect(migrated.version).toBe(15);
+  expect(migrated.version).toBe(16);
   expect(migrated.overlay).toEqual(overlay);
   expect(parseSettings(utf8(JSON.stringify(old)))).toMatchObject({state: 'loaded-with-fallbacks', migratedFrom: 12});
 });
@@ -545,7 +545,7 @@ it('keeps a stored cruise-control false of a v15 file and writes it after rpm; t
   const migrated = parseSettings(v12('en', false, {ets2: 'metric', ats: 'metric'}, {...V12_OVERLAY, sections: OWNER_V12_SECTIONS}));
   expect(migrated.state).toBe('loaded');
   const rewritten = serializeSettings((migrated as {settings: Parameters<typeof serializeSettings>[0]}).settings);
-  expect(JSON.parse(rewritten)).toMatchObject({version: 15, overlay: {sections: {...OWNER_V12_SECTIONS, 'cruise-control': true, 'speed-limit': true}}});
+  expect(JSON.parse(rewritten)).toMatchObject({version: 16, overlay: {sections: {...OWNER_V12_SECTIONS, 'cruise-control': true, 'speed-limit': true, 'rest-state': true}}});
   expect(rewritten).toContain('"rpm": false,\n      "cruise-control": true,\n      "speed-limit": true,\n      "fuel": true,');
 });
 
@@ -554,7 +554,7 @@ it('keeps a stored cruise-control false of a v15 file and writes it after rpm; t
 it('migrates a v13 file purely to v15 with the dark theme, replacing a stray theme key, migratedFrom 13', () => {
   const old = {format: 'ets2telemetry.settings', version: 13, nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY, theme: 'light'};
   const before = structuredClone(old);
-  expect(migrateToCurrent(old, 13)).toEqual({...old, version: 15, theme: 'dark'});
+  expect(migrateToCurrent(old, 13)).toEqual({...old, version: 16, theme: 'dark'});
   expect(old).toEqual(before);
   expect(parseSettings(utf8(JSON.stringify(old)))).toEqual({state: 'loaded', migratedFrom: 13,
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'dark', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}});
@@ -573,34 +573,34 @@ it.each(['light', 'dark', 'system'] as const)('round trips the saved %s theme', 
   expect(parseSettings(utf8(text))).toEqual({state: 'loaded', settings});
 });
 it.each([undefined, null, 'auto', 'Light', 1, true, {}, []])('falls back alone to the system theme for invalid value %j in a v15 file', theme => {
-  expect(parseSettings(v15('ru', true, {ets2: 'metric', ats: 'metric'}, DEFAULT_OVERLAY, {theme}))).toEqual({state: 'loaded-with-fallbacks', fallbackFields: ['theme'],
+  expect(parseSettings(v16('ru', true, {ets2: 'metric', ats: 'metric'}, DEFAULT_OVERLAY, {theme}))).toEqual({state: 'loaded-with-fallbacks', fallbackFields: ['theme'],
     settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: DEFAULT_OVERLAY}});
 });
 
 // ET-084 (REG-017): the overlay section `speed-limit`, on by default also for upgraders, on a copy of a records-only sections
 // value exactly like v12 -> v13. Every expected document and record below is hand-written.
-const V14_ALL_ON = without(ALL_ON, 'speed-limit');
+const V14_ALL_ON = without(without(ALL_ON, 'speed-limit'), 'rest-state');
 it('migrates a v14 file purely to v15 with the speed limit on and every other choice kept, migratedFrom 14', () => {
   const sections = {...V14_ALL_ON, 'rpm': false, 'cargo': false, 'cruise-control': false, 'mandatory-break': false};
   const overlay = {enabled: false, backgroundOpacity: 40, layout: 'cluster', sections, placements: MOVED};
   const old = {format: 'ets2telemetry.settings', version: 14, nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'light', units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay};
   const before = structuredClone(old);
   const migrated = migrateToCurrent(old, 14);
-  expect(migrated).toEqual({...old, version: 15, overlay: {...overlay, sections: {...sections, 'speed-limit': true}}});
+  expect(migrated).toEqual({...old, version: 16, overlay: {...overlay, sections: {...sections, 'speed-limit': true, 'rest-state': true}}});
   expect(old).toEqual(before);
   expect(migrated!.overlay).not.toBe(old.overlay);
   expect((migrated!.overlay as {sections: unknown}).sections).not.toBe(sections);
   expect(parseSettings(v14('ru', true, {ets2: 'us-customary', ats: 'metric'}, overlay))).toEqual({state: 'loaded', migratedFrom: 14,
-    settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'system', units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: {...overlay, sections: {...sections, 'speed-limit': true}}}});
+    settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'ru', autostart: true, theme: 'system', units: {ets2: 'us-customary', ats: 'metric'}, gearDisplay: AUTO, overlay: {...overlay, sections: {...sections, 'speed-limit': true, 'rest-state': true}}}});
 });
 it('adds the speed limit to a v14 job focus record and keeps the record otherwise as saved', () => {
   const jobFocus = Object.fromEntries(Object.keys(V14_ALL_ON).map(id => [id, ['speed', 'gear', 'fuel', 'cargo', 'destination', 'distance-remaining', 'deadline'].includes(id)]));
   expect(parseSettings(v14('en', false, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, sections: jobFocus}))).toEqual({state: 'loaded', migratedFrom: 14,
-    settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, sections: {...jobFocus, 'speed-limit': true}}}});
+    settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, sections: {...jobFocus, 'speed-limit': true, 'rest-state': true}}}});
 });
 it('replaces a stray speed-limit key of a v14 file with on', () => {
   expect(migrateToCurrent({format: 'ets2telemetry.settings', version: 14, overlay: {sections: {...V14_ALL_ON, 'speed-limit': false}}}, 14))
-    .toEqual({format: 'ets2telemetry.settings', version: 15, overlay: {sections: ALL_ON}});
+    .toEqual({format: 'ets2telemetry.settings', version: 16, overlay: {sections: ALL_ON}});
 });
 it('reaches the speed limit through the whole chain from v1, migratedFrom 1', () => {
   expect(parseSettings(v1({ets2: 'metric', ats: 'metric'}))).toMatchObject({state: 'loaded', migratedFrom: 1, settings: {overlay: {sections: {'speed-limit': true}}}});
@@ -610,14 +610,14 @@ it.each([
   ['sections that are not an object', {...DEFAULT_OVERLAY, sections: 'all'}], ['sections as an array', {...DEFAULT_OVERLAY, sections: [true]}]
 ])('leaves %s of a v14 file to the existing fallbacks', (_name, overlay) => {
   const document = {format: 'ets2telemetry.settings', version: 14, overlay};
-  expect(migrateToCurrent(document, 14)).toEqual({...document, version: 15});
+  expect(migrateToCurrent(document, 14)).toEqual({...document, version: 16});
   const parsed = parseSettings(v14('en', false, {ets2: 'metric', ats: 'metric'}, overlay));
   expect(parsed).toMatchObject({state: 'loaded-with-fallbacks', migratedFrom: 14, settings: {overlay: {sections: ALL_ON}}});
 });
 it('falls back to on for a v15 file without the speed limit key, naming only that key', () => {
   const sections = {...without(ALL_ON, 'speed-limit'), 'rpm': false};
-  expect(parseSettings(v15('en', false, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, sections}))).toEqual({state: 'loaded-with-fallbacks', fallbackFields: ['overlay.sections.speed-limit'],
-    settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, sections: {...sections, 'speed-limit': true}}}});
+  expect(parseSettings(v16('en', false, {ets2: 'metric', ats: 'metric'}, {...DEFAULT_OVERLAY, sections}))).toEqual({state: 'loaded-with-fallbacks', fallbackFields: ['overlay.sections.speed-limit'],
+    settings: {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en', autostart: false, theme: 'system', units: {ets2: 'metric', ats: 'metric'}, gearDisplay: AUTO, overlay: {...DEFAULT_OVERLAY, sections: {...sections, 'speed-limit': true, 'rest-state': true}}}});
 });
 it('keeps a stored speed-limit false of a v15 file and writes it after cruise-control', () => {
   const settings = {nowPlaying: DEFAULT_NOW_PLAYING, language: 'en' as const, autostart: false, theme: 'system' as const, units: {ets2: 'metric' as const, ats: 'metric' as const}, gearDisplay: AUTO,
@@ -627,5 +627,18 @@ it('keeps a stored speed-limit false of a v15 file and writes it after cruise-co
   expect(parseSettings(utf8(text))).toEqual({state: 'loaded', settings});
 });
 it('reads a version 16 file as newer-version', () => {
-  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":16,"overlay":{"sections":{"speed-limit":false}}}'))).toEqual({state: 'newer-version'});
+  expect(parseSettings(utf8('{"format":"ets2telemetry.settings","version":17,"overlay":{"sections":{"speed-limit":false}}}'))).toEqual({state: 'newer-version'});
+});
+
+it('migrates v15 without touching the input and saves a later Rest State toggle (REG-017)', () => {
+  const sections = {...without(ALL_ON, 'rest-state'), 'mandatory-break': false, rpm: false};
+  const before = {format: 'ets2telemetry.settings', version: 15, language: 'ru', autostart: true, theme: 'system', units: {ets2: 'metric', ats: 'us-customary'}, gearDisplay: AUTO, nowPlaying: DEFAULT_NOW_PLAYING,
+    overlay: {...DEFAULT_OVERLAY, sections, placements: MOVED}};
+  const snapshot = structuredClone(before);
+  const migrated = parseSettings(utf8(JSON.stringify(before)));
+  expect(migrated).toMatchObject({state: 'loaded', migratedFrom: 15, settings: {overlay: {...before.overlay, sections: {...sections, 'rest-state': true}}}});
+  expect(before).toEqual(snapshot);
+  if (migrated.state !== 'loaded') throw new Error('Expected migrated settings');
+  const settings = {...migrated.settings, overlay: {...migrated.settings.overlay, sections: {...migrated.settings.overlay.sections, 'rest-state': false}}};
+  expect(parseSettings(utf8(serializeSettings(settings)))).toEqual({state: 'loaded', settings});
 });
