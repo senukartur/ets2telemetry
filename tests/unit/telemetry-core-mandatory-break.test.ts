@@ -102,7 +102,7 @@ describe('ET-052 break row in the live view', () => {
   const base = v1Normalized('snapshot');
   it('is a v1-only row in the time section, after the delivery deadline', () => {
     const view = viewOf(base);
-    expect(view.sections.find(section => section.id === 'time')!.fields.map(field => field.id)).toEqual(['game-time', 'deadline', 'mandatory-break']);
+    expect(view.sections.find(section => section.id === 'time')!.fields.map(field => field.id)).toEqual(['game-time', 'deadline', 'mandatory-break', 'rest-state']);
     expect(V0_CARRIED_FIELDS.has('mandatory-break')).toBe(false);
     expect(carriesField('v0', 'mandatory-break')).toBe(false); expect(carriesField('v1', 'mandatory-break')).toBe(true);
   });

@@ -1,0 +1,127 @@
+{
+  "scenario": "rest-state",
+  "authoredFrom": [
+    "docs/protocol/v1.md §7: minor 5 adds signed SDK Rest State in game minutes",
+    "docs/protocol/v1.md §7: send a new slot when the snapshot interval elapses",
+    "v1-only callbacks leave the shared boundary order and event counter intact"
+  ],
+  "connections": [
+    {
+      "durableRequested": true,
+      "closedBy": "disconnect",
+      "clientInstance": 1,
+      "welcome": {
+        "minor": 5
+      },
+      "checkpoint": {
+        "atMs": 50,
+        "ackedThroughEventSeq": "0",
+        "nextEventSeq": "1",
+        "state": {
+          "boundaryOrder": "3",
+          "nextMandatoryBreak": {
+            "available": true,
+            "value": 95,
+            "unit": "min"
+          },
+          "restState": {
+            "available": true,
+            "value": 500,
+            "unit": "min"
+          }
+        }
+      },
+      "coverage": [],
+      "acks": [],
+      "snapshots": [
+        {
+          "atMs": 110,
+          "state": {
+            "boundaryOrder": "5",
+            "nextMandatoryBreak": {
+              "available": true,
+              "value": 95,
+              "unit": "min"
+            },
+            "restState": {
+              "available": true,
+              "value": 0,
+              "unit": "min"
+            }
+          }
+        },
+        {
+          "atMs": 210,
+          "state": {
+            "boundaryOrder": "7",
+            "nextMandatoryBreak": {
+              "available": true,
+              "value": 95,
+              "unit": "min"
+            },
+            "restState": {
+              "available": true,
+              "value": -1,
+              "unit": "min"
+            }
+          }
+        },
+        {
+          "atMs": 310,
+          "state": {
+            "boundaryOrder": "9",
+            "nextMandatoryBreak": {
+              "available": true,
+              "value": 95,
+              "unit": "min"
+            },
+            "restState": {
+              "available": false,
+              "reason": "not-observed",
+              "unit": "min"
+            }
+          }
+        },
+        {
+          "atMs": 410,
+          "state": {
+            "boundaryOrder": "11",
+            "nextMandatoryBreak": {
+              "available": true,
+              "value": 95,
+              "unit": "min"
+            },
+            "restState": {
+              "available": false,
+              "reason": "invalid",
+              "unit": "min"
+            }
+          }
+        },
+        {
+          "atMs": 510,
+          "state": {
+            "boundaryOrder": "13",
+            "nextMandatoryBreak": {
+              "available": true,
+              "value": 95,
+              "unit": "min"
+            },
+            "restState": {
+              "available": true,
+              "value": 660,
+              "unit": "min"
+            }
+          }
+        }
+      ],
+      "end": null
+    }
+  ],
+  "store": {
+    "ackedThroughEventSeq": "0",
+    "nextEventSeq": "1",
+    "eventLoss": {}
+  },
+  "retired": null
+}

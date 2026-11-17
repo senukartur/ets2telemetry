@@ -61,7 +61,7 @@ function sampleOf(point: ReadingPoint): StepSample {
     averageConsumption: NOT_CARRIED, estimatedRange: NOT_CARRIED, odometer: point.odometer, navigationDistance: NOT_CARRIED,
     gameTime: {minutes: point.gameTime.minutes === null ? NOT_CARRIED : {state: 'value', value: BigInt(point.gameTime.minutes)}, clockId: point.gameTime.clockId},
     worldPlacement: NOT_CARRIED, job: NOT_CARRIED, truck: point.truck, trailers: NOT_CARRIED, gameMode: NOT_CARRIED, eventLoss: NOT_CARRIED, gearbox: NOT_CARRIED, nextMandatoryBreak: NOT_CARRIED,
-    cruiseControl: NOT_CARRIED, speedLimit: NOT_CARRIED, configurationRevision: '0'
+    cruiseControl: NOT_CARRIED, speedLimit: NOT_CARRIED, restState: NOT_CARRIED, configurationRevision: '0'
   }};
 }
 
@@ -98,6 +98,41 @@ export function classifyStep(prev: ReadingPoint, next: ReadingPoint, transfer: T
     if (meters > MAX_PLAUSIBLE_SPEED_MPS * (Number(elapsedNs) / 1e9) + POSITION_JUMP_MARGIN_METERS) step.positionJump = {meters};
   }
   return step;
+}
+
+export interface RoadsidePause {
+  sourceClockId: string;
+  processInstanceId: string;
+  gameClockId: string;
+  gameMinutes: string;
+  pausedNs: string;
+  resumedNs: string | null;
+}
+
+const ROADSIDE_EDGE_NS = 2n * NS_PER_SECOND;
+const STOPPED_SPEED_MPS = 0.05;
+const STATIONARY_POSITION_METERS = 0.05;
+const MAX_ROADSIDE_RELOCATION_METERS = 50;
+
+/** The SDK exposes no recovery event. Recognize only the observed short ETS2 relocation at a live pause boundary. */
+export function roadsideRelocation(pause: RoadsidePause, prev: ReadingPoint, next: ReadingPoint, step: ReadingStep): number | null {
+  if (next.source.game !== 'ets2' || next.simulation !== 'running' || pause.resumedNs === null || step.boundary
+    || next.capture.clockId !== pause.sourceClockId || next.source.processInstanceId !== pause.processInstanceId
+    || next.gameTime.clockId !== pause.gameClockId || prev.gameTime.minutes !== pause.gameMinutes || next.gameTime.minutes === null) return null;
+  if (prev.truck.state !== 'value' || prev.truck.value.model.id.state !== 'value'
+    || step.odometer.kind !== 'continuous' || step.odometer.meters !== 0
+    || step.fuel.kind !== 'unchanged' || step.fuel.increaseLiters !== 0
+    || !prev.position || !next.position || prev.speedMps == null || next.speedMps == null
+    || Math.max(Math.abs(prev.speedMps), Math.abs(next.speedMps)) > STOPPED_SPEED_MPS) return null;
+
+  const before = BigInt(prev.capture.monotonicNs), after = BigInt(next.capture.monotonicNs);
+  const paused = BigInt(pause.pausedNs), resumed = BigInt(pause.resumedNs);
+  if (before >= resumed || after < resumed || after - resumed > ROADSIDE_EDGE_NS
+    || paused - before > ROADSIDE_EDGE_NS || (before > paused && prev.simulation !== 'paused')) return null;
+  const minutes = BigInt(next.gameTime.minutes) - BigInt(pause.gameMinutes);
+  if (minutes !== 30n && minutes !== 31n) return null;
+  const meters = Math.hypot(next.position.x - prev.position.x, next.position.y - prev.position.y, next.position.z - prev.position.z);
+  return meters > STATIONARY_POSITION_METERS && meters <= MAX_ROADSIDE_RELOCATION_METERS ? meters : null;
 }
 
 /**

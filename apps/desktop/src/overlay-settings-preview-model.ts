@@ -28,7 +28,8 @@ export function overlayExample(settings: OverlaySettings, language: AppLanguage,
     deadline: {id: 'deadline', state: 'value', text: '8 h 25 min'},
     'expected-income': {id: 'expected-income', state: 'value', text: '24680 EUR'},
     'game-time': {id: 'game-time', state: 'value', text: '14:35'},
-    'mandatory-break': {id: 'mandatory-break', state: 'value', text: '3 h 15 min'}
+    'mandatory-break': {id: 'mandatory-break', state: 'value', text: '3 h 15 min'},
+    'rest-state': {id: 'rest-state', state: 'value', text: '8 h 20 min'}
   };
   return {source: 'ETS2', origin: 'none', status: 'connected', freshness: 'current', paused: false, editing: false,
     language, layout: settings.layout, backgroundOpacity: settings.backgroundOpacity, contentAnchorY: 0,

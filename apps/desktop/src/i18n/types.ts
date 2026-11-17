@@ -171,6 +171,7 @@ export type I18nKey =
   | "copy.game-time"
   | "copy.delivery-deadline"
   | "copy.next-mandatory-break"
+  | "copy.rest-state"
   | "copy.cargo"
   | "copy.source-city"
   | "copy.source-company"
@@ -341,6 +342,7 @@ export type I18nKey =
   | "copy.odometer-jumped"
   | "copy.game-time-jumped"
   | "copy.position-jumped"
+  | "copy.possible-roadside-assistance"
   | "copy.refuelled"
   | "copy.samples-could-not-be-stored-in-time"
   | "copy.database-behind-the-plugin"
@@ -573,7 +575,7 @@ export type I18nKey =
   | 'mode.sp' | 'mode.tmp' | 'mode.haulmp' | 'stale' | 'paused'
   | 'live.title' | 'live.speed' | 'live.gear' | 'live.rpm' | 'live.fuel' | 'live.of' | 'live.range' | 'live.rangeNote'
   | 'live.cons' | 'live.consNote' | 'live.consNoteAts'
-  | 'live.job' | 'live.market.freight' | 'live.market.cargo' | 'live.driven' | 'live.remaining' | 'live.planned' | 'live.plannedNote'
+  | 'live.job' | 'live.market.freight' | 'live.market.cargo' | 'live.driven' | 'live.remaining' | 'live.planned' | 'live.plannedNote' | 'live.routeProgress'
   | 'live.deadline' | 'live.breakSoon' | 'live.breakDue' | 'live.breakBadge' | 'live.cruiseOff' | 'live.speedLimitNone' | 'live.income' | 'live.trip' | 'live.realTime' | 'live.gameTime' | 'live.fuelUsed' | 'live.recording'
   | 'live.truck' | 'live.plate' | 'live.trailer' | 'live.odometer' | 'live.session' | 'live.clock' | 'live.mode' | 'live.protocol' | 'live.lostEvents'
   | 'live.waitTitle' | 'live.waitText'
@@ -599,7 +601,7 @@ export type I18nKey =
   | 'tr.gameDistance' | 'tr.odometer' | 'j.qty.partial' | 'j.qty.partialReasons' | 'j.qty.truck-change' | 'j.qty.position-jump' | 'j.qty.transfer' | 'j.qty.reading-hole'
   | 'j.qty.recording-gap' | 'j.qty.recording-boundary' | 'j.qty.unsupported' | 'j.qty.bridged' | 'j.qty.restored' | 'j.membershipPending' | 'j.membershipPendingHint'
   | 'tr.tab.summary' | 'tr.tab.timeline' | 'tr.tab.completeness' | 'tr.speed' | 'tr.samples' | 'tr.gap'
-  | 'tr.money' | 'tr.fines' | 'tr.tolls' | 'tr.ferry' | 'tr.hmStart' | 'tr.hmEnd' | 'tr.hmSnapshot' | 'tr.truck'
+  | 'tr.money' | 'tr.moneySubtotal' | 'tr.fines' | 'tr.tolls' | 'tr.ferry' | 'tr.hmStart' | 'tr.hmEnd' | 'tr.hmSnapshot' | 'tr.truck'
   | 'tr.ivRecorded' | 'tr.ivGap' | 'tr.ivTotal'
   | 'tr.tabs' | 'tr.kpis' | 'tr.started' | 'tr.recordedTime' | 'tr.recordedNote' | 'tr.recordedLimit' | 'tr.ivNoSamples' | 'tr.recordedNone' | 'tr.gameTimeNone' | 'tr.durS' | 'tr.durM' | 'tr.durH' | 'tr.durMs' | 'tr.durHm' | 'tr.gapNoSpeed' | 'tr.gapExcluded' | 'tr.gapSource' | 'tr.gapUnknown' | 'tr.hmLatest' | 'tr.truckLabel' | 'tr.trailerLabel' | 'tr.trailerN' | 'tr.ivCount' | 'tr.ivNone' | 'tr.ivNoneFirst' | 'tr.ivUnknown' | 'tr.ivBar' | 'tr.ivNote' | 'tr.ivFirstOnly' | 'tr.intervalsMore' | 'tr.allFields' | 'tr.site' | 'tr.siteSaved' | 'tr.siteRevision'
   | 'ev.accepted' | 'ev.refuel' | 'ev.fine' | 'ev.toll' | 'ev.gap' | 'ev.delivered' | 'ev.cancelled' | 'ev.closed' | 'ev.recording'

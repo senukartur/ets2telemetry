@@ -60,7 +60,7 @@ export const ENUMS = Object.freeze({
   gearDisplay: ['automatic', 'manual', 'crawler'],
   overlayLayout: ['strip', 'card', 'cluster', 'hud'],
   overlaySection: ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
-    'deadline', 'expected-income', 'game-time', 'mandatory-break'],
+    'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state'],
   settingsState: ['loading', 'defaults', 'loaded', 'loaded-with-fallbacks', 'invalid-file', 'unsupported-older', 'newer-version', 'unreadable', 'unavailable'],
   pluginMode: ['active', 'test-root', 'disabled'],
   pluginGame: ['ets2', 'ats'],

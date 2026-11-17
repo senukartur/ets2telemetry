@@ -27,7 +27,7 @@ const ALL = DEFAULT_OVERLAY_SECTIONS;
 
 it('fixes the hand-written maximum widths of every strip item', () => {
   expect(STRIP_ITEM_MAX_WIDTH_CSS).toEqual({'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'speed-limit': 32, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300,
-    'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150});
+    'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150});
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
     gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 38, border: 1, padding: 12, gap: 14});
   expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(100);
@@ -104,7 +104,7 @@ it('reserves cruise control its own 140 px slot (ET-071)', () => {
   expect(stripRowCount(only('cruise-control'), 500)).toBe(1);
   expect(stripRowCount(only('cruise-control'), 499)).toBe(2);
   // Removing it and ET-084's speed limit from every section at 1280 gives ET-070's three rows back (1210, 1092, then the indicator at 1190).
-  expect(stripRowCount({...ALL, 'cruise-control': false, 'speed-limit': false}, 1280)).toBe(3);
+  expect(stripRowCount({...ALL, 'cruise-control': false, 'speed-limit': false, 'rest-state': false}, 1280)).toBe(3);
 });
 
 it('reserves the speed limit sign its own 32 px slot (ET-084)', () => {
@@ -161,9 +161,10 @@ it('models the surface border as at least one device pixel below zoom 1', () => 
   expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1306, 0.99)).toBe(2);
 });
 
-it('never reserves more rows for a subset of the sections than for all of them', () => {
+it.each([0, 1, 2, 3])('never reserves more rows for a subset of sections than for all of them (partition %i)', partition => {
   const widths = [480, 640, 768, 928, 992, 1248, 1280], all = widths.map(width => stripRowCount(ALL, width)!);
-  for (let mask = 1; mask < 1 << OVERLAY_SECTION_IDS.length; mask++) {
+  const partitionSize = 1 << (OVERLAY_SECTION_IDS.length - 2);
+  for (let mask = Math.max(1, partition * partitionSize); mask < (partition + 1) * partitionSize; mask++) {
     const sections = only(...OVERLAY_SECTION_IDS.filter((_id, index) => (mask & (1 << index)) !== 0));
     widths.forEach((width, index) => {
       const rows = stripRowCount(sections, width);

@@ -207,7 +207,7 @@ it('fits the owner 50% strip, which now requests 16 DIP, to a 38 DIP minimum at 
   expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqX: 2058, reqY: 1176, reqW: 1280,
     reqH: 16, actH: 38})]);
   expect(overlayBounds('strip', CLIENT, OWNER, OVERLAY_PRESETS.everything)).toEqual({x: 2058, y: 1163, width: 1280, height: 29});
-  for (const sections of [OVERLAY_PRESETS['job-focus'], {...OVERLAY_PRESETS.everything, 'cruise-control': false}, OVERLAY_PRESETS['driving-only']]) {
+  for (const sections of [OVERLAY_PRESETS['job-focus'], {...OVERLAY_PRESETS.everything, 'cruise-control': false, 'rest-state': false}, OVERLAY_PRESETS['driving-only']]) {
     const from = t.calls.length;
     t.overlay.setLayout('strip', OWNER, sections);
     expect(overlayBounds('strip', CLIENT, OWNER, sections)).toEqual({x: 2058, y: 1176, width: 1280, height: 16});

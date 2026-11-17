@@ -13,7 +13,7 @@
     {"atMs": 610, "action": "frame", "channels": {"navigation.speed.limit": 29.5}}
   ],
   "transport": [
-    {"atMs": 50, "action": "connect", "client": {"durable": true}},
+    {"atMs": 50, "action": "connect", "client": {"durable": true, "maxMinor": 4}},
     {"atMs": 700, "action": "disconnect"}
   ]
 }

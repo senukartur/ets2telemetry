@@ -36,7 +36,7 @@ export const SYNTHETIC_V0_VALUE_IDS = Object.freeze(SYNTHETIC_V0_LIVE_ROWS.map((
 export const SYNTHETIC_V0_HIDDEN_ROWS = Object.freeze([
   'live-speed', 'live-fuel', 'live-route-remaining', 'live-deadline', 'live-source-city', 'live-source-company', 'live-destination-company',
   'live-cargo-mass', 'live-market', 'live-special-job', 'live-cargo-loaded', 'live-truck-plate', 'live-trailers', 'live-position', 'live-bearing',
-  'live-game-mode', 'live-event-loss', 'live-mandatory-break', 'live-cruise-control', 'live-speed-limit', 'live-paused', 'live-job-missing'
+  'live-game-mode', 'live-event-loss', 'live-mandatory-break', 'live-cruise-control', 'live-speed-limit', 'live-rest-state', 'live-paused', 'live-job-missing'
 ]);
 
 // Self-contained browser callback. Every expected element exists exactly once, is visible with a non-empty box and has
@@ -115,6 +115,8 @@ export const SYNTHETIC_V1_LIVE_ROWS = Object.freeze([
   ['live-deadline-note', 'game time'],
   ['live-mandatory-break', '1 h 35 min'],
   ['live-mandatory-break-note', 'game time'],
+  ['live-rest-state', '8 h 20 min'],
+  ['live-rest-state-note', 'game time'],
   ['live-source-city', 'Synthetic City A'],
   ['live-source-company', 'Synthetic Company A'],
   ['live-destination-company', 'Synthetic Company B'],
@@ -159,6 +161,8 @@ export const SYNTHETIC_V0V1_LIVE_ROWS = Object.freeze([
   ['live-deadline-note', 'game time'],
   ['live-mandatory-break', '1 h 35 min'],
   ['live-mandatory-break-note', 'game time'],
+  ['live-rest-state', '8 h 20 min'],
+  ['live-rest-state-note', 'game time'],
   ['live-cargo', 'Synthetic Cargo'],
   ['live-source-city', 'Synthetic City A'],
   ['live-source-company', 'Synthetic Company A'],
@@ -202,25 +206,25 @@ export const SYNTHETIC_V1_OVERLAY_CURRENT = Object.freeze({
   // ET-052: the smoke source's states carry a next mandatory break of 95 game minutes (1 h 35 min). ET-071: and a cruise
   // control set speed of 25 m/s, shown like speed as the whole number 90 with its unit km/h.
   // ET-084: and a limit of 22.5 m/s, whose sign holds the whole number 81 and no unit in the strip.
-  'overlay-mandatory-break': '1 h 35 min', 'overlay-cruise-control': '90', 'overlay-cruise-control-unit': 'km/h', 'overlay-speed-limit': '81', 'overlay-speed': '90', 'freshness': 'current'
+  'overlay-mandatory-break': '1 h 35 min', 'overlay-rest-state': '8 h 20 min', 'overlay-cruise-control': '90', 'overlay-cruise-control-unit': 'km/h', 'overlay-speed-limit': '81', 'overlay-speed': '90', 'freshness': 'current'
 });
 /** The strip sections the pair shows, in canonical order: range stays hidden (its estimate is not observed). */
 export const SYNTHETIC_V1_STRIP_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination',
-  'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break']);
+  'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state']);
 /** v0 not current: every shown section is a dash and no detail remains. */
 export const SYNTHETIC_V1_OVERLAY_V0_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
-  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '—', 'freshness': 'stale'
+  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-rest-state': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '—', 'freshness': 'stale'
 });
 /** v1 not current while v0 is: the v1 sections are dashes, the mixed sections keep their v0 part (game ids, no mass). */
 export const SYNTHETIC_V1_OVERLAY_V1_STALE = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': 'cargo.logs', 'overlay-cargo-detail': null,
-  'overlay-destination': 'city.warszawa', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '90', 'freshness': 'current'
+  'overlay-destination': 'city.warszawa', 'overlay-mandatory-break': '—', 'overlay-rest-state': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '90', 'freshness': 'current'
 });
 /** Both sources stopped: dashes only; the freshness depends on which status arrives first, so it is not compared. */
 export const SYNTHETIC_V1_OVERLAY_STOPPED = Object.freeze({
   'overlay-origin': '—', 'overlay-distance-remaining': '—', 'overlay-deadline': '—', 'overlay-cargo': '—', 'overlay-cargo-detail': null,
-  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '—'
+  'overlay-destination': '—', 'overlay-mandatory-break': '—', 'overlay-rest-state': '—', 'overlay-cruise-control': '—', 'overlay-cruise-control-unit': null, 'overlay-speed-limit': '—', 'overlay-speed': '—'
 });
 
 // Self-contained browser callback for the overlay document. Each listed element exists once with exactly the expected

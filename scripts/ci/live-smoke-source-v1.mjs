@@ -22,13 +22,14 @@ const CLIENT_FRAME_BYTES = 4096;
 /** Every capture is at least snapshot-live's own capture, so its oldest retained event never lies in the future. */
 const CAPTURE_BASE_NS = 1_000_250_000_000n;
 /** The protocol v1 minor this source selects (ET-050b minor 1, ET-052 minor 2, ET-071 minor 3, ET-084 minor 4). */
-const MINOR = 4;
+const MINOR = 5;
 /** The next mandatory break every state carries until `setBreak` changes it: 1 h 35 min, which is soon (ET-052 D3). */
 const DEFAULT_BREAK = Object.freeze({available: true, value: 95, unit: 'min'});
 /** The cruise control set speed every state carries until `setCruiseControl` changes it: 25 m/s, 90 km/h (ET-071). */
 const DEFAULT_CRUISE = Object.freeze({available: true, value: 25, unit: 'm/s'});
 /** The speed limit every state carries until `setSpeedLimit` changes it: 22.5 m/s, 81 km/h (ET-084). */
 const DEFAULT_LIMIT = Object.freeze({available: true, value: 22.5, unit: 'm/s'});
+const DEFAULT_REST_STATE = Object.freeze({available: true, value: 500, unit: 'min'});
 
 export async function startLiveSmokeSourceV1(checkout) {
   const endpoint = `\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-${process.pid}-${randomUUID()}`;
@@ -47,6 +48,7 @@ export async function startLiveSmokeSourceV1(checkout) {
     message.data.state.nextMandatoryBreak = structuredClone(DEFAULT_BREAK);
     message.data.state.cruiseControl = structuredClone(DEFAULT_CRUISE);
     message.data.state.speedLimit = structuredClone(DEFAULT_LIMIT);
+    message.data.state.restState = structuredClone(DEFAULT_REST_STATE);
   }
   let seq = 0n, boundary = BigInt(checkpoint.data.state.boundaryOrder), connections = 0, frames = 0, probes = 0, stopped = false, held = false;
   const origin = performance.now(), clients = new Set();
@@ -76,13 +78,13 @@ export async function startLiveSmokeSourceV1(checkout) {
     const accept = value => {
       if (!started) {
         assert.equal(value.kind, 'hello'); assert.deepEqual(value.version, {major: 1, minor: 0});
-        // ET-050b B1, ET-052, ET-071, ET-084: the service offers minor 4 in a {1,0} hello, and this source selects it.
+        // The service offers the current minor in a {1,0} hello, and the source selects it.
         assert.deepEqual({minMinor: value.data.minMinor, maxMinor: value.data.maxMinor, durableEvents: value.data.durableEvents}, {minMinor: 0, maxMinor: MINOR, durableEvents: false});
         started = true; clearTimeout(deadline);
         send(welcome, () => send(checkpoint, loop));
       } else {
         // The live-only client measures the source clock; no reply is required, so a probe stays outstanding.
-        // Its probes carry the minor the welcome selected, 4.
+        // Its probes carry the minor selected by the welcome.
         assert.equal(value.kind, 'clock.probe'); assert.deepEqual(value.version, {major: 1, minor: MINOR}); probes++;
       }
     };
@@ -128,6 +130,10 @@ export async function startLiveSmokeSourceV1(checkout) {
     setSpeedLimit: measure => {
       assert.ok(measure === undefined || (typeof measure === 'object' && measure !== null && measure.unit === 'm/s'));
       for (const message of [checkpoint, snapshot]) message.data.state.speedLimit = structuredClone(measure ?? DEFAULT_LIMIT);
+    },
+    setRestState: measure => {
+      assert.ok(measure === undefined || (typeof measure === 'object' && measure !== null && measure.unit === 'min'));
+      for (const message of [checkpoint, snapshot]) message.data.state.restState = structuredClone(measure ?? DEFAULT_REST_STATE);
     },
     statistics: () => ({connections, frames, probes, activeClients: clients.size, held, stopped, origin: 'synthetic', history: false,
       identity: {...source, clockId}})};

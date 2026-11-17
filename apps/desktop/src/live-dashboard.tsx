@@ -1,5 +1,5 @@
 import React, {useMemo, useState} from 'react';
-import {ChevronRight, Clock, Coffee, Coins, Droplet, Flag, Hourglass, MapPin, Navigation, Package, TriangleAlert, WifiOff} from 'lucide-react';
+import {Bed, ChevronRight, Clock, Coffee, Coins, Droplet, Flag, Hourglass, MapPin, Navigation, Package, TriangleAlert, WifiOff} from 'lucide-react';
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, RecordingHealth, UnitProfiles} from '../../../packages/contracts/src';
 import type {LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
@@ -42,7 +42,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const shown = (id: LiveFieldId) => sources.field(id).state !== 'hidden';
   const speedText = dashboardSpeed(live, profile, language), fuelText = dashboardFuel(live, profile, language);
   const hint = (label: string, text: string) => <InfoHint label={t('ui.moreAbout', {v: label}, language)}>{text}</InfoHint>;
-  const rows = (entries: [string, string, string?][]) => <dl>{entries.map(([label, shownValue, testId]) => <div className="yu-kv" key={label}><dt>{label}</dt><dd data-testid={testId}>{shownValue}</dd></div>)}</dl>;
+  const rows = (entries: (readonly [string, string, string?, React.ReactNode?])[]) => <dl>{entries.map(([label, shownValue, testId, icon]) => <div className="yu-kv" key={label}><dt>{icon}{label}</dt><dd data-testid={testId}>{shownValue}</dd></div>)}</dl>;
   const title = (key: 'live.job' | 'live.trip' | 'live.truck' | 'live.session') => <CardTitle><h2>{t(key, undefined, language)}</h2></CardTitle>;
 
   // The waiting banner: no current game, one current stream of two (partial, in either direction), or an incompatible v1
@@ -59,6 +59,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const hasJob = sources.v0State?.job.state === 'value';
   const jobMissing = jobSection?.missing && jobSection.missing !== 'not-observed' ? text.sections.find(section => section.id === 'job')?.missing : undefined;
   const breakRow = text.sections.flatMap(section => section.rows).find(row => row.id === 'mandatory-break');
+  const restRow = text.sections.find(section => section.id === 'time')?.rows.find(row => row.id === 'rest-state');
   const cargo = has('cargo') ? has('cargo-mass') ? `${value('cargo')} · ${value('cargo-mass')}` : value('cargo') : null;
 
   const trip = recording && 'trip' in recording ? recording.trip : null;
@@ -118,7 +119,8 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
       {hasJob ? <CardContent className="yu-job-body">
         <div className="yu-route" data-testid="live.job.route">
           <div className="yu-route-end"><MapPin aria-hidden="true" /><span><strong data-testid="live.job.origin">{value('source-city')}</strong><small>{value('source-company')}</small></span></div>
-          <span className="yu-route-line" aria-hidden="true" />
+          {view.routeProgress === null ? <span className="yu-route-line" aria-hidden="true" />
+            : <progress className="yu-route-line" data-testid="live.job.progress" value={view.routeProgress} max={1} aria-label={t('live.routeProgress', undefined, language)} />}
           <div className="yu-route-end yu-route-destination"><span><strong data-testid="live.job.destination">{value('destination-city')}</strong><small>{value('destination-company')}</small></span><Flag aria-hidden="true" /></div>
         </div>
         <div className="yu-job-metrics">
@@ -140,6 +142,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
         [t('live.plate', undefined, language), value('truck-plate')], [t('live.trailer', undefined, language), value('trailers')], [t('live.odometer', undefined, language), value('odometer')]])}</CardContent></Card>
       <Card className="yu-live-card" data-testid="live.session"><CardHeader>{title('live.session')}</CardHeader><CardContent>{rows([
         [t('live.clock', undefined, language), value('game-time')],
+        ...(restRow ? [[restRow.label, value('rest-state'), 'live.session.restState', <Bed className="inline size-3 mr-1" aria-hidden="true" />] as const] : []),
         ...shown('game-mode') ? [[t('live.mode', undefined, language), mode ? t(mode === 'haulmp' ? 'mode.haulmp' : mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : '—', 'live.session.mode'] as [string, string, string]] : [],
         [t('live.protocol', undefined, language), protocol, 'live.session.protocol'],
         ...shown('event-loss') ? [[t('live.lostEvents', undefined, language), value('event-loss'), 'live.session.lostEvents'] as [string, string, string]] : []])}</CardContent></Card>
@@ -149,7 +152,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
     <Card size="sm" className="yu-live-details-card"><details className="yu-live-details" data-testid="live.details"><summary data-testid="live.details.toggle"><ChevronRight aria-hidden="true" />{t('ui.details', undefined, language)}</summary><div className="yu-live-fields">
       {text.sections.map(section => <section key={section.id} data-testid={section.testId} className="space-y-1"><h3 className="font-bold">{section.title}</h3>
         {section.missing ? <p data-testid="live-job-missing">{section.missing}</p> : null}{section.status ? <p data-testid="live-v1-status">{section.status}</p> : null}
-        {section.rows.length ? <dl>{section.rows.map(row => <div key={row.id} className="yu-kv"><dt>{row.id === 'mandatory-break' ? <Coffee className="inline size-3 mr-1" aria-hidden="true" data-testid="live-mandatory-break-icon" /> : null}{row.label}{row.note ? <small className="block yu-muted" data-testid={`${row.testId}-note`}>{row.note}</small> : null}</dt><dd><span data-testid={row.testId}>{row.value}</span>{row.reason ? <> (<span data-testid={`${row.testId}-reason`}>{row.reason}</span>)</> : null}{row.badge ? <> <BreakBadge badge={row.badge} testId={`${row.testId}-badge`} /></> : null}</dd></div>)}</dl> : null}
+        {section.rows.length ? <dl>{section.rows.map(row => <div key={row.id} className="yu-kv"><dt>{row.id === 'mandatory-break' ? <Coffee className="inline size-3 mr-1" aria-hidden="true" data-testid="live-mandatory-break-icon" /> : row.id === 'rest-state' ? <Bed className="inline size-3 mr-1" aria-hidden="true" /> : null}{row.label}{row.note ? <small className="block yu-muted" data-testid={`${row.testId}-note`}>{row.note}</small> : null}</dt><dd><span data-testid={row.testId}>{row.value}</span>{row.reason ? <> (<span data-testid={`${row.testId}-reason`}>{row.reason}</span>)</> : null}{row.badge ? <> <BreakBadge badge={row.badge} testId={`${row.testId}-badge`} /></> : null}</dd></div>)}</dl> : null}
       </section>)}
     </div></details></Card>
   </div>;

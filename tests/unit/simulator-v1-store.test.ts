@@ -238,7 +238,7 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
   const helloOffering = (maxMinor: number, durable = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: '50000000-0000-4000-8000-000000000001', minMinor: 0, maxMinor, durableEvents: durable}});
   const M1 = {major: 1, minor: 1} as const;
   it('serves minor 0 without a gearbox or break to a client that offers only minor 0, minor 1 with the gearbox, minor 2 with both, minor 3 with cruise control too, and minor 4 with the speed limit too', () => {
-    for (const [offered, selected] of [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 4]] as const) {
+    for (const [offered, selected] of [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 5]] as const) {
       const {adapter, p} = producer();
       adapter.configuration('truck', [{name: 'gears.forward', sdkType: 'u32', value: 12}, {name: 'gears.reverse', sdkType: 'u32', value: 4}], 'terminated', 0); adapter.frame(false, {}, 1);
       p.open(); const [welcome, checkpoint] = p.receive(helloOffering(offered), 1_000_002_000_000n);
@@ -251,8 +251,10 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
       if (selected >= 2) expect(state!.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'});
       expect(Object.hasOwn(state!, 'cruiseControl'), `offer ${offered}`).toBe(selected >= 3);
       if (selected >= 3) expect(state!.cruiseControl).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
-      expect(Object.hasOwn(state!, 'speedLimit'), `offer ${offered}`).toBe(selected === 4);
-      if (selected === 4) expect(state!.speedLimit).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+      expect(Object.hasOwn(state!, 'speedLimit'), `offer ${offered}`).toBe(selected >= 4);
+      if (selected >= 4) expect(state!.speedLimit).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
+      expect(Object.hasOwn(state!, 'restState'), `offer ${offered}`).toBe(selected === 5);
+      if (selected === 5) expect(state!.restState).toEqual({available: false, reason: 'not-observed', unit: 'min'});
       // Every later message of the connection, here a snapshot, keeps the selected minor.
       adapter.frame(false, {speed: 1}, 100);
       const snapshot = p.publication(1_000_100_000_000n)!;

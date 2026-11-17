@@ -204,8 +204,8 @@ describe('simulator v1 gearbox capture (ET-050b)', () => {
 describe('simulator v1 mandatory break capture (ET-052)', () => {
   const breakOf = (a: AdapterModel) => a.published.nextMandatoryBreak;
   it('lists the channel before the placement in registration order', () => {
-    // ET-071 and ET-084 register cruise control and the speed limit between the break and the placement.
-    expect(CHANNELS.slice(-4)).toEqual(['mandatory.break', 'cruise_control', 'navigation.speed.limit', 'world.placement']);
+    // The optional readings after the mandatory break retain their registration order.
+    expect(CHANNELS.slice(-5)).toEqual(['mandatory.break', 'cruise_control', 'navigation.speed.limit', 'rest.stop', 'world.placement']);
     expect(CHANNELS.indexOf('mandatory.break')).toBeGreaterThan(CHANNELS.indexOf('navigation.distance'));
   });
   it('is not-observed before any callback and carries each s32 value exactly, zero and negative included', () => {

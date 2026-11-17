@@ -2,6 +2,7 @@ import type {GearDisplayModes, LiveTelemetry, RecordingHealth, PluginTargetState
 import type {HardModeStatus} from '../../../../packages/contracts/src/hard-mode';
 import {resolveDisplayUnits} from '../../../../packages/telemetry-core/src/display-profile';
 import {fixed} from '../../../../packages/telemetry-core/src/format';
+import type {LiveJob} from '../../../../packages/telemetry-core/src/readings';
 import {convertSpeed} from '../../../../packages/telemetry-core/src/units';
 import {liveSources, type LiveSources} from '../live-sources';
 import {connectionReasonText} from '../live-dashboard-text';
@@ -14,6 +15,33 @@ import {DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, profileFor} from '..
 import {SPEED_GAUGE_FULL_SCALE, speedGaugeFraction} from '../speed-gauge';
 /** Geometry only clamps normalized numeric readings; formatted telemetry is never parsed or replaced by demo values. */
 export const clampRatio = (value: number | null) => value === null || !Number.isFinite(value) ? null : Math.max(0, Math.min(1, value));
+
+function plannedMeters(reading: LiveJob['plannedDistance']): number | null {
+  if (reading.state !== 'value') return null;
+  const {meters} = reading.value;
+  return Number.isFinite(meters) && meters > 0 ? meters : null;
+}
+
+function jobRouteProgress(sources: LiveSources): number | null {
+  const v0Job = sources.v0State?.job, v1 = sources.v1State;
+  if (!sources.v0View.connection.current || !sources.v1Current || sources.job !== 'match' ||
+    v0Job?.state !== 'value' || v1?.job.state !== 'value') return null;
+  const {expectedIncome: v0Income, plannedDistance: v0Plan} = v0Job.value;
+  const {expectedIncome: v1Income, plannedDistance: v1Plan} = v1.job.value;
+  if (v0Income.state === 'value' && v1Income.state === 'value') {
+    // Both streams carry the same SDK attribute. Synthetic or replay v0 data can spell a whole amount as a decimal.
+    const raw = v0Income.value.raw.replace(/\.0+$/, '');
+    if ((raw === '-0' ? '0' : raw) !== v1Income.value.raw) return null;
+  }
+  const planned = plannedMeters(v1Plan);
+  const v0Planned = plannedMeters(v0Plan);
+  const navigation = v1.navigationDistance;
+  if (planned === null || (v0Planned !== null && v0Planned !== planned) || navigation.state !== 'value') return null;
+  const remaining = navigation.value.meters;
+  if (!Number.isFinite(remaining) || remaining < 0) return null;
+  return Math.max(0, planned - remaining) / planned;
+}
+
 /** `gearDisplay` (ET-050): the per-game gear display mode for `live.instrument.gear`; automatic without settings. */
 export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitProfiles = DEFAULT_UNIT_PROFILES, gearDisplay?: GearDisplayModes) {
   const telemetry = live ?? initialLive(), game = displayGame(telemetry), profile = profileFor(profiles, game), units = resolveDisplayUnits(game, {profile});
@@ -27,7 +55,8 @@ export function desktopLiveView(live: LiveTelemetry | undefined, profiles: UnitP
   // would paint a dot that blinks as the SDK speed flickers around zero). Above 0 the ratio keeps its fractional precision.
   // ET-045f: the Cluster overlay's speed arc shares this rule and scale (speed-gauge.ts).
   const speedRatio = metersPerSecond === null ? null : speedGaugeFraction(metersPerSecond, profile) ?? null;
-  return {sources, units, current, speed, speedText, rpm, scaleMax, speedRatio, rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel)};
+  return {sources, units, current, speed, speedText, rpm, scaleMax, speedRatio, rpmRatio: clampRatio(rpm === null ? null : rpm / 3000), fuelRatio: clampRatio(fuel),
+    routeProgress: jobRouteProgress(sources)};
 }
 export function gaugeArc(radius: number, start: number, end: number, center = 130): string {
   const point = (angle: number) => {const rad = angle * Math.PI / 180; return [center + radius * Math.sin(rad), center - radius * Math.cos(rad)];};

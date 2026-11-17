@@ -174,12 +174,12 @@ Json hshifter(const Field<HShifterPod>& f) {
 Json gearbox(const GearboxPod& g) {
   return Json{Object{{"forwardGears", gear_count(g.forward_gears)}, {"reverseGears", gear_count(g.reverse_gears)}, {"hshifter", hshifter(g.hshifter)}}};
 }
-// Minor 2 (ET-052): signed s32 game minutes as a plain JSON number with unit "min", not the decimal string of GameMinutes.
-Json mandatory_break(const Field<std::int32_t>& f) {
+// Signed s32 durations use a plain JSON number in game minutes. GameMinutes represents a clock reading as a decimal string.
+Json game_duration(const Field<std::int32_t>& f) {
   return with_unit(field(f, [](std::int32_t v) { return number(v); }), "min");
 }
 // The state of `minor`: minor 1 adds `gearbox`, minor 2 adds `nextMandatoryBreak` after it, minor 3 adds `cruiseControl`
-// (ET-071) after that and minor 4 adds `speedLimit` (ET-084) after that; a lower minor carries none of the later keys,
+// (ET-071) after that, minor 4 adds `speedLimit` (ET-084), and minor 5 adds `restState` (ET-118). A lower minor carries none of the later keys,
 // whatever the POD holds, so lower-minor bytes never change.
 Json state(const StatePod& s, const Currency& currency, unsigned minor) {
   Object o{{"simulation", text_value(simulation(s.simulation))},
@@ -193,11 +193,12 @@ Json state(const StatePod& s, const Currency& currency, unsigned minor) {
     {"boundaryOrder", decimal(s.boundary_order)}, {"worldPlacement", placement(s.world_placement)}, {"configuration", configuration(s.configuration, currency)},
     {"window", window(s.window)}};
   if (minor >= 1) o.emplace("gearbox", gearbox(s.gearbox));
-  if (minor >= 2) o.emplace("nextMandatoryBreak", mandatory_break(s.next_mandatory_break_min));
+  if (minor >= 2) o.emplace("nextMandatoryBreak", game_duration(s.next_mandatory_break_min));
   // SDK m/s unscaled; a negative, non-finite or above-bound value is `invalid`, never clamped.
   if (minor >= 3) o.emplace("cruiseControl", measure(scaled(s.cruise_control_mps, 1, 0, 1000, "m/s")));
   // SDK m/s unscaled, speed's bounds: zero and negative are values meaning no limit; non-finite or above-bound is `invalid`.
   if (minor >= 4) o.emplace("speedLimit", measure(scaled(s.speed_limit_mps, 1, -1000, 1000, "m/s")));
+  if (minor >= 5) o.emplace("restState", game_duration(s.rest_state_min));
   return Json{std::move(o)};
 }
 }

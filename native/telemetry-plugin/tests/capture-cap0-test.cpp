@@ -50,6 +50,7 @@ struct Host {
   std::map<scs_event_t, std::pair<scs_telemetry_event_callback_t, scs_context_t>> events;
   struct Channel { scs_telemetry_channel_callback_t cb; scs_context_t ctx; };
   std::map<std::string, Channel> channels; std::uint64_t frames = 0;
+  std::optional<std::int32_t> rest_minutes;
   Host() { active = this; }
   static void check() { ++active->api_calls; if (active->caller != std::this_thread::get_id()) ++active->wrong_thread; }
   static SCSAPI_VOID log(scs_log_type_t, scs_string_t) { check(); }
@@ -66,7 +67,9 @@ struct Host {
   void frame(float speed, std::uint32_t flags = 0, std::uint64_t at = 0) {
     scs_telemetry_frame_start_t f{}; f.flags = flags; f.render_time = f.simulation_time = f.paused_simulation_time = at ? at : ++frames * 50000;
     event(SCS_TELEMETRY_EVENT_frame_start, &f);
-    scs_value_t v{}; v.type = SCS_VALUE_TYPE_float; v.value_float.value = speed; channel("truck.speed", v); event(SCS_TELEMETRY_EVENT_frame_end);
+    scs_value_t v{}; v.type = SCS_VALUE_TYPE_float; v.value_float.value = speed; channel("truck.speed", v);
+    if (rest_minutes && channels.count("rest.stop")) { scs_value_t r{}; r.type = SCS_VALUE_TYPE_s32; r.value_s32.value = *rest_minutes; channel("rest.stop", r); }
+    event(SCS_TELEMETRY_EVENT_frame_end);
   }
   void config(const char* id, const scs_named_value_t* attributes) { scs_telemetry_configuration_t c{id, attributes}; event(SCS_TELEMETRY_EVENT_configuration, &c); }
   void gameplay(const char* id, const scs_named_value_t* attributes) { scs_telemetry_gameplay_event_t g{id, attributes}; event(SCS_TELEMETRY_EVENT_gameplay, &g); }
@@ -768,6 +771,7 @@ int controlled_host(const char* dll_path, const char* directory_utf8, const char
     // Without a v1 directory the DLL never prepares or starts its v1 endpoint, so the CAP0 chain is unchanged.
     if (!v1_directory.empty()) require(set_v1_directory && v1_endpoint && set_v1_directory(v1_directory.c_str()), "controlled v1 seam");
     auto p = host.params(); require(init(SCS_TELEMETRY_VERSION_1_01, &p) == SCS_RESULT_ok, "controlled init"); initialized = true;
+    host.rest_minutes = 660;
     host.event(SCS_TELEMETRY_EVENT_started); host.frame(10);
     std::array<wchar_t, 512> endpoint{}; require(until([&] { return capture_endpoint(endpoint.data(), static_cast<unsigned>(endpoint.size())) != 0; }), "capture endpoint publication");
     v0::Json::Object fields{{"ready", v0::Json{true}}, {"fixture", v0::Json{std::string("fake-sdk-host")}}, {"processId", v0::Json{static_cast<double>(GetCurrentProcessId())}}, {"captureEndpoint", v0::Json{utf8(endpoint.data())}}};

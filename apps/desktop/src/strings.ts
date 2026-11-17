@@ -622,7 +622,7 @@ export function getSettingsStateText(state: SettingsState, language: AppLanguage
 export const LIVE_FIELD_TEXT: Readonly<Record<LiveFieldId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'engine-rpm': 'Engine RPM', 'cruise-control': 'Cruise control', 'speed-limit': 'Speed limit', 'fuel': 'Fuel', 'fuel-capacity': 'Fuel capacity', 'fuel-level': 'Fuel level',
   'sdk-average-consumption': 'SDK average consumption', 'estimated-range': 'Estimated range', 'odometer': 'Odometer',
-  'route-remaining': 'Route remaining', 'game-time': 'Game time', 'deadline': 'Delivery deadline', 'mandatory-break': 'Next mandatory break', 'cargo': 'Cargo', 'source-city': 'Source city',
+  'route-remaining': 'Route remaining', 'game-time': 'Game time', 'deadline': 'Delivery deadline', 'mandatory-break': 'Next mandatory break', 'rest-state': 'Rest State', 'cargo': 'Cargo', 'source-city': 'Source city',
   'source-company': 'Source company', 'destination-city': 'Destination city', 'destination-company': 'Destination company',
   'cargo-mass': 'Cargo mass', 'market': 'Job market', 'special-job': 'Special job', 'cargo-loaded': 'Cargo loaded',
   'planned-distance': 'Planned distance', 'expected-income': 'Expected income', 'truck': 'Truck', 'truck-plate': 'License plate',
@@ -685,12 +685,12 @@ export function getOverlayLayoutText(layout: OverlayLayout, language: AppLanguag
 export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'cruise-control': 'Cruise control', 'speed-limit': 'Speed limit', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
-  'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time', 'mandatory-break': 'Next mandatory break'
+  'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time', 'mandatory-break': 'Next mandatory break', 'rest-state': 'Rest State'
 });
 export const OVERLAY_SECTION_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'cruise-control': 'Круиз-контроль', 'speed-limit': 'Ограничение скорости', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Отправление', 'destination': 'Назначение', 'distance-driven': 'Пройденное расстояние', 'distance-remaining': 'Оставшееся расстояние',
-  'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время', 'mandatory-break': 'До обязательного перерыва'
+  'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время', 'mandatory-break': 'До обязательного перерыва', 'rest-state': 'Запас бодрости'
 });
 export function getOverlaySectionText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
   return language === 'ru' ? OVERLAY_SECTION_TEXT_RU[section] : OVERLAY_SECTION_TEXT[section];
@@ -700,12 +700,12 @@ export function getOverlaySectionText(section: OverlaySectionId, language: AppLa
 export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'cruise-control': 'Cruise', 'speed-limit': 'Limit', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
-  'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time', 'mandatory-break': 'Break'
+  'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time', 'mandatory-break': 'Break', 'rest-state': 'Rest State'
 });
 export const OVERLAY_SECTION_SHORT_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'cruise-control': 'Круиз', 'speed-limit': 'Лимит', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Откуда', 'destination': 'Куда', 'distance-driven': 'Пройдено', 'distance-remaining': 'Осталось',
-  'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время', 'mandatory-break': 'Перерыв'
+  'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время', 'mandatory-break': 'Перерыв', 'rest-state': 'Запас бодрости'
 });
 export function getOverlaySectionShortText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
   return language === 'ru' ? OVERLAY_SECTION_SHORT_TEXT_RU[section] : OVERLAY_SECTION_SHORT_TEXT[section];
@@ -909,6 +909,7 @@ export const JOURNAL_INTERVAL_CAUSE_TEXT: Readonly<Record<string, string>> = Obj
   'configuration-cleared': 'continues a trip whose job was cleared', 'reload': 'save reloaded', 'save-load': 'save loaded', 'disconnected': 'source disconnected',
   'consumer-restart': 'telemetry service restarted', 'reading-hole': 'readings missing', 'truck-change': 'truck changed', 'utc-label-jump': 'clock label jumped back',
   'odometer-regressed': 'odometer went back', 'odometer-jump': 'odometer jumped', 'game-time-jump': 'game time jumped', 'position-jump': 'position jumped',
+  'possible-roadside-assistance': 'possible roadside assistance',
   'refuel': 'refuelled', 'sample-backlog': 'samples could not be stored in time', 'ack-ahead-of-storage': 'database behind the plugin'
 });
 export const JOURNAL_OTHER_CAUSE = 'other';

@@ -67,7 +67,7 @@ function withCruise(id: string, highestMinor?: 2 | 3): Json & {seed: string} {
 }
 
 /** The scenario with a different speed limit in every frame; `highestMinor` 3 models a plugin from before ET-084. */
-function withLimits(id: string, highestMinor?: 3): Json & {seed: string} {
+function withLimits(id: string, highestMinor: 3 | 4 = 4): Json & {seed: string} {
   const scenario = base();
   let index = 0;
   for (const step of scenario.steps) {
@@ -196,3 +196,21 @@ describe('ET-084: the navigation speed limit is never recorded', () => {
     expect(await storedSamples(reader, base().seed, withReading.session)).toEqual(expected.samples);
   }, 120_000);
 });
+
+it('records the same rows with changing Rest State at minor 5 and without it at minor 4 (REG-009)', async () => {
+  const scenario = base();
+  const readings = [660, 500, 0, -1, -2147483648, null, 'invalid'];
+  let frame = 0;
+  for (const step of scenario.steps) {
+    if (step.action === 'frame') step.channels = {...(step.channels as Json | undefined), 'rest.stop': readings[frame++ % readings.length]};
+  }
+  const current = await record({...scenario, id: 'rest-current', source: {...scenario.source, highestMinor: 5}}, 'rest-current');
+  const older = await record({...scenario, id: 'rest-older', source: {...scenario.source, highestMinor: 4}}, 'rest-older');
+  expect(minors(current.database.path)).toEqual({sessions: [5], events: [5]});
+  expect(minors(older.database.path)).toEqual({sessions: [4], events: [4]});
+  const rows = dump(current.database.path);
+  expect(rows.samples.length).toBeGreaterThan(0);
+  expect(rows.trips.length).toBeGreaterThan(0);
+  expect(rows).toEqual(dump(older.database.path));
+  expect(current.run.acks.map(ack => [ack.connection, ack.through])).toEqual(older.run.acks.map(ack => [ack.connection, ack.through]));
+}, 120_000);

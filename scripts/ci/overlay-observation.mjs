@@ -99,25 +99,12 @@ export async function waitForStripLayout(page, expected) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
-// ET-012d containment of the card, cluster and HUD (decisions K10 and K11). The telemetry smoke first saves exactly the
-// thirteen sections the v0 and v1 pair shows (SYNTHETIC_V1_STRIP_SECTIONS: every section but range and distance driven;
-// twelve before ET-052 added the next mandatory break, which the pair's 95-minute break shows), so the window reserves no
-// row for a hidden section. Without a game window main never places the hidden overlay, so
-// the smoke sizes it to each layout's window for those sections at the scale setting 1 (overlayWindowSize in
-// overlay-geometry.ts) at that setting's zoom, overlayZoom(1) = 0.7 (ET-045e). ET-071 re-derived with the pair's fourteen
-// sections (cruise control added) and ET-070's fixed Hard Mode row. ET-084 re-derived with fifteen sections (the speed limit
-// added; with speed, gear and RPM on, its hero needs no surplus): the card's 16 rows have a content of 46 + 24 × 16 = 430
-// CSS px, so ceil(430 × 0.7 + 2) = 303 DIP high, 210 wide; the cluster's panel still holds 11 sections outside the gauge
-// and the indicator, because the sign has no panel row, a reserve of 36 + 21 × 12 = 288 CSS px (content 286), so
-// ceil(286 × 0.7 + 2) = ceil(202.2) = 203 high, 308 wide; the HUD's content is 18 + 24 × 16 = 402, so ceil(402 × 0.7) =
-// ceil(281.4) = 282 high, 224 wide. Their CSS viewports are 300 × 432.86, 440 × 290 and 320 × 402.86 (287, 203 and 265 DIP before ET-084).
-// The reserved CSS heights are 48 + 24 × 16 = 432, 288 and 18 + 24 × 16 = 402 (layoutReservedCss in overlay-rows.ts). A
-// unit test ties these hand-written values to both functions and the zoom to overlayZoom. All three windows are smaller
-// than the hosted runner's 1024 x 768 screen, so Windows does not narrow them.
+// The smoke reserves just the sixteen sections shown by the paired source plus the fixed Hard Mode row.
+// The window sizes are overlayWindowSize(layout, 1). Their CSS reserves are layoutReservedCss(layout, shown).
 export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
-  card: Object.freeze({width: 210, height: 303}),
-  cluster: Object.freeze({width: 308, height: 203}),
-  hud: Object.freeze({width: 224, height: 282})
+  card: Object.freeze({width: 210, height: 320}),
+  cluster: Object.freeze({width: 308, height: 217}),
+  hud: Object.freeze({width: 224, height: 299})
 });
 export const LAYOUT_SMOKE_ZOOM = 0.7;
 /**
@@ -141,34 +128,25 @@ export function verifyAppliedWindow(requested, actual) {
     `The overlay window was not applied at the requested size: ${JSON.stringify(requested)} became ${JSON.stringify(actual)}`);
   return actual;
 }
-export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 432, cluster: 288, hud: 402});
+export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 456, cluster: 309, hud: 426});
 // ET-045e review frames for the UI overlay shard, at the zoom of a scale setting (overlayZoom in overlay-placement.ts).
 // SCALE_REFERENCE_FRAMES are the product windows with every section at the new 100% (overlayWindowSize(layout, 1)) and
 // the ET-045d strip at its 70% (896 × 82 at zoom 0.7) and 100% (1280 × 116 at zoom 1) for the owner's comparison.
-// SCALE_RANGE_FRAMES are the product windows at 50% (zoom 0.35: strip 1280 × 29, card 105 × 170, cluster 154 × 117, HUD
-// 112 × 158 with every section, ET-084's speed limit and ET-070's Hard Mode row: ceil(38 × 2 × 0.35 + 2) for two strip
-// rows (3,720 CSS px against the inner 3,627), ceil(478 × 0.35 + 2), ceil(328 × 0.35 + 2) and ceil(450 × 0.35); the
-// card was 161 and the HUD 150 before ET-084), the strip raised to the 38 DIP minimum height
-// that the ET-045c probe measured at 150%. The ET-045e probe at 150% showed Windows accepting the card, cluster and HUD
-// within one DIP (106 × 136, 154 × 96, 112 × 124); if a hosted runner refuses a size, the frame wait fails and the
-// refusal is recorded. The 100% references are the ET-084 product windows: strip 1280 × 82 (three rows, the indicator after
-// the break; the first row now ends at cargo, 1,724 of 1,801), card 210 × 337 (ceil(478 × 0.7 + 2)), cluster 308 × 232
-// (ceil(328 × 0.7 + 2)) and HUD 224 × 315 (ceil(450 × 0.7)); 320, 232 and 299 before ET-084. The two old strip references
-// stay ET-045d's frozen sizes; with seventeen sections their content needs four rows, so those screenshots clip the last row.
+// The 50% frames use the product window sizes with every section enabled, with the strip raised to the measured 38 DIP minimum.
 export const SCALE_REFERENCE_FRAMES = Object.freeze([
   Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 82}),
-  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 337}),
-  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 232}),
-  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 315}),
+  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 354}),
+  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 247}),
+  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 332}),
   Object.freeze({name: 'scale-strip-old70', layout: 'strip', zoom: 0.7, width: 896, height: 82}),
   Object.freeze({name: 'scale-strip-old100', layout: 'strip', zoom: 1, width: 1280, height: 116})
 ]);
 export const SCALE_RANGE_ZOOM = 0.35;
 export const SCALE_RANGE_FRAMES = Object.freeze({
   strip: Object.freeze({width: 1280, height: 38}),
-  card: Object.freeze({width: 105, height: 170}),
-  cluster: Object.freeze({width: 154, height: 117}),
-  hud: Object.freeze({width: 112, height: 158})
+  card: Object.freeze({width: 105, height: 178}),
+  cluster: Object.freeze({width: 154, height: 125}),
+  hud: Object.freeze({width: 112, height: 166})
 });
 
 // Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the
