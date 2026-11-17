@@ -202,6 +202,26 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
     expect(fields(text.sections, 'job').cargoMass).toBe('39683 lb');
     expect(fields(text.sections, 'truck').fuelCapacity).toBe('264.2 US gal');
   });
+  it('shows confirmed fuel and charge separately and explains the original timeline amounts', () => {
+    const detail = {...DELIVERED_DETAIL, refuels: {dieselL: 37.854, electricKWh: 16, omitted: true}};
+    expect(journalTripSideText(detail, {units: SWAPPED}).refuels).toEqual({
+      rows: [
+        {id: 'fuelAdded', label: 'Confirmed fuel added', value: '10.0 US gal'},
+        {id: 'chargeAdded', label: 'Confirmed charge increase', value: '16.0 kWh'}
+      ],
+      notes: [expect.stringContaining('original amounts')]
+    });
+    expect(journalTripSideText({...detail, refuels: {dieselL: 0, electricKWh: 0, omitted: true}}).refuels?.rows)
+      .toEqual([{id: 'energyAdded', label: 'Confirmed amount', value: 'Unavailable'}]);
+    expect(journalTripSideText(DELIVERED_DETAIL).refuels).toBeUndefined();
+  });
+  it.each([
+    ['retained-path-unproven', 'cannot establish which measurements belong to the retained route'],
+    ['annotation-limit', 'exceeds the limit for checking refuel and charge entries']
+  ] as const)('explains why no confirmed refill amount is available: %s', (unavailableReason, note) => {
+    const detail = {...DELIVERED_DETAIL, refuels: {dieselL: 0, electricKWh: 0, omitted: true, unavailableReason}};
+    expect(journalTripSideText(detail).refuels?.notes).toEqual([expect.stringContaining(note)]);
+  });
   it('keeps zero values apart from unavailable values in both profiles', () => {
     for (const [units, distance, fuel] of [[DEFAULT, '0.0 mi', '0.0 US gal'], [SWAPPED, '0.0 km', '0.0 L']] as const) {
       const text = journalDetailText(ZERO_DETAIL, {units, timeZone: ZONE});

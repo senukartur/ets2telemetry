@@ -277,7 +277,7 @@ OD-2: the telemetry service opens the production history database when it starts
 
 ## Journal reads (ET-016)
 
-ET-016 PR-2 adds four read commands for the [trip journal](journal.md) (J5). Each reads on the writer connection like every other read, through [sqlite/journal.ts](../packages/storage/src/sqlite/journal.ts); the shapes are [the journal contract](../packages/contracts/src/journal.ts). [Journal](journal.md#read-commands-and-bounds-j5) describes the fields, money totals and the timeline window in full.
+ET-016 PR-2 adds four read commands for the [trip journal](journal.md) (J5). Each reads on the writer connection like every other read, through [sqlite/journal.ts](../packages/storage/src/sqlite/journal.ts); the shapes are [the journal contract](../packages/contracts/src/journal.ts). [Journal](journal.md#read-commands-and-bounds-j5) describes the fields, money totals and the timeline window in full. Trip details project confirmed replenishment from at most 5,000 raw refuel annotations and the snapshot's retained accounting spans. The projection adds no table or index.
 
 | Command | Bound | Order and cursor |
 | --- | --- | --- |

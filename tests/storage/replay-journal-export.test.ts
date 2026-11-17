@@ -285,7 +285,7 @@ interface ExportDocument {
   money: {incomplete: boolean; totals: Json[]; unavailable: unknown[]}; window: Json; intervals: (Json & {id: string})[];
   events: {eventSeq: string; type: string; attribution: Json | null}[]; samples: Json[];
 }
-/** Each trip exported through main's writer over the service's journal: a valid format version 1 document with the trip's hand-written key fields (J15-J17). */
+/** Each trip exported through main's writer over the service's journal, with the trip's hand-written format 7 fields (J15-J17). */
 async function expectExports(journal: JournalService, s: Scenario, trips: TripExpectation[]) {
   const seed = s.input.seed, coverage = s.rows.coverage.committedThroughEventSeq, folder = path.join(ws.directory, 'exports');
   mkdirSync(folder, {recursive: true});
@@ -322,11 +322,14 @@ async function expectExports(journal: JournalService, s: Scenario, trips: TripEx
     expect({incomplete: document.money.incomplete, totals: sortMoney(document.money.totals), unavailable: document.money.unavailable}, t.label)
       .toEqual({incomplete: false, totals: sortMoney(t.money), unavailable: []});
     expect(document.window, t.label).toEqual(t.window);
+    expect(document, t.label).not.toHaveProperty('refuels');
     expect(withoutId(document.intervals), t.label).toEqual(t.intervals.map(interval => {
       const detail = interval.detail as Json | null;
       if (detail?.cause !== 'refuel') return interval;
-      const {addedLiters, powertrain = type, ...rest} = detail;
-      return {...interval, detail: {...rest, powertrain, amountAdded: {value: addedLiters, unit: powertrain === 'diesel' ? 'L' : null}}};
+      const powertrain = detail.powertrain ?? type;
+      const unit = powertrain === 'diesel' ? 'L' : powertrain === 'electric' ? 'kWh' : null;
+      return {...interval, detail: {annotation: true, cause: 'refuel', atMonotonicNs: detail.atMonotonicNs, powertrain,
+        amountAdded: {value: detail.addedLiters, unit}}};
     }));
     expect(document.events.map(eventTuple), t.label).toEqual(t.events);
     expect(document.samples, t.label).toHaveLength(t.samples.length);

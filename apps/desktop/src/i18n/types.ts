@@ -643,6 +643,8 @@ export type I18nKey =
   | 'fmt.in' | 'fmt.dur' | 'fmt.min' | 'fmt.day' | 'fmt.date'
   | 'u.kmh' | 'u.mph' | 'u.l' | 'u.gal' | 'u.km' | 'u.mi' | 'u.rpm' | 'u.t' | 'u.lb' | 'u.l100' | 'u.mpg' | 'u.kwh' | 'u.kwh100'
   | 'energy.charge' | 'energy.capacity' | 'energy.used' | 'energy.useNote' | 'energy.increased' | 'energy.unknownIncrease' | 'energy.amount'
+  | 'energy.fuelAdded' | 'energy.chargeAdded' | 'energy.added' | 'energy.confirmedAmount' | 'energy.noConfirmedIncrease' | 'energy.refuelHistory'
+  | 'energy.refuelRouteUnknown' | 'energy.refuelAnnotationLimit'
   | 'ov.edit' | 'ov.drag' | 'ov.hidden' | 'ov.hiddenT' | 'ov.noSignal' | 'ov.paused'
   | 'hm.status.pass' | 'hm.status.fail' | 'hm.status.unknown' | 'hm.status.lost' | 'hm.state.pass' | 'hm.state.fail' | 'hm.state.unknown' | 'hm.configuredCount' | 'hm.reading' | 'hm.checking' | 'hm.progress' | 'hm.unavailable' | 'hm.source.local' | 'hm.source.cloud' | 'hm.source.fixture' | 'hm.source.unknown' | 'hm.age' | 'hm.detected' | 'hm.required' | 'hm.reason' | 'hm.value.unknown' | 'hm.value.invalid' | 'hm.value.normal' | 'hm.value.simpleDoubles' | 'hm.value.other' | 'hm.required.parking' | 'hm.notice' | 'hm.distinction' | 'hm.evidence' | 'hm.loss' | 'hm.audit' | 'hm.firstLoss' | 'hm.snapshots' | 'hm.notEvaluated' | 'hm.reason.compliant' | 'hm.reason.outside-limit' | 'hm.reason.missing' | 'hm.reason.malformed' | 'hm.reason.conflicting' | 'hm.reason.source-unproven' | 'hm.reason.interrupted' | 'hm.reason.historical' | 'hm.reason.source-changed' | 'hm.reason.parking-unproven'
   | 'hm.shortNotice'

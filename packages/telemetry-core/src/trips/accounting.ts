@@ -247,6 +247,8 @@ export function newAccounting(storedDistanceM: number | null = null, storedFuelU
 }
 /** What accumulating one step found beyond the totals: a refuel (`episode` when it starts a new one). */
 export interface Accumulated {refuel: {addedLiters: number; episode: boolean} | null}
+/** Each annotation keeps a bounded series of consecutive energy level measurements. */
+export const REFUEL_READING_LIMIT = 64;
 /** Adds one counted step to the trip's totals. Discontinuities and unavailable steps add nothing. */
 export function accumulate(acc: TripAccounting, step: ReadingStep): Accumulated {
   if (step.odometer.kind === 'continuous') acc.observedDistanceM = (acc.observedDistanceM ?? 0) + step.odometer.meters;

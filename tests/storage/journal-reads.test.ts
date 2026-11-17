@@ -405,6 +405,19 @@ describe('journal trip detail (J5, J13; REG-009, REG-014)', () => {
     expect(detail.samples).toEqual({count: 2, firstUtcMs: 1_791_676_801_000, lastUtcMs: 1_791_676_802_000});
     expect(detail.exportBounds).toEqual({committedThroughEventSeq: '6', lastSampleId: '3', lastIntervalId: '1'});
   });
+  it('keeps a migrated trip’s refill in history when it has no logical snapshot', async () => {
+    const legacy = await workspace();
+    try {
+      legacy.copyFixture(REPRESENTATIVE, legacy.database);
+      const st = await legacy.open();
+      ok(st.recordCompleteness(MIGRATED_V1_SESSION, {kind: 'discontinuity', tripUuid: MIGRATED_V1_TRIP,
+        detail: {annotation: true, cause: 'refuel', powertrain: 'diesel', addedLiters: 30}}));
+      const detail = validateJournalTripDetail(ok(st.journalTrip(MIGRATED_V1_TRIP)));
+      expect(detail.exportBounds.snapshot).toBeUndefined();
+      expect(detail.refuels).toEqual({dieselL: 0, electricKWh: 0, omitted: true, unavailableReason: 'retained-path-unproven'});
+      expect(detail.intervals.items).toContainEqual(expect.objectContaining({cause: 'refuel', detail: expect.objectContaining({addedLiters: 30})}));
+    } finally { await legacy.dispose(); }
+  });
   it('refuses unknown trips and malformed trip ids', () => {
     failed(storage.journalTrip('7a000000-0000-4000-8000-0000000000ff'), 'UNKNOWN_TRIP');
     failed(storage.journalTrip('not-a-uuid'), 'INVALID_INPUT');

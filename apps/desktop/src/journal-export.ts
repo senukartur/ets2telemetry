@@ -65,6 +65,9 @@ function trip(t: JournalTripDetail['trip'], powertrain: TruckPowertrain): TripEx
 const exportedIntervalDetail = (i: JournalInterval, tripType: TruckPowertrain): JournalInterval['detail'] => {
   if (i.cause !== 'refuel' || !i.detail) return i.detail;
   const {addedLiters, powertrain, ...detail} = i.detail;
+  delete detail.refuelReadings;
+  delete detail.readingClock;
+  delete detail.readingGameClock;
   const type = isTruckPowertrain(powertrain) ? powertrain : tripType;
   return {...detail, powertrain: type, amountAdded: {value: typeof addedLiters === 'number' ? addedLiters : null, unit: truckEnergyUnit(type)}};
 };

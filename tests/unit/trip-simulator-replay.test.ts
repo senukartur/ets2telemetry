@@ -122,7 +122,10 @@ describe('trip replay of a synthetic transcript with readings accounting (fix ro
         // 7 s of running time between the snapshots at 3,000 and 10,000 ms; 130 m across it is continuous.
         {trip: 'trip@2', kind: 'sample-loss', startUtcMs: BASE_UTC + 3000, endUtcMs: BASE_UTC + 10_000, startMonotonicNs: ns(3000), endMonotonicNs: ns(10_000),
           sourceClockId: 'capture-clock', detail: {cause: 'reading-hole'}},
-        {trip: 'trip@2', kind: 'discontinuity', detail: {annotation: true, cause: 'refuel', powertrain: 'diesel', addedLiters: 51, atMonotonicNs: ns(11_000)}},
+        {trip: 'trip@2', kind: 'discontinuity', startUtcMs: BASE_UTC + 11_000, detail: {
+          annotation: true, cause: 'refuel', powertrain: 'diesel', addedLiters: 51, atMonotonicNs: ns(11_000),
+          readingClock: 'capture-clock', readingGameClock: GAME_CLOCK_1, refuelReadings: [[ns(10_000), 399], [ns(11_000), 450]]
+        }},
         // 99 game minutes in 1 s from the previous snapshot, with no transfer: a possible sleep.
         {trip: 'trip@2', kind: 'discontinuity', detail: {annotation: true, cause: 'game-time-jump', label: 'possible-sleep', fromMinutes: '601', toMinutes: '700', atMonotonicNs: ns(12_000)}}
       ],

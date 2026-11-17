@@ -110,6 +110,107 @@ function record(storage: Storage, readings: readonly QuantityReading[], join: Jo
   return {root: members[0].uuid, members};
 }
 
+it.each([
+  {name: 'diesel after driving away', powertrain: 'diesel', levels: [100, 120, 160, 120, 130], expected: 30, droveAway: true},
+  {name: 'charge at the same odometer', powertrain: 'electric', levels: [20, 30, 50, 30, 36], expected: 16},
+  {name: 'charge when the saved level was not sampled', powertrain: 'electric', levels: [20, 30, 50, 31, 36], expected: 5},
+  {name: 'charge after restarting the game', powertrain: 'electric', levels: [20, 30, 50, 30, 36], expected: 16, restart: true}
+] as const)('keeps the measured part of a refill across a save load: $name', async ({powertrain, levels: [before, saved, discarded, loaded, after], expected, ...scenario}) => {
+  const storage = await ws.open(), member = openMember(storage, 'A', 'root', []);
+  const append = (owner: Member, reading: QuantityReading) => {
+    ok(storage.appendSamples(owner.script.session, [sampleOf(owner, reading, true)], {uniqueSeconds: true}));
+    owner.previous = reading;
+  };
+  const mark = (owner: Member, gameClockId: string, measurements: [number, number][], addedLiters: number): TripEffect => ({
+    kind: 'completeness.add', interval: {kind: 'discontinuity', tripUuid: owner.uuid, detail: {
+      annotation: true, cause: 'refuel', powertrain, addedLiters, atMonotonicNs: ns(measurements[1][0]),
+      readingClock: owner.script.clockId, readingGameClock: gameClockId, refuelReadings: measurements.map(([time, level]) => [ns(time), level])
+    }}
+  });
+  const pump = {odometerM: 1_000, x: 0, speedMps: 0};
+  append(member, s(0, {...pump, fuelL: before}));
+  append(member, s(1, {...pump, fuelL: saved}));
+  append(member, s(2, {...pump, fuelL: discarded}));
+  if ('droveAway' in scenario) append(member, s(3, {fuelL: discarded - 1}));
+  const first = mark(member, GAME_CLOCK_1, [[0, before], [1, saved], [2, discarded]], discarded - before);
+  ok(storage.commitEvent({message: member.script.event(r.fined()), effects: [first]}));
+  expect(validateJournalTripDetail(ok(storage.journalTrip(member.uuid))).refuels).toEqual({
+    dieselL: powertrain === 'diesel' ? discarded - before : 0, electricKWh: powertrain === 'electric' ? discarded - before : 0, omitted: false
+  });
+
+  let resumed = member, t = 4;
+  if ('restart' in scenario) { closeMember(storage, member); resumed = openMember(storage, 'B', 'open', []); t = 0; }
+  append(resumed, s(t, {...pump, member: resumed.member, fuelL: loaded, gameClock: CLOCK_B, linked: false}));
+  append(resumed, s(t + 1, {...pump, member: resumed.member, fuelL: after, gameClock: CLOCK_B}));
+  const second = mark(resumed, GAME_CLOCK_2, [[t, loaded], [t + 1, after]], after - loaded);
+  const wrongClock = mark(resumed, GAME_CLOCK_1, [[t, loaded], [t + 1, after]], after - loaded);
+  const legacy: TripEffect = {kind: 'completeness.add', interval: {kind: 'discontinuity', tripUuid: resumed.uuid,
+    detail: {annotation: true, cause: 'refuel', powertrain, addedLiters: 42, atMonotonicNs: ns(1)}}};
+  ok(storage.commitEvent({message: resumed.script.event(r.fined()), effects: [second, wrongClock, legacy]}));
+
+  const detail = validateJournalTripDetail(ok(storage.journalTrip(member.uuid)));
+  expect(detail.refuels).toEqual({dieselL: powertrain === 'diesel' ? expected : 0, electricKWh: powertrain === 'electric' ? expected : 0, omitted: true});
+  const history = ok(storage.journalIntervals(member.uuid, {limit: 100})).intervals;
+  expect(history.filter(interval => interval.cause === 'refuel').map(interval => interval.detail?.addedLiters))
+    .toEqual([discarded - before, after - loaded, after - loaded, 42]);
+});
+
+describe('Journal refill verification limits', () => {
+  function markRefill(storage: Storage, member: Member) {
+    ok(storage.recordCompleteness(member.script.session, {kind: 'discontinuity', tripUuid: member.uuid, detail: {
+      annotation: true, cause: 'refuel', powertrain: 'diesel', addedLiters: 10, atMonotonicNs: ns(1),
+      readingClock: member.script.clockId, readingGameClock: GAME_CLOCK_1, refuelReadings: [[ns(0), 100], [ns(1), 110]]
+    }}));
+  }
+
+  it('keeps the original amount when a new trip has no accounting head', async () => {
+    const storage = await ws.open(), member = openMember(storage, 'A', 'root', []);
+    markRefill(storage, member);
+    const detail = validateJournalTripDetail(ok(storage.journalTrip(member.uuid)));
+    expect(detail.exportBounds.snapshot).toBeDefined();
+    expect(detail.exportBounds.accountingHead).toBeNull();
+    expect(detail.refuels).toEqual({dieselL: 0, electricKWh: 0, omitted: true, unavailableReason: 'retained-path-unproven'});
+    expect(detail.intervals.items).toContainEqual(expect.objectContaining({cause: 'refuel', detail: expect.objectContaining({addedLiters: 10})}));
+  });
+
+  it('withholds the subtotal after a load outside the recorded path, even with no money events', async () => {
+    const storage = await ws.open();
+    const {root, members: [member]} = record(storage, [s(0, {fuelL: 100}), s(1, {fuelL: 110})]);
+    markRefill(storage, member);
+    expect(ok(storage.journalTrip(root)).refuels?.dieselL).toBe(10);
+    const loaded = s(2, {odometerM: 900, x: -100, fuelL: 100, gameClock: CLOCK_B, linked: false});
+    ok(storage.appendSamples(member.script.session, [sampleOf(member, loaded, true)], {uniqueSeconds: true}));
+    const detail = validateJournalTripDetail(ok(storage.journalTrip(root)));
+    expect(detail.exportBounds.accountingHead).toEqual(expect.any(String));
+    expect(detail.refuels).toEqual({dieselL: 0, electricKWh: 0, omitted: true, unavailableReason: 'retained-path-unproven'});
+  });
+
+  it('withholds the subtotal at 5,001 annotations and keeps the timeline pageable', async () => {
+    let storage = await ws.open();
+    const {root, members: [member]} = record(storage, [s(0, {fuelL: 100}), s(1, {fuelL: 110})]);
+    markRefill(storage, member);
+    ok(storage.close());
+    const db = new Database(ws.database);
+    try {
+      const copies = db.prepare(`WITH RECURSIVE n(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM n WHERE value<4999)
+        INSERT INTO completeness_intervals (plugin_session_ref,trip_ref,kind,detail_json,created_utc_ms)
+        SELECT c.plugin_session_ref,c.trip_ref,c.kind,'{"annotation":true,"cause":"refuel","addedLiters":1}',c.created_utc_ms
+        FROM n,completeness_intervals c WHERE c.id=(SELECT min(id) FROM completeness_intervals WHERE json_extract(detail_json,'$.cause')='refuel')`).run();
+      expect(copies.changes).toBe(4_999);
+    } finally { db.close(); }
+    storage = await ws.open();
+    // The next sample revises the snapshot with the new interval watermark.
+    ok(storage.appendSamples(member.script.session, [sampleOf(member, s(2, {fuelL: 110}), true)], {uniqueSeconds: true}));
+    expect(ok(storage.journalTrip(root)).refuels).toEqual({dieselL: 10, electricKWh: 0, omitted: true});
+    markRefill(storage, member);
+    const detail = validateJournalTripDetail(ok(storage.journalTrip(root)));
+    expect(detail.refuels).toEqual({dieselL: 0, electricKWh: 0, omitted: true, unavailableReason: 'annotation-limit'});
+    expect(detail.intervals.total).toBe(5_001);
+    expect(detail.intervals.items[0].detail?.addedLiters).toBe(10);
+    expect(ok(storage.journalIntervals(root, {limit: 100, cursor: detail.intervals.nextCursor!})).intervals).toHaveLength(100);
+  });
+});
+
 interface Ledger {logical: bigint; head: {distance: number | null; fuel: number | null; flags: number} | null; reconstructed: QuantityPoint | null; engine: bigint;
   unknown: bigint; rows: number; annotations: Record<string, unknown>[]}
 /** Reads the live head and the reconstruction of the root's group on a separate connection and checks the reconstruction writes nothing. */
