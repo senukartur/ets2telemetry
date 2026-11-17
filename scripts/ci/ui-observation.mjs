@@ -645,6 +645,12 @@ async function observeScaleRange({application, dashboard, overlay, language, siz
 async function capture({page, application, config, record, name, language, size, progress, overlay = false}) {
   const file = `ui-${config.uiCase}-${name}-${language}-${size.width}x${size.height}.png`;
   await settled(page);
+  if (!overlay) {
+    const badges = await page.locator('[data-slot="badge"],.yu-recording-badge,.yu-version-badge,.yu-gear-chip,.yu-overlay-cruise-badge,.yu-topbar .yu-sync-chip').evaluateAll(nodes => nodes
+      .filter(node => node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0)
+      .map(node => ({id: node.getAttribute('data-testid') ?? node.className, height: node.getBoundingClientRect().height})));
+    assert.deepEqual(badges.filter(badge => Math.abs(badge.height - 20) > .1), [], `UI_BADGE_HEIGHT_${config.uiCase}_${name}_${language}`);
+  }
   if (overlay) {
     const png = await application.evaluate(async ({BrowserWindow}) => {
       const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay'));
@@ -1126,8 +1132,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           const copy = cell.cloneNode(true); copy.querySelectorAll('.sr-only').forEach(node => node.remove()); return copy.textContent.trim();
         }));
         assert.deepEqual(journalHeaders, language === 'en'
-          ? ['Started', 'Game · mode', 'Cargo', 'Job type', 'Route', 'Distance', 'Expected income', 'Outcome', 'Recording', '']
-          : ['Начало', 'Игра · режим', 'Груз', 'Тип заказа', 'Маршрут', 'Дистанция', 'Ожидаемый доход', 'Итог', 'Запись', '']);
+          ? ['Started', 'Game · mode', 'Cargo', 'Job type', 'Route', 'Distance', 'Revenue', 'Outcome', 'Recording', '']
+          : ['Начало', 'Игра · режим', 'Груз', 'Тип заказа', 'Маршрут', 'Дистанция', 'Выручка', 'Итог', 'Запись', '']);
         assert.equal(await dashboard.getByTestId('journal.count').innerText(), language === 'en' ? '120 trips · 1.1 h recorded' : '120 рейсов · 1,1 ч записано');
         assert.equal(await dashboard.getByTestId('journal-list-refresh').evaluate(node => node.closest('.yu-topbar-actions') !== null), true, 'UI_JOURNAL_REFRESH_IN_TOP_BAR');
         const filterOptions = async (testId) => {
@@ -1141,6 +1147,19 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.deepEqual(await filterOptions('journal-filter-job'), language === 'en'
           ? ['Any job type', 'Quick job', 'Cargo market', 'Freight market', 'World of Trucks', 'Other']
           : ['Любой тип заказа', 'Быстрый заказ', 'Рынок грузов', 'Грузоперевозки', 'World of Trucks', 'Другой']);
+        assert.equal(await dashboard.getByTestId('journal-list-footer').innerText(), language === 'en' ? '1–50 of 120' : '1–50 из 120');
+        const settled = () => until(() => dashboard.locator('.yu-journal-card').getAttribute('aria-busy'), value => value === 'false', 'UI_JOURNAL_SETTLED');
+        await dashboard.getByTestId('journal-sort-started').click(); await settled();
+        assert.equal(await dashboard.getByTestId('journal-sort-started').evaluate(node => node.closest('th').getAttribute('aria-sort')), 'ascending');
+        await dashboard.getByTestId('journal-sort-distance').click(); await settled();
+        assert.equal(await dashboard.getByTestId('journal-sort-distance').evaluate(node => node.closest('th').getAttribute('aria-sort')), 'descending');
+        await dashboard.getByTestId('journal-search').fill('Synthetic Cancel Cargo');
+        await until(() => dashboard.getByTestId('journal-row').count(), count => count === 1, 'UI_JOURNAL_SEARCH');
+        assert.equal(await dashboard.getByTestId('journal-list-footer').innerText(), language === 'en' ? '1–1 of 1' : '1–1 из 1');
+        assert.equal(await dashboard.getByTestId('journal-list-next').isEnabled(), false);
+        await dashboard.getByTestId('journal-reset').click(); await settled();
+        await dashboard.getByTestId('journal-sort-started').click(); await settled();
+        await until(() => dashboard.getByTestId('journal-row').first().getAttribute('data-trip'), id => id === '7b000000-0000-4000-8000-000000000001', 'UI_JOURNAL_SORT_RESET');
         // The horizontal scroll stays inside the table card at both sizes: the content never scrolls sideways.
         assert.equal(await dashboard.getByTestId('shell.content').evaluate(node => node.scrollWidth <= node.clientWidth), true, `UI_JOURNAL_CONTENT_OVERFLOW_${size.width}`);
         assert.equal(await dashboard.getByTestId('journal-table').evaluate(node => globalThis.getComputedStyle(node.parentElement).overflowX), 'auto');
@@ -1154,24 +1173,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.equal(await singlePlayerBadge.getAttribute('data-variant'), 'neutral');
         assert.equal(await singlePlayerBadge.locator('.lucide-user-round').count(), 1);
         assert.equal(await singlePlayerBadge.locator('.lucide-triangle-alert').count(), 0);
-        await dashboard.bringToFront();
-        await dashboard.waitForFunction(() => globalThis.document.hasFocus(), undefined, {timeout: 5000});
-        const hint = modeRow.locator('.yu-info-hint');
-        await modeRow.getByTestId('journal-row-open').focus();
-        await hint.scrollIntoViewIfNeeded();
-        // Radix dismisses tooltips on scroll; settle positioning before moving keyboard focus.
-        await dashboard.evaluate(() => new Promise(resolve => globalThis.requestAnimationFrame(() => globalThis.requestAnimationFrame(resolve))));
-        await dashboard.keyboard.press('Shift+Tab');
-        assert.equal(await hint.evaluate(node => node === globalThis.document.activeElement), true);
-        await dashboard.getByTestId('journal-mode-evidence-7b000000-0000-4000-8000-000000000001-tooltip').waitFor({state: 'visible'});
-        await dashboard.keyboard.press('Escape');
-        await dashboard.getByTestId('journal-mode-evidence-7b000000-0000-4000-8000-000000000001-tooltip').waitFor({state: 'hidden'});
-        assert.equal(await hint.evaluate(node => node === globalThis.document.activeElement), true);
+        assert.equal(await dashboard.getByTestId('journal-row-game').locator('.yu-info-hint,[role="tooltip"],[title]').count(), 0, 'UI_JOURNAL_MODE_NO_TOOLTIPS');
         await dashboard.locator('[data-testid="journal-table"]').evaluate(node => {node.parentElement.scrollLeft = 0;});
-        // The hint in the mode line is 18 px high: the global button min-height would make every row taller (mockup T3).
-        assert.equal(await hint.evaluate(node => node.getBoundingClientRect().height), 18, 'UI_JOURNAL_HINT_HEIGHT');
-        assert.equal(await hint.evaluate(node => node.getBoundingClientRect().width), 18, 'UI_JOURNAL_HINT_WIDTH');
-        assert.equal(await hint.evaluate(node => globalThis.getComputedStyle(node, '::after').height), '32px', 'UI_JOURNAL_HINT_TARGET');
         (record.journalRowHeights ??= []).push({language, size, rowHeight: await dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').evaluate(node => node.getBoundingClientRect().height)});
         assert.ok(await modeRow.getByTestId('journal-row-mode').evaluate(node => node.scrollWidth <= node.clientWidth && node.scrollHeight <= node.clientHeight));
         await save('list', language, size);

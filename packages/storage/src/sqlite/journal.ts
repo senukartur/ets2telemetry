@@ -7,6 +7,7 @@ import {journalAccounting} from './quantities';
 // SQL before the limit, and each statement is a constant of JOURNAL_QUERIES, so tests prove its query plan with
 // EXPLAIN QUERY PLAN. Values keep their availability and exact money; nothing is converted. See docs/journal.md.
 import type Database from 'better-sqlite3';
+import {createHash} from 'node:crypto';
 import {
   isJournalPageQuery, isJournalTripsQuery, JOURNAL_DETAIL_INTERVALS, JOURNAL_MARKET_KINDS, JOURNAL_DETAIL_TRAILERS, JOURNAL_EVENT_LIMITS, JOURNAL_INTERVAL_LIMITS, JOURNAL_MONEY_AMOUNTS, JOURNAL_TRIP_PAGE,
   type JournalDatabase, type JournalEvent, type JournalEventPage, type JournalInterval, type JournalIntervalPage, type JournalMoneyCategory, type JournalMoneyTotal,
@@ -25,6 +26,7 @@ import {tripEnergyPowertrain} from './truck-energy';
 import {journalRefuels} from './journal-refuels';
 
 const MAX_ROW_ID = 9_223_372_036_854_775_807n;
+const SORT_FUNCTIONS = new WeakSet<Database.Database>();
 const MONEY_TYPES: Readonly<Record<string, JournalMoneyCategory>> = {'player.fined': 'fine', 'player.tollgate.paid': 'toll', 'player.use.ferry': 'ferry', 'player.use.train': 'train'};
 const CATEGORY_ORDER: readonly JournalMoneyCategory[] = ['fine', 'toll', 'ferry', 'train'];
 /** The job type filter of the job configuration `j`: fixed literals of JOURNAL_MARKET_KINDS, never input. An unavailable market has a NULL value, so it is `other`. */
@@ -174,12 +176,14 @@ export function journalTrips(conn: StorageConnection, query: JournalTripsQuery =
   const db = conn.reader();
   return db.transaction(() => {
     const page = tripPage(conn, query);
+    if (query.includeNetIncome) for (const trip of page.trips) trip.netIncome = netIncomeFor(db, trip, query.cursor);
     const sync = journalSync(db, page.trips.map(trip => trip.tripUuid));
     return {...page, ...(sync ? {sync} : {})};
   })();
 }
 function tripPage(conn: StorageConnection, query: JournalTripsQuery): JournalTripPage {
   const db = conn.reader(), q = query ?? {};
+  if (q.sort !== undefined || q.search !== undefined || q.direction !== undefined || q.cursor?.startsWith('l6:')) return sortedTripPage(db, q);
   if (logicalEnabled(db)) {
     const filter = `${q.game ?? 'any'}.${q.outcome ?? 'any'}.${q.completeness ?? 'any'}.${q.mode ?? 'any'}.${q.jobType ?? 'any'}`;
     const dbUuid = String(get(db,'SELECT database_uuid FROM database_info WHERE id=1')!.database_uuid);
@@ -199,6 +203,73 @@ function tripPage(conn: StorageConnection, query: JournalTripsQuery): JournalTri
   const rows = all(db, JOURNAL_QUERIES.tripPage, before, ...FILTER_ARGS(q), JOURNAL_TRIP_PAGE);
   return {database: database(db), trips: rows.map(r => listItem(db, r)), nextCursor: rows.length === JOURNAL_TRIP_PAGE ? String(rows[rows.length - 1].id) : null,
     ...(q.cursor === undefined ? {totals: totalsOf(get(db, JOURNAL_QUERIES.tripTotals, ...FILTER_ARGS(q))!)} : {})};
+}
+
+/** A snapshot keyset page. Sort expressions are fixed literals; user text is always a bound value. */
+function sortedTripPage(db: Database.Database, q: JournalTripsQuery): JournalTripPage {
+  const logical = logicalEnabled(db), direction = q.direction ?? 'desc', sort = q.sort ?? 'started';
+  const signature = createHash('sha256').update(JSON.stringify([q.game ?? null, q.outcome ?? null, q.completeness ?? null,
+    q.mode ?? null, q.jobType ?? null, q.search ?? '', sort, direction, q.includeNetIncome ?? false])).digest('hex');
+  const dbUuid = String(get(db, 'SELECT database_uuid FROM database_info WHERE id=1')!.database_uuid);
+  const previous = q.cursor?.split(':');
+  if (previous && (previous[0] !== 'l6' || previous[1] !== dbUuid || previous[4] !== signature)) fail('INVALID_INPUT');
+  const watermark = previous ? BigInt(previous[2]) : get(db, `SELECT coalesce(max(id),0) AS id FROM ${logical ? 'logical_revisions' : 'trips'}`)!.id;
+  const key = previous ? Buffer.from(previous[5], 'hex').toString('utf8') : '';
+  if (previous && (Buffer.from(key).toString('hex') !== previous[5] || sort === 'started' && !/^(0|[1-9][0-9]{0,15})$/.test(key)
+    || sort === 'distance' && (!Number.isFinite(Number(key)) || Number(key) < -1 || String(Number(key)) !== key))) fail('INVALID_INPUT');
+  const base = logical
+    ? `SELECT r.logical_ref AS id,r.id AS revision,r.member_through,r.sample_through,r.progress_head,state.row_json,
+        CAST(json_extract(state.row_json,'$.started_utc_ms."$integer"') AS INTEGER) AS started,j.cargo,j.source_city,j.destination_city,j.source_company,j.destination_company
+      FROM logical_revisions r JOIN logical_projection_states state ON state.id=r.state_ref
+      JOIN job_configurations j ON j.id=CAST(json_extract(state.row_json,'$.job_configuration_ref."$integer"') AS INTEGER)
+      WHERE r.id=(SELECT max(v.id) FROM logical_revisions v WHERE v.logical_ref=r.logical_ref AND v.id<=?) AND r.member_through>0 AND ${LOGICAL_FILTERS}`
+    : `SELECT trips.*,id AS revision,0 AS member_through,0 AS sample_through,NULL AS progress_head,NULL AS row_json,started_utc_ms AS started,
+        (SELECT cargo FROM job_configurations WHERE id=trips.job_configuration_ref) AS cargo,
+        (SELECT source_city FROM job_configurations WHERE id=trips.job_configuration_ref) AS source_city,
+        (SELECT destination_city FROM job_configurations WHERE id=trips.job_configuration_ref) AS destination_city,
+        (SELECT source_company FROM job_configurations WHERE id=trips.job_configuration_ref) AS source_company,
+        (SELECT destination_company FROM job_configurations WHERE id=trips.job_configuration_ref) AS destination_company
+      FROM trips WHERE id<=? AND ${LEGACY_FILTERS}`;
+  // SQLite's lower() is ASCII-only. A deterministic local function also matches Cyrillic game-provided names.
+  if (!SORT_FUNCTIONS.has(db)) {
+    db.function('journal_fold', {deterministic: true}, (value: unknown) => (typeof value === 'string' ? value : '').toLocaleLowerCase('en-US'));
+    SORT_FUNCTIONS.add(db);
+  }
+  const matchesSearch = "instr(journal_fold(coalesce(cargo,'')||' '||coalesce(source_city,'')||' '||coalesce(destination_city,'')||' '||coalesce(source_company,'')||' '||coalesce(destination_company,'')),?)>0";
+  const args = [watermark, ...FILTER_ARGS(q), (q.search ?? '').toLocaleLowerCase('en-US')];
+  if (sort === 'distance' && logical) {
+    // SQLite callbacks cannot prepare ledger reads on the connection that is executing the sort. Fold projections in
+    // bounded batches first; only IDs and the same distance values as the list are held in this connection-local table.
+    db.exec('CREATE TEMP TABLE IF NOT EXISTS journal_distance_sort (trip_ref INTEGER PRIMARY KEY,value REAL NOT NULL)');
+    db.exec('DELETE FROM temp.journal_distance_sort');
+    let afterId = 0n;
+    for (;;) {
+      const batch = all(db, `WITH matching AS (${base}) SELECT * FROM matching WHERE ${matchesSearch} AND id>? ORDER BY id LIMIT 256`, ...args, afterId);
+      if (!batch.length) break;
+      for (const item of batch) {
+        const row = applyProgress(db, decodeRow(item.row_json), item.progress_head);
+        statement(db, 'INSERT INTO temp.journal_distance_sort(trip_ref,value) VALUES(?,?)').run(item.id, row.observed_distance_m_state === 'available' ? Number(row.observed_distance_m) : -1);
+      }
+      afterId = batch.at(-1)!.id as bigint;
+    }
+  }
+  const distance = logical ? '(SELECT value FROM temp.journal_distance_sort WHERE trip_ref=matching.id)' : "CASE WHEN observed_distance_m_state='available' THEN observed_distance_m ELSE -1 END";
+  const expression = sort === 'cargo' ? 'journal_fold(cargo)' : sort === 'distance' ? distance : 'started';
+  const cte = `WITH matching AS (${base}), filtered AS (SELECT *,${expression} AS sort_value FROM matching
+    WHERE ${matchesSearch})`;
+  const after = previous ? `WHERE (sort_value ${direction === 'asc' ? '>' : '<'} ? OR (sort_value=? AND id<?))` : '';
+  const sortKey = sort === 'cargo' ? key : Number(key);
+  const rows = all(db, `${cte} SELECT * FROM filtered ${after} ORDER BY sort_value ${direction === 'asc' ? 'ASC' : 'DESC'},id DESC LIMIT ?`,
+    ...args, ...(previous ? [sortKey, sortKey, BigInt(previous[3])] : []), JOURNAL_TRIP_PAGE);
+  const last = rows.at(-1);
+  const seconds = logical ? `SELECT count(*) FROM logical_snapshot_memberships x JOIN samples s ON s.trip_ref=x.trip_ref
+    WHERE x.logical_ref=f.id AND x.trip_ref<=f.member_through AND x.from_revision<f.revision
+    AND (x.through_revision IS NULL OR x.through_revision>=f.revision) AND s.id<=f.sample_through`
+    : 'SELECT count(*) FROM samples s WHERE s.trip_ref=f.id';
+  return {database: database(db), trips: rows.map(row => logical
+    ? listItem(db, applyProgress(db, decodeRow(row.row_json), row.progress_head), {logical: row.id, head: row.progress_head}) : listItem(db, row)),
+  nextCursor: rows.length === JOURNAL_TRIP_PAGE ? `l6:${dbUuid}:${String(watermark)}:${String(last!.id)}:${signature}:${Buffer.from(String(last!.sort_value)).toString('hex')}` : null,
+  ...(q.cursor === undefined ? {totals: totalsOf(get(db, `${cte} SELECT count(*) AS trips,coalesce(sum((${seconds})),0) AS seconds FROM filtered f`, ...args)!)} : {})};
 }
 const totalsOf = (row: Row) => ({trips: toSafeNumber(row.trips, Number.MAX_SAFE_INTEGER, 0), recordedSeconds: toSafeNumber(row.seconds, Number.MAX_SAFE_INTEGER, 0)});
 
@@ -348,6 +419,40 @@ function moneyTotals(db: Database.Database, trip: bigint, snap?: LogicalSnapshot
     unavailable: [...unavailable.values()].sort((a, b) => order(a.category) - order(b.category) || reasons.indexOf(a.reason) - reasons.indexOf(b.reason))};
   if (!path?.incomplete) return {incomplete: false, ...amounts};
   return amounts.totals.length || amounts.unavailable.length ? {...incomplete, retainedSubtotal: amounts} : incomplete;
+}
+
+/** The list estimate only: never actual payment, never converted or combined across unknown/different currencies. */
+export function netIncomeOf(income: JournalTripListItem['job']['expectedIncome'], costs: JournalMoneyTotals,
+  penalty?: JournalTripListItem['job']['expectedIncome']): NonNullable<JournalTripListItem['netIncome']> | null {
+  if (!income.available || income.value.currency.status !== 'sdk-documented') return null;
+  const currency = income.value.currency;
+  let raw = BigInt(income.value.raw);
+  // A saved-game cut can prove a retained subtotal without proving every charge. Use that supported subtotal and
+  // omit unknown charges from this estimate; they remain explicitly unavailable in the detail and export.
+  const amounts = [...(costs.incomplete && costs.retainedSubtotal ? costs.retainedSubtotal.totals : costs.totals)];
+  if (penalty?.available) {
+    amounts.push({category: 'fine', count: 1, ...penalty.value});
+  }
+  for (const cost of amounts) {
+    if (cost.currency.status !== 'sdk-documented' || cost.currency.code !== currency.code) return null;
+    raw -= BigInt(cost.raw);
+  }
+  return {raw: raw.toString(), currency};
+}
+
+function netIncomeFor(db: Database.Database, trip: JournalTripListItem, cursor?: string): JournalTripListItem['netIncome'] {
+  let snap: LogicalSnapshot | undefined;
+  if (logicalEnabled(db)) {
+    const watermark = cursor?.startsWith('l') ? BigInt(cursor.split(':')[2]) : MAX_ROW_ID;
+    const revision = get(db, `SELECT r.id FROM logical_revisions r JOIN trips t ON t.id=r.logical_ref
+      WHERE t.trip_uuid=? AND r.id<=? ORDER BY r.id DESC LIMIT 1`, trip.tripUuid, watermark);
+    if (!revision) return null;
+    snap = snapshot(db, trip.tripUuid, revision.id as bigint);
+  }
+  const row = snap?.row ?? tripRow(db, trip.tripUuid), costs = moneyTotals(db, row.id as bigint, snap);
+  const event = row.outcome_event_ref === null ? undefined : get(db, JOURNAL_QUERIES.eventById, row.outcome_event_ref);
+  const outcome = event ? payloadOf(event).record : undefined;
+  return netIncomeOf(trip.job.expectedIncome, costs, outcome?.type === 'job.cancelled' ? outcome.penalty : undefined);
 }
 
 /**

@@ -106,7 +106,7 @@
 
   /* Size */
   --yu-control-h: 32px;     /* buttons, inputs, selects */
-  --yu-control-h-xs: 24px;  /* status chips; a pseudo-element keeps their hit area at 32px */
+  --yu-control-h-xs: 20px;  /* shadcn badge height; interactive chips keep a 32 px hit area */
   --yu-nav-item-h: 32px;
   --yu-sidebar-w: 216px;
   --yu-topbar-h: 48px;

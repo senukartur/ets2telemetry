@@ -596,8 +596,8 @@ describe('ET-016 journal reads at the worker boundary', () => {
 
   it('copies only the listed query and page fields, and sends no query when none is given', () => {
     const f = fixture();
-    void f.client.journalTrips({cursor: '5', game: 'ats', outcome: 'open', completeness: 'partial', mode: 'truckersmp', jobType: 'quick-job', limit: 51} as Parameters<StorageClient['journalTrips']>[0]);
-    expect(f.sent[0].command).toEqual({name: 'journalTrips', query: {cursor: '5', game: 'ats', outcome: 'open', completeness: 'partial', mode: 'truckersmp', jobType: 'quick-job'}});
+    void f.client.journalTrips({cursor: '5', game: 'ats', outcome: 'open', completeness: 'partial', mode: 'truckersmp', jobType: 'quick-job', search: 'cargo', sort: 'distance', direction: 'asc', limit: 51} as Parameters<StorageClient['journalTrips']>[0]);
+    expect(f.sent[0].command).toEqual({name: 'journalTrips', query: {cursor: '5', game: 'ats', outcome: 'open', completeness: 'partial', mode: 'truckersmp', jobType: 'quick-job', search: 'cargo', sort: 'distance', direction: 'asc'}});
     f.ok(1, PAGE);
     void f.client.journalTrips();
     expect(f.sent[1].command).toEqual({name: 'journalTrips'});

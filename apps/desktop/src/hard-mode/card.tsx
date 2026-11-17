@@ -11,7 +11,7 @@ import type {HardModeController} from './use-status';
 import {hardModeView, hardModeState, hardModeLossText, hardModeRatioText, hardModeDiagnosticText} from './view';
 
 export function HardModeBadge({short = false, language = 'en'}: {short?: boolean; language?: AppLanguage}) {
-  return <Badge data-testid="hard-mode-badge"><Flame className="mr-1 size-3" aria-hidden="true" />{short ? 'HM' : t('hm.title', undefined, language)}</Badge>;
+  return <Badge variant="ok" data-testid="hard-mode-badge" aria-label={t('hm.title', undefined, language)}><Flame className="size-3" aria-hidden="true" />{short ? 'HM' : t('hm.title', undefined, language)}</Badge>;
 }
 
 const HM_MARKS = {pass: '✓', fail: '✕', unknown: '?'} as const;

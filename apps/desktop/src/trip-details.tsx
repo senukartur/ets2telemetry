@@ -38,7 +38,7 @@ function OutcomeChip({outcome, text}: {outcome: JournalOutcome; text: string}) {
 }
 
 /** The cargo, the chips and the route line. The accessible trip title stays for readers that name the trip by its cities. */
-export function TripHeading({game, outcome, isHardMode, cargo, text, side, language}: {game: JournalGame; outcome: JournalOutcome; isHardMode: boolean; cargo: string; text: JournalDetailText; side: JournalTripSideText; language: AppLanguage}) {
+export function TripHeading({game, isHardMode, cargo, text, side, language}: {game: JournalGame; outcome: JournalOutcome; isHardMode: boolean; cargo: string; text: JournalDetailText; side: JournalTripSideText; language: AppLanguage}) {
   return <div className="yu-trip-heading">
     <div className="yu-trip-titleline">
       <h1 data-testid="trip.header.cargo">{cargo}</h1>
@@ -46,7 +46,7 @@ export function TripHeading({game, outcome, isHardMode, cargo, text, side, langu
       <ModeBadge mode={text.mode} testId="journal-detail-mode" />
       <JobTypeBadge job={text.jobType} testId="journal-detail-job-type" />
       {text.specialTransport ? <Badge variant="neutral" className="yu-trip-chip" data-testid="journal-detail-special"><Construction aria-hidden="true" strokeWidth={1.8} /><span>{text.specialTransport}</span></Badge> : null}
-      <OutcomeChip outcome={outcome} text={text.outcome} />
+      <OutcomeChip outcome={text.outcomeKind} text={text.outcome} />
       <CompletenessChip badge={text.completeness} testId="journal-detail-completeness" />
       {isHardMode ? <HardModeBadge language={language} /> : null}
       {text.membership ? <>

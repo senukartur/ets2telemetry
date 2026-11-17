@@ -116,7 +116,7 @@ describe('the shared files and the dark scope', () => {
     expect(decls.get('border-radius')).toBe('50% !important');
   });
   // ET-110: the 32 px button minimum (specificity 0,3,1) outranked the chip rule (0,2,1) and made the sync chip taller.
-  it('keeps the site sync chip at the 24 px chip height outside the global button rules', () => {
+  it('keeps the site sync chip at the 20 px badge height outside the global button rules', () => {
     const css = stripComments(shell);
     const globals = [...css.matchAll(/^button:not\(\[role="radio"\]\)[^{]*\{[^}]*\}/gm)].map(match => match[0]);
     expect(globals).toHaveLength(2);

@@ -97,21 +97,21 @@ describe('journal list (J13; REG-014, REG-009)', () => {
     const text = journalListText(page([OPEN, ZERO, GAP_CLOSED, CANCELLED, DELIVERED], '42'), {units: DEFAULT, timeZone: ZONE, filtered: false, recording: 'disabled'});
     expect(text.empty).toBeNull(); expect(text.emptyNote).toBeNull(); expect(text.hasNext).toBe(true);
     expect(text.rows).toEqual([
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B', outcome: 'In progress', outcomeKind: 'open',
-        completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
-        expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)', companies: 'Synthetic Company A · Synthetic Company B',
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.open, gameId: 'ets2', started: '2026-10-11 02:01:41', startedLabel: '11 Oct, 02:01', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B', outcome: 'In progress', outcomeKind: 'open',
+        completeness: {text: 'Unknown', variant: 'outline'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: '—',
+        expectedIncome: '—'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.zeroValues, gameId: 'ats', started: '2026-10-11 02:03:23', startedLabel: '11 Oct, 02:03', game: 'ATS', route: '(empty) → unavailable (not provided by the game)', cargo: 'unavailable (not observed)', companies: 'Synthetic Company A · Synthetic Company B',
         outcome: 'Delivered', outcomeKind: 'delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '0.0 mi', plannedOf: 'of 0.0 mi', observedDistance: '0.0 mi',
-        expectedIncome: '0 USD (SDK-documented)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
-        outcome: 'No outcome — events were lost', outcomeKind: 'none', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
-        expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo', companies: 'Synthetic Company A · Synthetic Company B',
-        outcome: 'Cancelled', outcomeKind: 'cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: 'unavailable (not observed)',
-        expectedIncome: '12345 (currency unknown)'},
-      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        expectedIncome: '—'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.gapClosed, gameId: 'ets2', started: '2026-10-11 02:00:22', startedLabel: '11 Oct, 02:00', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'No outcome — events were lost', outcomeKind: 'none', completeness: {text: 'Partial', variant: 'destructive'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: '—',
+        expectedIncome: '—'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.cancelled, gameId: 'ets2', started: '2026-10-11 02:00:12', startedLabel: '11 Oct, 02:00', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cancel Cargo', companies: 'Synthetic Company A · Synthetic Company B',
+        outcome: 'Cancelled', outcomeKind: 'cancelled', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: '—',
+        expectedIncome: '—'},
+      {mode: {kind: 'single-player', text: 'Single-player', evidence: 'Single-player', tone: 'neutral'}, jobType: FREIGHT_LINE, specialTransport: null, isHardMode: false, tripUuid: T.delivered, gameId: 'ets2', started: '2026-10-11 02:00:04', startedLabel: '11 Oct, 02:00', game: 'ETS2', route: 'Synthetic City A → Synthetic City B', cargo: 'Synthetic Cargo', companies: 'Synthetic Company A · Synthetic Company B',
         outcome: 'Delivered', outcomeKind: 'delivered', completeness: {text: 'Complete', variant: 'secondary'}, plannedDistance: '152.0 km', plannedOf: 'of 152.0 km', observedDistance: '152.0 km',
-        expectedIncome: '12345 (currency unknown)'}
+        expectedIncome: '—'}
     ]);
   });
   it('converts with the other profile of each game', () => {
@@ -137,13 +137,19 @@ describe('journal list (J13; REG-014, REG-009)', () => {
   it('shows a UTC label outside the Date range as an invalid reading instead of throwing (review round 1)', () => {
     const row = journalListText(page([{...DELIVERED, startedUtcMs: 8_640_000_000_000_001, endedUtcMs: 9_007_199_254_740_991}]), {timeZone: ZONE, filtered: false}).rows[0];
     expect(row.started).toBe('unavailable (invalid reading)');
+    expect(row.startedLabel).toBe('unavailable (invalid reading)');
     const detail = journalDetailText({...DELIVERED_DETAIL, trip: {...DELIVERED_DETAIL.trip, startedUtcMs: 8_640_000_000_000_001, endedUtcMs: 9_007_199_254_740_991}}, {timeZone: ZONE});
     expect(fields(detail.sections, 'trip')).toMatchObject({started: 'unavailable (invalid reading)', ended: 'unavailable (invalid reading)'});
+  });
+  it.each([['en', '11 Oct, 02:00'], ['ru', '11 окт, 02:00']] as const)('localizes the compact list date without losing the full timestamp (%s)', (language, label) => {
+    const row = journalListText(page([DELIVERED]), {timeZone: ZONE, filtered: false, language}).rows[0];
+    expect(row.startedLabel).toBe(label);
+    expect(row.started).toBe('2026-10-11 02:00:04');
   });
   it('names every close reason of a trip without an outcome', () => {
     const reasons = (['configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'] as const).map(closeReason =>
       journalListText(page([{...GAP_CLOSED, closeReason}]), {filtered: false}).rows[0].outcome);
-    expect(reasons).toEqual(['No outcome — job cleared', 'No outcome — a different job started', 'No outcome — the game or plugin restarted',
+    expect(reasons).toEqual(['No outcome — job cleared', 'Cancelled', 'No outcome — the game or plugin restarted',
       'No outcome — a loaded save or game time change', 'No outcome — events were lost']);
   });
 });
@@ -228,7 +234,7 @@ describe('trip detail (J13, J21, J22; REG-014, REG-009)', () => {
       expect(fields(text.sections, 'distance')).toEqual({plannedDistance: `${distance} [job offer, excludes ferries]`, observedDistance: `${distance} [odometer while recording]`,
         deliveredDistance: 'unavailable (not provided by the game) [reported by the game]'});
       expect(fields(text.sections, 'fuel')).toEqual({fuelUsed: `${fuel} [while recording, refuels excluded]`});
-      expect(fields(text.sections, 'money')).toMatchObject({expectedIncome: '0 USD (SDK-documented) [job offer]', revenue: '0 USD (SDK-documented) [reported by the game]'});
+      expect(fields(text.sections, 'money')).toMatchObject({expectedIncome: '0 USD [job offer]', revenue: '0 USD (SDK-documented) [reported by the game]'});
       expect(fields(text.sections, 'job')).toEqual({sourceCity: '(empty)', sourceCompany: 'Synthetic Company A', destinationCity: 'unavailable (not provided by the game)',
         destinationCompany: 'Synthetic Company B', cargo: 'unavailable (not observed)', cargoMass: 'unavailable (not provided by the game)', market: 'Freight market', specialJob: 'no',
         cargoLoaded: 'unavailable (invalid reading)', deadline: 'unavailable (invalid reading) [game time]', jobSource: 'job event 3'});
@@ -458,6 +464,9 @@ describe('the compact list rows (ET-076; REG-009, REG-014)', () => {
     expect(journalRangeText(2, 50, 'ru')).toBe('Показано 51–100');
     expect(journalRangeText(3, 7)).toBe('Showing 101–107');
     expect(journalRangeText(4, 0)).toBeNull();
+    expect(journalRangeText(1, 50, 'ru', 128)).toBe('1–50 из 128');
+    expect(journalRangeText(3, 28, 'en', 128)).toBe('101–128 of 128');
+    expect(journalRangeText(1, 0, 'ru', 0)).toBe('0–0 из 0');
   });
 });
 

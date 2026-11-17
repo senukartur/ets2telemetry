@@ -231,3 +231,13 @@ it.each(['en', 'ru'] as const)('REG-014 maps only authoritative row states to lo
     expect(view.text).not.toMatch(/⟦|accepted|принят/); expect(view.tone).toBe(state === 'sent' ? 'ok' : state === 'held' ? 'error' : ['unavailable', 'unbound'].includes(state) ? 'neutral' : 'warn');
   }
 });
+it.each(['en', 'ru'] as const)('uses short journal upload labels and keeps detailed states in hints (%s)', language => {
+  const row = {tripUuid: '', materialVersion: null, latestRevision: null, lastDurableUploadUtcMs: null, reason: null};
+  expect(journalSyncView({...row, state: 'sent'}, language).text).toBe(language === 'ru' ? 'Отправлен' : 'Sent');
+  for (const state of ['identity-pending', 'pending', 'queued'] as const)
+    expect(journalSyncView({...row, state}, language).text).toBe(language === 'ru' ? 'В очереди' : 'Queued');
+  const held = journalSyncView({...row, state: 'held', reason: 'validation'}, language);
+  expect(held.text).toBe(language === 'ru' ? 'Приостановлено' : 'Held');
+  expect(held.hint).toContain(language === 'ru' ? 'Рейс требует проверки' : 'A trip needs validation');
+  expect(journalSyncView({...row, state: 'identity-pending'}, language).hint).toContain(language === 'ru' ? 'Ожидание идентификации' : 'Identity pending');
+});
