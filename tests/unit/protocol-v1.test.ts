@@ -1040,12 +1040,13 @@ describe('ET-118 protocol v1 minor 5', () => {
 
   it('keeps the signed game minutes and validates the required field of the renderer projection', () => {
     const m = asState('checkpoint-worst');
-    const {window: _window, ...state} = m.data.state;
+    const {window, ...state} = m.data.state;
     expect(state.restState).toEqual({available: true, value: -2147483648, unit: 'min'});
     expect(asState('snapshot-max').data.state.restState).toEqual({available: true, value: 2147483647, unit: 'min'});
     expect(asState('snapshot-zero').data.state.restState).toEqual({available: true, value: 0, unit: 'min'});
     const live = {source: m.source, seq: m.seq, capture: m.capture, state, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss}, receivedMonotonicMs: 0, hydration: true};
     expect(validateLiveObservationV1(live).state.restState).toEqual(state.restState);
+    expect(() => validateLiveObservationV1({...live, state: {...state, window}})).toThrow(ProtocolError);
     expect(validateLiveObservationV1({...live, state: {...state, restState: NOT_SUPPORTED_REST_STATE}}).state.restState).toEqual({available: false, reason: 'not-supported', unit: 'min'});
     delete state.restState;
     expect(() => validateLiveObservationV1(live)).toThrow(ProtocolError);

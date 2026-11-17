@@ -41,7 +41,7 @@ function fixture(uiCase: Case) {
     overlayPreview: uiCase === 'overlay' ? ['en', 'ru'].flatMap(language => previewNames.map(name => ({language, viewportWidth: 1280, viewportHeight: 800, name,
       layout: name.endsWith('strip') ? 'strip' : name.endsWith('card') ? 'card' : name, scale: name.startsWith('large-') ? '3' : '1',
       width: 210, height: 320, outside: [] as string[], fitsScene: true, sections: name.endsWith('card') || name === 'cluster' ? [...previewSectionsHero] : [...previewSections],
-      cardRows: name.endsWith('card') ? {count: 14, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
+      cardRows: name.endsWith('card') ? {count: 15, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
       ...size, screen, imageWidth: size.width, imageHeight: size.height, bytes: 600})))).concat(uiCase === 'settings' ? sizes.map(size => ({file: `ui-settings-read-only-en-${size.width}x${size.height}.png`, language: 'en', ...size, screen: 'read-only', imageWidth: size.width, imageHeight: size.height, bytes: 600})) : [])
       .concat(uiCase === 'overlay' ? references.map(screen => ({file: `ui-overlay-${screen}-en-1280x800.png`, language: 'en', ...sizes[0], screen, imageWidth: 1280, imageHeight: 56, bytes: 600})) : [])
@@ -113,7 +113,8 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'preview has no visible bounds', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].height = 0;}},
     {name: 'preview width exceeds viewport', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].width = 1281;}},
     {name: 'preview bounds invalid', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].height = Number.NaN;}},
-    {name: 'Card preview loses fixed footer row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 13;}},
+    {name: 'Card preview loses fixed footer row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 14;}},
+    {name: 'Card preview has an extra row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 16;}},
     {name: 'Card preview has block icons', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.display = ['block'];}},
     {name: 'Card preview has mismatched vertical alignment', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.verticalAlign = ['baseline'];}},
     {name: 'Card preview label breaks line', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.sameLine = false;}},

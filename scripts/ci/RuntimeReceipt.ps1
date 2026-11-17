@@ -937,7 +937,7 @@ function Test-UiReceipt {
                 if ($observation.width -gt $observation.viewportWidth) { return $false }
                 if ($layout -ceq 'card') {
                     $rows = $observation.cardRows
-                    if ($null -eq $rows -or !(Test-ReceiptInteger -Value $rows.count -Minimum 14 -Maximum 14) -or
+                    if ($null -eq $rows -or !(Test-ReceiptInteger -Value $rows.count -Minimum 15 -Maximum 15) -or
                         (@($rows.display) -join ',') -cne 'inline' -or (@($rows.verticalAlign) -join ',') -cne '-2px' -or
                         $rows.sameLine -isnot [bool] -or !$rows.sameLine -or $rows.matchesActual -isnot [bool] -or !$rows.matchesActual) { return $false }
                 }
