@@ -162,7 +162,7 @@ Resuming the same verified job after restarting the game or application, or afte
 
 A job created in a save (for example by CargoMan) can have a complete recording when the delivered distance and game duration corroborate that its execution was observed from the beginning. Matching cargo and route names alone is insufficient. An unchanged, verified pause across a reconnection adds an informational annotation without making the recording partial. Missing evidence or actual losses still make it partial; existing journal entries are not recalculated.
 
-In ETS2, a short relocation during a recorded pause with a roughly half-hour jump in game time can appear as **Possible roadside assistance** under Completeness. It preserves recording completeness when the same truck is stopped at both observations and its odometer and fuel or energy level agree.
+In ETS2, a short relocation during a recorded pause with a roughly half-hour jump in game time can appear as **Possible roadside assistance** under Completeness. It preserves recording completeness when the same truck is stopped at both observations and its odometer and recorded fuel reading agree. For electric trucks, the game supplies charge on the same channel. When the reading is unavailable, this inference is unavailable too.
 
 ## Showing or hiding the overlay
 

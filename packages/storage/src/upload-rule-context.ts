@@ -36,7 +36,7 @@ export function unresolvedRulePrefix(kind:string,detail:unknown):boolean {
   if(Object.hasOwn(d,'decision')||Object.hasOwn(d,'continuationOf'))return true;
   const cause=typeof d.cause==='string'?d.cause:'';
   if(['reload','late-attach','opened-before-attach','loaded-job-unverified','save-load'].includes(cause))return true;
-  if(d.annotation===true&&['opened-at-load','menu-job-acceptance','observed-acceptance','loaded-job-coverage-confirmed','paused-reconnect'].includes(cause))return false;
+  if(d.annotation===true&&['opened-at-load','menu-job-acceptance','observed-acceptance','loaded-job-coverage-confirmed','paused-reconnect','possible-roadside-assistance'].includes(cause))return false;
   if(kind==='not-connected')return !['disconnected','consumer-restart'].includes(cause);
   // These measurements do not replace the original job opening; native configuration/gap replay still has to prove it.
   return !['odometer-regressed','odometer-jump','position-jump','game-time-jump','refuel','truck-change','reading-hole','utc-label-jump'].includes(cause);

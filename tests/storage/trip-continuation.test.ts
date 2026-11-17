@@ -37,6 +37,7 @@ import {StorageClient} from '../../packages/storage/src/client';
 import {ENGINE_0, storageWorker} from './recording-helpers';
 import {seedSample} from '../shared/journal-seed';
 import {JournalService,type JournalClient} from '../../apps/desktop/src/journal-service';
+import {journalIntervalText} from '../../apps/desktop/src/journal-view';
 import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
 import {TripExportSerializer,tripExportHeader} from '../../apps/desktop/src/journal-export';
 import {tripExportProblems} from '../shared/trip-export-validator';
@@ -1079,10 +1080,18 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     await capture(1000, 57, 20, String(12345 + minutes), 20, 99.5);
     succeeded(await recorder.samples.write(3600, true));
     succeeded(await recorder.commit(s.event(r.delivered()), context));
-    const {trip} = ok(await client.journalTrip(uuid));
+    const detail = ok(await client.journalTrip(uuid)), {trip} = detail;
     expect(trip).toMatchObject({outcome: 'delivered', recordingCompleteness: minutes === 31 ? 'complete' : 'partial'});
-    const {intervals} = ok(await client.journalIntervals(uuid, {limit: 100}));
+    const page = ok(await client.journalIntervals(uuid, {limit: 100})), {intervals} = page;
     expect(intervals).toContainEqual(expect.objectContaining({annotation: true, cause: minutes === 31 ? 'possible-roadside-assistance' : 'game-time-jump'}));
+    if (minutes === 31) {
+      expect(journalIntervalText(page, {language: 'ru'}).rows).toContainEqual(expect.objectContaining({cause: expect.stringContaining('вероятная техпомощь')}));
+      const databaseUuid = detail.exportBounds.snapshot!.intervals.split(':')[1];
+      const serializer = new TripExportSerializer(detail, tripExportHeader({...detail.database, uuid: databaseUuid}, 'test', 1000));
+      const exported = JSON.parse(serializer.begin() + serializer.rows('intervals', intervals) + serializer.end()) as {intervals: unknown[]};
+      expect(exported.intervals).toContainEqual(expect.objectContaining({cause: 'possible-roadside-assistance', annotation: true,
+        detail: expect.objectContaining({meters: 37, fromMinutes: '12345', toMinutes: '12376'})}));
+    }
     const raw = ok(await client.getTrip(uuid));
     expect(raw).toMatchObject({observedDistanceM: {available: true, value: 20}, fuelUsedL: {available: true, value: 0.5}});
     expect(await client.close()).toEqual({clean: true});

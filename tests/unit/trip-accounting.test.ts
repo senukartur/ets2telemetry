@@ -1,4 +1,4 @@
-import {classifyStep, readingPoint} from '../../packages/telemetry-core/src/trips/accounting';
+import {classifyStep, readingPoint, roadsideRelocation} from '../../packages/telemetry-core/src/trips/accounting';
 // ET-014 PR-2: readings accounting (T16) and the provisional thresholds (T17), fed through the trip reducer as `reading`
 // inputs between committed events. Every expected value is written by hand from docs/trips.md, the T16/T17 decisions
 // and the derived.ts step rules (docs/live-telemetry-fields.md); none is copied from reducer output. Each case names its
@@ -44,13 +44,14 @@ const NONE = {state: 'missing', reason: 'not-observed'} as const;
 const value = <T>(v: T) => ({state: 'value' as const, value: v});
 interface At {
   ms: number; speed?: number | null; odometer?: number; fuel?: number; minutes?: number; clock?: string; simulation?: 'running' | 'paused';
-  position?: {x: number; y: number; z: number}; plate?: string; country?: string; noTruck?: boolean; captureClock?: string; utc?: boolean; utcMs?: number;
+  position?: {x: number; y: number; z: number}; plate?: string; country?: string; modelId?: string; noTruck?: boolean; captureClock?: string; utc?: boolean; utcMs?: number;
 }
 /** Synthetic ordinary motion supplies speed, position and a stable game minute; explicit undefined position/minutes are unavailable. */
 function reading(s: Script, a: At): TripInput {
   const base = BASE.truck.state === 'value' ? BASE.truck.value : undefined;
   const truck = a.noTruck === true ? NONE : base === undefined ? BASE.truck : value({...base, ...(a.plate !== undefined ? {licensePlate: value(a.plate)} : {}),
-    ...(a.country !== undefined ? {plateCountry: {id: value(a.country), name: value(a.country)}} : {})});
+    ...(a.country !== undefined ? {plateCountry: {id: value(a.country), name: value(a.country)}} : {}),
+    ...(a.modelId !== undefined ? {model: {...base.model, id: value(a.modelId)}} : {})});
   const position = 'position' in a ? a.position : {x: a.ms * 0.02, y: 0, z: 0};
   const state: NormalizedLiveState = {...BASE, speed: a.speed === null ? NONE : value(a.speed ?? 20), simulation: a.simulation ?? 'running', truck,
     odometer: a.odometer === undefined ? NONE : value({kind: 'odometer' as const, meters: a.odometer}), fuel: a.fuel === undefined ? NONE : value(a.fuel),
@@ -585,6 +586,45 @@ describe('game-time and position jumps (T17)', () => {
 });
 
 describe('REG-008 ETS2 roadside relocation', () => {
+  it.each([
+    {name: 'equal stationarity threshold', x: 0.05, expected: null},
+    {name: 'equal maximum displacement', x: 50, expected: 50},
+    {name: 'late after the resume', after: 19_000, expected: null},
+    {name: 'stale before the pause', before: 998, expected: null},
+    {name: 'short time advance', minutes: 1029, expected: null},
+    {name: 'long time advance', minutes: 1032, expected: null},
+    {name: 'electric charge on the SDK fuel channel', truck: 'vehicle.daf.xf_electric', expected: 37},
+    {name: 'missing electric charge', truck: 'vehicle.daf.xf_electric', missing: true, expected: null},
+    {name: 'ATS', game: 'ats' as const, expected: null}
+  ])('uses the recorded source and exact roadside bounds ($name)', variant => {
+    const s = new Script(ETS2_A, variant.game), point = (at: At) => {
+      const input = reading(s, at);
+      if (input.kind !== 'reading') throw new Error('Reading expected');
+      return readingPoint(input.sample);
+    };
+    const common = {odometer: 1_000_000, fuel: variant.missing ? undefined : 100, speed: 0, modelId: variant.truck};
+    const before = point({...common, ms: variant.before ?? 999, minutes: 1000, position: {x: 0, y: 0, z: 0}});
+    const after = point({...common, ms: variant.after ?? 18_999, minutes: variant.minutes ?? 1031, position: {x: variant.x ?? 37, y: 0, z: 0}});
+    const pause = {sourceClockId: s.clockId, processInstanceId: before.source.processInstanceId, gameClockId: GAME_CLOCK_1,
+      gameMinutes: '1000', pausedNs: ns(2999), resumedNs: ns(16_999)};
+    expect(roadsideRelocation(pause, before, after, classifyStep(before, after))).toBe(variant.expected);
+  });
+  it.each(['gap', 'checkpoint', 'disconnect'] as const)('retires the pause witness on a %s', boundary => {
+    const {s, rows} = opened();
+    const pause = s.event(r.paused(), {...paused, advanceMs: 1000});
+    const retired: Step[] = boundary === 'gap' ? [s.gap(1)] : boundary === 'checkpoint'
+      ? [{kind: 'checkpoint', message: s.checkpoint(job())}]
+      : [{kind: 'disconnected'}, sessionInput(s.welcome(), '3')];
+    const resume = s.event(r.started(), {advanceMs: 14_000});
+    const after = Number((BigInt(resume.capture.monotonicNs) - BigInt(ns(0))) / 1_000_000n) + 50;
+    const base = {odometer: 1_000_000, fuel: 100, speed: 0};
+    const result = run(initialTripState(), [...rows.map(([step]) => step),
+      reading(s, {...base, ms: 2200, minutes: 12345, position: {x: 0, y: 0, z: 0}}), pause,
+      ...retired, resume, reading(s, {...base, ms: after, minutes: 12376, position: {x: 37, y: 0, z: 0}}), s.event(r.delivered())]);
+    expect(result.effects.flat()).not.toContainEqual(expect.objectContaining({interval: expect.objectContaining({
+      detail: expect.objectContaining({cause: 'possible-roadside-assistance'})
+    })}));
+  });
   it.each(['30 minutes', '31 minutes', 'unbracketed', 'moving', 'odometer changed', 'fuel changed', 'large relocation', 'late reading', 'replayed resume', 'job changed'] as const)(
     'requires a clean stopped relocation at a live pause and resume (%s)', variant => {
       const {s, rows} = opened();
