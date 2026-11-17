@@ -129,6 +129,12 @@ describe('coherent hidden-renderer observations', () => {
 });
 
 describe('ET-012c strip containment observation', () => {
+  it('accepts the speed limit after speed and rejects its old position after cruise control', async () => {
+    const canonical = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel'];
+    const sections = ['speed', 'speed-limit', 'gear', 'rpm', 'cruise-control', 'fuel'];
+    expect(await observeStrip({sections}, canonical)).toMatchObject({sections});
+    expect(await observeStrip({sections: canonical}, canonical)).toBe(false);
+  });
   // Hand-derived from tests/fixtures/protocol-v0/checkpoint.json: range stays hidden because its estimate is not observed.
   const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time'];
   type Box = {left: number; top: number; width: number; height: number};

@@ -311,6 +311,15 @@ it('keeps the sign art untranslated and the accessible names localized in Russia
   expect(signHtml('strip', 'ETS2', limitSections('none'), 'ru')).toContain('aria-label="Ограничение скорости: без ограничения"');
   expect(signHtml('cluster', 'ETS2', limitSections(), 'ru')).toContain('aria-label="Ограничение скорости: нет данных"');
 });
+it.each([true, false])('places the strip sign after speed and before gear, RPM and cruise (speed enabled: %s)', speed => {
+  const sections: OverlayPresentation['sections'] = [
+    {id: 'gear', state: 'value', text: '12'}, {id: 'rpm', state: 'value', text: '1420 rpm'},
+    {id: 'cruise-control', state: 'value', text: '90 km/h'}, ...limitSections('90 km/h')
+  ];
+  const html = signHtml('strip', 'ETS2', sections.filter(section => speed || section.id !== 'speed'));
+  expect([...html.matchAll(/data-testid="overlay-section-([^"]+)"/g)].map(match => match[1]))
+    .toEqual([...(speed ? ['speed'] : []), 'speed-limit', 'gear', 'rpm', 'cruise-control']);
+});
 it('reserves the strip sign its fixed 32 px slot in every state, and only the sign item has a minimum width', () => {
   for (const {source, text, name} of SIGN_CASES) {
     const html = signHtml('strip', source, limitSections(text));

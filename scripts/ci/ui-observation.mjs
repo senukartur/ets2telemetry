@@ -122,6 +122,15 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
   for (const layout of layouts) {
     await dashboard.locator(`#overlay-layout-${layout}`).focus(); await dashboard.keyboard.press('Space');
     await until(() => preview.getAttribute('data-layout'), value => value === layout, 'UI_PREVIEW_LAYOUT');
+    const radios = await dashboard.locator('.yu-layout-option>[role="radio"]').evaluateAll(nodes => nodes.map(node => {
+      const box = node.getBoundingClientRect();
+      return {id: node.id, width: box.width, height: box.height, checked: node.getAttribute('aria-checked')};
+    }));
+    for (const radio of radios) {
+      assert.ok(Math.abs(radio.width - radio.height) < 0.1, `UI_LAYOUT_RADIO_CIRCLE_${radio.id}: ${radio.width} x ${radio.height}`);
+      assert.ok(Math.abs(radio.height - 12) < 0.1, `UI_LAYOUT_RADIO_SIZE_${radio.id}`);
+      assert.equal(radio.checked, String(radio.id === `overlay-layout-${layout}`), `UI_LAYOUT_RADIO_SELECTION_${radio.id}`);
+    }
     await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
     const result = await contained(layout);
     const image = dashboard.getByTestId('overlay-preview-card');

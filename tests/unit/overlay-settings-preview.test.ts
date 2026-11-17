@@ -22,6 +22,8 @@ it.each(['en', 'ru'] as const)('shares enabled order, localized values and the f
     expect(view.items.map(item => item.label)).toEqual(driving.map(id => getOverlaySectionText(id, language)));
     expect(view.items[3]).toMatchObject({value: '90', unit: language === 'ru' ? 'км/ч' : 'km/h'});
     const html = renderToStaticMarkup(React.createElement(OverlaySettingsPreview, {settings, language, scale: 1}));
+    if (layout === 'strip') expect([...html.matchAll(/data-testid="overlay-section-([^"]+)"/g)].map(match => match[1]))
+      .toEqual(['speed', 'speed-limit', 'gear', 'rpm', 'cruise-control', 'fuel', 'range']);
     expect(html).toContain(escaped(`${language === 'ru' ? 'Предпросмотр' : 'Preview'} · ${getOverlayLayoutText(layout, language)}`));
     for (const id of driving) expect(html.match(new RegExp(`data-testid="overlay-section-${id}"`, 'g')), id).toHaveLength(1);
     expect(html).not.toContain('data-testid="overlay-section-cargo"');
