@@ -56,6 +56,12 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     }
     if (!storage) return failed('STORAGE_CLOSED');
     switch (command.name) {
+    case 'readQualificationCache': return storage.readQualificationCache(command.input);
+    case 'setQualificationScope': return storage.setQualificationScope(command.input);
+    case 'saveQualificationCache': return storage.saveQualificationCache(command.input);
+    case 'pageQualificationSources': return storage.pageQualificationSources(command.input);
+    case 'commitQualificationResults': return storage.commitQualificationResults(command.input);
+    case 'saveQualificationRefresh': return storage.saveQualificationRefresh(command.input);
     case 'readRetainedUploadMaterializations': return storage.readRetainedUploadMaterializations();
     case 'getUploadConfiguration': return storage.getUploadConfiguration();
     case 'pageUploadScanRuns': return storage.pageUploadScanRuns(command.input);

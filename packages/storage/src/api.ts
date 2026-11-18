@@ -337,3 +337,4 @@ export type JournalResult<T> = {ok: true; value: T} | {ok: false; error: Storage
 export type {UploadProjectionBegin, UploadProjectionPreparation, UploadProjection, UploadProjectionPage, UploadProjectionPageQuery} from './upload-projection';
 
 export type * from './upload-sync';
+export type * from './qualification';
