@@ -111,6 +111,10 @@ export async function startLiveSmokeSourceV1(checkout) {
   };
   return {endpoint, stop,
     hold: () => {held = true;}, resume: () => {held = false;},
+    setCargoName: name => {
+      assert.ok(name === undefined || (typeof name === 'string' && Buffer.byteLength(name, 'utf8') <= 256));
+      for (const message of [checkpoint, snapshot]) message.data.state.configuration.job.value.cargo = {available: true, value: name ?? 'Synthetic Cargo'};
+    },
     // ET-050b: the v1 truck's model id for the following state messages; undefined restores the fixture's own id.
     setTruckId: id => {
       assert.ok(id === undefined || (typeof id === 'string' && id.length > 0));

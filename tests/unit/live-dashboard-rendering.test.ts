@@ -43,7 +43,8 @@ describe('connected', () => {
     expect(html).not.toContain('data-testid="live.stale"');
     // Tags: cargo with its mass, the market label and the deadline; game names stay as the game sent them.
     const tags = between(html, 'live.job.tags', 'live.job.route');
-    expect(tags).toContain(`Synthetic Cargo · ${expected.mass}</span>`);
+    expect(tags).toContain(`title="Synthetic Cargo · ${expected.mass}"`);
+    expect(tags).toContain(`<span class="yu-badge-text">Synthetic Cargo · ${expected.mass}</span>`);
     expect(tags).toMatch(/data-testid="live.job.market"[^>]*data-kind="freight-market"[^>]*>.*?lucide-truck/);
     expect(tags).toContain(`<span>${expected.market}</span>`);
     expect(tags).toContain(`${expected.deadline} `);

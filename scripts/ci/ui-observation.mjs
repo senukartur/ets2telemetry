@@ -274,9 +274,9 @@ function waitOverlayVisibility(page, {enabled, writable = true, saveError = null
 }
 async function settled(page) {await page.evaluate(async () => {
   await globalThis.document.fonts.ready;
-  // A semantic status can change just before capture. Observe its final colours after finite badge transitions.
+  // Capture final status colours without spending the bounded journey's time on cosmetic transitions.
   const animations = Array.from(globalThis.document.querySelectorAll('[data-slot="badge"]')).flatMap(node => node.getAnimations());
-  await Promise.all(animations.filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)));
+  for (const animation of animations) if (Number.isFinite(animation.effect?.getComputedTiming().endTime)) animation.finish();
 });}
 // Isolated CSS display probe only: it does not exercise committed y, native drag or game authority.
 function cssDisplayGeometry() {
@@ -681,6 +681,7 @@ async function capture({page, application, config, record, name, language, size,
     }
   }
   if (overlay) {
+    (record.overlayTagSizes ??= []).push({name, language, tags: await page.evaluate(overlayTagObservation)});
     const png = await application.evaluate(async ({BrowserWindow}) => {
       const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay'));
       return (await window.webContents.capturePage(undefined, {stayHidden: true, stayAwake: true})).toPNG().toString('base64');
@@ -1110,6 +1111,26 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await screen(dashboard, 'live');
         await waitLiveInstrument(dashboard, language);
         await save('current', language, size);
+        // A protocol-valid modded cargo name must fit the same 20 px badge without widening its card.
+        const longCargo = 'Synthetic long cargo '.repeat(12);
+        sourceV1.setCargoName(longCargo);
+        try {
+          const cargoBadge = dashboard.getByTestId('live.job.cargo');
+          await until(() => cargoBadge.innerText(), text => text.startsWith(longCargo), 'UI_LONG_CARGO_READING');
+          const bounds = await cargoBadge.evaluate(node => {
+            const box = node.getBoundingClientRect(), card = node.closest('[data-testid="live.job"]').getBoundingClientRect();
+            const label = node.querySelector('.yu-badge-text');
+            return {contained: box.left >= card.left && box.right <= card.right, height: box.height, badgeRight: box.right, cardRight: card.right,
+              label: label ? {clipped: label.scrollWidth > label.clientWidth, overflow: globalThis.getComputedStyle(label).textOverflow} : null};
+          });
+          assert.equal(bounds.contained, true, `UI_LONG_CARGO_CONTAINED_${language}_${size.width}: ${JSON.stringify(bounds)}`);
+          assert.ok(Math.abs(bounds.height - 20) < .1, 'UI_LONG_CARGO_HEIGHT');
+          assert.deepEqual(bounds.label, {clipped: true, overflow: 'ellipsis'}, 'UI_LONG_CARGO_ELLIPSIS');
+          assert.equal(await cargoBadge.getAttribute('title'), await cargoBadge.textContent(), 'UI_LONG_CARGO_FULL_LABEL');
+          await save('long-cargo', language, size);
+          record.flags.longCargoContained = true;
+        } finally {sourceV1.setCargoName(undefined);}
+        await until(() => dashboard.getByTestId('live.job.cargo').innerText(), text => text.startsWith('Synthetic Cargo'), 'UI_CARGO_RESTORED');
         source.setReading(0, 0); await dashboard.waitForFunction(zeroLiveObservation, language, {timeout: 5000}); await save('zero', language, size);
         source.setReading(25, 73); source.setCapacity(null);
         await dashboard.waitForFunction(language => globalThis.document.querySelector('[data-testid="live.instrument.tank"]')?.getAttribute('data-state') === 'unavailable' && !globalThis.document.querySelector('.yu-tank i') && globalThis.document.querySelector('.yu-tank-unavailable')?.textContent === '—' && globalThis.document.querySelector('[data-testid="fuel"]')?.textContent === (language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л'), language, {timeout: 5000});
@@ -1471,6 +1492,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
               assert.equal(await overlay.getByTestId('overlay-speed').evaluate(node => globalThis.getComputedStyle(node).opacity), '0.5');
               assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
               const tagBoxes = await overlay.evaluate(overlayTagObservation);
+              (record.overlayTags ??= []).push({language, size, layout, tags: tagBoxes});
               assert.ok(tagBoxes.length > 0 && tagBoxes.length <= 2 && tagBoxes.every(node => !node.clipped), `UI_OVERLAY_TAG_CONTAINMENT_${language}_${size.width}: ${JSON.stringify(tagBoxes)}`);
               assert.equal(await overlay.getByTestId('overlay-rpm-arc').count(), 0);
               assert.equal(await overlay.getByTestId('overlay-speed-arc').count(), 0);

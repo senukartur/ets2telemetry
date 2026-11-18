@@ -13,8 +13,9 @@ h1[tabindex="-1"]:focus { outline: none; }
 [data-slot="card-title"] { border-left: var(--yu-title-bar); padding-left: 10px; font-size: 15px; font-weight: 700; }
 [data-slot="card-title"] h1, [data-slot="card-title"] h2 { font-size: inherit; margin: 0; }
 [data-slot="card-content"] { padding: 14px 16px; }
-[data-slot="badge"] { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 5px; box-sizing: border-box; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: var(--yu-radius-badge); height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); max-height: var(--yu-control-h-xs); padding: 0 7px; font-size: 12px; font-weight: 500; line-height: 16px; white-space: nowrap; vertical-align: middle; }
+[data-slot="badge"] { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 5px; max-width: 100%; overflow: hidden; box-sizing: border-box; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: var(--yu-radius-badge); height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); max-height: var(--yu-control-h-xs); padding: 0 7px; font-size: 12px; font-weight: 500; line-height: 16px; white-space: nowrap; vertical-align: middle; }
 [data-slot="badge"] > svg { width: 13px !important; height: 13px !important; flex: none; margin: 0; stroke-width: 1.8; }
+[data-slot="badge"] > span:not(.sr-only):not(.yu-chip-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .badge-ok { color: var(--yu-badge-ok-fg); background: var(--yu-badge-ok-bg); }
 .badge-warn { color: var(--yu-badge-warn-fg); background: var(--yu-badge-warn-bg); }
 .badge-error { color: var(--yu-badge-error-fg); background: var(--yu-badge-error-bg); }
@@ -572,7 +573,7 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-live-card [data-slot="card-title"] { flex: 1; min-width: 0; border-left: 0; padding-left: 0; font-size: 13px; color: var(--yu-text-strong); }
 .yu-live-card > [data-slot="card-content"] { padding: 6px 14px 10px; }
 .yu-live-card > [data-slot="card-content"] > p { margin: 6px 0 2px; }
-.yu-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.yu-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; }
 .yu-live-card > .yu-job-body { display: flex; flex-direction: column; gap: 14px; padding: 12px 14px; }
 .yu-route { display: grid; grid-template-columns: minmax(0, max-content) minmax(32px, 1fr) minmax(0, max-content); align-items: center; gap: 14px; }
 .yu-route-end { display: flex; align-items: center; gap: 8px; min-width: 0; }

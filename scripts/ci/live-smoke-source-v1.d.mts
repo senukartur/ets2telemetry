@@ -9,6 +9,8 @@ export interface LiveSmokeSourceV1 {
   /** Stops sending snapshots on the open connection until `resume`. */
   hold(): void;
   resume(): void;
+  /** Synthetic cargo display name, within the protocol's 256 byte name bound. Undefined restores the fixture name. */
+  setCargoName(name: string | undefined): void;
   /** ET-050b: the v1 truck's model id for the following state messages; undefined restores the fixture's own id. */
   setTruckId(id: string | undefined): void;
   /** ET-052: the next mandatory break of the following state messages, a wire measure of unit min; undefined restores 95 minutes. */

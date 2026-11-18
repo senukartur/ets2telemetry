@@ -113,7 +113,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
 
     <Card className="yu-live-card" data-testid="live.job"><CardHeader>{title('live.job')}
       {cargo !== null || has('market') || has('deadline') ? <div className="yu-tags" data-testid="live.job.tags">
-        {cargo !== null ? <Badge variant="neutral" data-testid="live.job.cargo"><Package aria-hidden="true" />{cargo}</Badge> : null}
+        {cargo !== null ? <Badge variant="neutral" data-testid="live.job.cargo" title={cargo}><Package aria-hidden="true" /><span className="yu-badge-text">{cargo}</span></Badge> : null}
         {has('market') ? <JobTypeBadge job={{kind: marketKind, text: marketKind === 'world-of-trucks' ? t('j.worldOfTrucks', undefined, language) : value('market'), sub: marketKind === 'world-of-trucks' ? value('market') : null}} language={language} testId="live.job.market" /> : null}
         {has('deadline') ? <Badge variant="neutral" data-testid="live.job.deadline"><Clock aria-hidden="true" />{t('live.deadline', undefined, language)} {value('deadline')}</Badge> : null}
       </div> : null}</CardHeader>
