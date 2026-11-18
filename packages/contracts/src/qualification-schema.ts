@@ -1,4 +1,4 @@
-// VTC-164 companion schema pinned at 9a53e09755f7731da865aa3bdc4bac8a7cafe724.
+// VTC-164 companion schema pinned at 793d99a2d98fe07e1d2ad399ecb572e00e2792e1.
 export const qualificationSchema = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:vtc:companion:v1",
@@ -622,7 +622,8 @@ export const qualificationSchema = {
             "complete",
             "items"
           ],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Bounded distinct coupling/configuration observations, current and previous. One item per configuration, not per physical trailer slot. code is exact SDK trailers.items[0].bodyType for that configuration, matching frozen ingestion. Null holes and incomplete history remain explicit."
         },
         "actualDistance": {
           "type": "object",
@@ -1445,7 +1446,7 @@ export const qualificationSchema = {
           "items": {
             "$ref": "#/$defs/TrailerDisplay"
           },
-          "maxItems": 100
+          "maxItems": 110
         },
         "assessedSource": {
           "oneOf": [

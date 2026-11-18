@@ -1,4 +1,4 @@
-// Generated VTC-164 component types pinned at 9a53e09755f7731da865aa3bdc4bac8a7cafe724.
+// Generated VTC-164 component types pinned at 793d99a2d98fe07e1d2ad399ecb572e00e2792e1.
 export interface components {
     schemas: {
         Assessment: {
@@ -160,6 +160,7 @@ export interface components {
                 /** Format: date-time */
                 utc: string;
             } | null;
+            /** @description Bounded distinct coupling/configuration observations, current and previous. One item per configuration, not per physical trailer slot. code is exact SDK trailers.items[0].bodyType for that configuration, matching frozen ingestion. Null holes and incomplete history remain explicit. */
             trailers: {
                 complete: boolean;
                 items: {

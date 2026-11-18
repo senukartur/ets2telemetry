@@ -532,7 +532,7 @@ function runApplication(profileError: unknown): void {
     gearDisplay: GearDisplayModes = settingsStore.view().gearDisplay): void {
     lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language, gearDisplay),
       contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y, hardMode: overlayHardModeNow()};
-    lastOverlay.qualification=overlayQualificationNow(live);
+    const qualificationCue=overlayQualificationNow(live);if(qualificationCue===undefined)delete lastOverlay.qualification;else lastOverlay.qualification=qualificationCue;
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
   }
@@ -551,7 +551,7 @@ function runApplication(profileError: unknown): void {
   }
   function publishOverlayQualification():void {
     if(lifecycle.exiting)return;const next=overlayQualificationNow();if(lastOverlay.qualification===next)return;
-    lastOverlay={...lastOverlay,qualification:next};overlaySubscriptions.publish(lastOverlay);
+    lastOverlay={...lastOverlay};if(next===undefined)delete lastOverlay.qualification;else lastOverlay.qualification=next;overlaySubscriptions.publish(lastOverlay);
   }
   /**
    * Republishes only the Hard Mode indicator when it changed, like the content anchor: it renews no telemetry, freshness

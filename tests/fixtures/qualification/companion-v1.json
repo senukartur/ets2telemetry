@@ -346,7 +346,7 @@
           "maxKg": "24000",
           "observedKg": "0",
           "reasons": [
-            "within_limits"
+            "event_attendance_exemption"
           ]
         },
         {
@@ -356,7 +356,7 @@
           "maxM": "500000",
           "observedM": "99999",
           "reasons": [
-            "within_limits"
+            "event_attendance_exemption"
           ]
         },
         {
@@ -366,7 +366,7 @@
           "allowedIds": [],
           "observedIds": [],
           "reasons": [
-            "within_limits"
+            "event_attendance_exemption"
           ]
         },
         {
@@ -376,7 +376,7 @@
           "allowedClasses": [],
           "observed": null,
           "reasons": [
-            "within_limits"
+            "event_attendance_exemption"
           ]
         },
         {
@@ -385,7 +385,7 @@
           "required": true,
           "observed": "unknown",
           "reasons": [
-            "within_limits"
+            "event_attendance_exemption"
           ]
         }
       ],
@@ -522,10 +522,10 @@
           "unchanged": false,
           "receipt": "received",
           "state": "review",
-          "requestedSourceMessageId": null,
-          "latestSourceRevision": null,
-          "canonicalTripId": null,
-          "sourceOutcome": null,
+          "requestedSourceMessageId": "00000000-0000-4000-8000-000000000011",
+          "latestSourceRevision": 2,
+          "canonicalTripId": "00000000-0000-4000-8000-000000000012",
+          "sourceOutcome": "delivered",
           "companyDecision": "pending_review",
           "assessmentPending": false,
           "correctionPending": false,
@@ -2265,6 +2265,1578 @@
       },
       "start": null,
       "eventId": null
+    }
+  },
+  {
+    "name": "inclusive-mass-maximum",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "pass",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "24000",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "mass-precision-proven-violation",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "fail",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "fail",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "24000.000000000000000001",
+          "reasons": [
+            "limit_mismatch"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "limit_mismatch"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "mass-unavailable-is-not-zero",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "unknown",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "unknown",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": null,
+          "reasons": [
+            "fact_unavailable"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "fact_unavailable"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "inclusive-distance-minimum",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "pass",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "100000",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "100000",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "already-over-maximum-proven-violation-lease",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "fail",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "fail",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "500001",
+          "reasons": [
+            "limit_mismatch"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "limit_mismatch"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "500001",
+        "maximumDistanceM": null,
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "final-distance-correction-exact-guard",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "fail",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "fail",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "99999",
+          "reasons": [
+            "limit_mismatch"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "limit_mismatch"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "99999",
+        "maximumDistanceM": "99999",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "forbidden-adr-confirmed-non-adr",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "forbidden",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "pass",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "forbidden",
+          "allowedClasses": [],
+          "observed": "none",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "forbidden-adr-proven-class",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "forbidden",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "fail",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "fail",
+          "mode": "forbidden",
+          "allowedClasses": [],
+          "observed": "2",
+          "reasons": [
+            "limit_mismatch"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "limit_mismatch"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "selected-adr-allowed",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "selected",
+            "classes": [
+              "2"
+            ]
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "pass",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "selected",
+          "allowedClasses": [
+            "2"
+          ],
+          "observed": "2",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "selected-adr-classification-missing",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "selected",
+            "classes": [
+              "2"
+            ]
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "unknown",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "unknown",
+          "mode": "selected",
+          "allowedClasses": [
+            "2"
+          ],
+          "observed": null,
+          "reasons": [
+            "fact_unavailable"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "fact_unavailable"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "selected-trailer-incomplete-context",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "selected",
+            "typeIds": [
+              "00000000-0000-4000-8000-000000000013"
+            ]
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "unknown",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "unknown",
+          "mode": "selected",
+          "allowedIds": [
+            "00000000-0000-4000-8000-000000000013"
+          ],
+          "observedIds": [
+            "00000000-0000-4000-8000-000000000013"
+          ],
+          "reasons": [
+            "fact_unavailable"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "fact_unavailable"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "selected-trailer-known-disallowed-outranks-unresolved",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "selected",
+            "typeIds": [
+              "00000000-0000-4000-8000-000000000013"
+            ]
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "fail",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "fail",
+          "mode": "selected",
+          "allowedIds": [
+            "00000000-0000-4000-8000-000000000013"
+          ],
+          "observedIds": [
+            "00000000-0000-4000-8000-000000000014"
+          ],
+          "reasons": [
+            "limit_mismatch"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "pass",
+          "required": true,
+          "observed": "qualified",
+          "reasons": [
+            "within_limits"
+          ]
+        }
+      ],
+      "reasons": [
+        "limit_mismatch"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "final-hard-mode-not-qualified",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "fail",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "fail",
+          "required": true,
+          "observed": "not-qualified",
+          "reasons": [
+            "limit_mismatch"
+          ]
+        }
+      ],
+      "reasons": [
+        "limit_mismatch"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "hard-mode-missing",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "current_projection",
+      "assignment": {
+        "id": "00000000-0000-4000-8000-000000000004",
+        "startedAt": "2026-11-01T00:00:00.000Z",
+        "level": {
+          "id": "00000000-0000-4000-8000-000000000003",
+          "name": "Fictional first level",
+          "editVersion": 2
+        },
+        "limits": {
+          "massMinKg": "0",
+          "massMaxKg": "24000",
+          "distanceMinM": "100000",
+          "distanceMaxM": "500000",
+          "trailers": {
+            "mode": "any",
+            "typeIds": []
+          },
+          "adr": {
+            "mode": "any",
+            "classes": []
+          },
+          "hardModeRequired": true
+        },
+        "trailerDisplay": []
+      },
+      "outcome": "unknown",
+      "rules": [
+        {
+          "rule": "cargo_mass",
+          "result": "pass",
+          "minKg": "0",
+          "maxKg": "24000",
+          "observedKg": "0",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "distance",
+          "result": "pass",
+          "minM": "100000",
+          "maxM": "500000",
+          "observedM": "499999",
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "trailer_types",
+          "result": "pass",
+          "mode": "any",
+          "allowedIds": [],
+          "observedIds": [],
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "adr",
+          "result": "pass",
+          "mode": "any",
+          "allowedClasses": [],
+          "observed": null,
+          "reasons": [
+            "within_limits"
+          ]
+        },
+        {
+          "rule": "hard_mode",
+          "result": "unknown",
+          "required": true,
+          "observed": "unknown",
+          "reasons": [
+            "fact_unavailable"
+          ]
+        }
+      ],
+      "reasons": [
+        "fact_unavailable"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "499999",
+        "maximumDistanceM": "500000",
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "preview-assignment_missing",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "unavailable",
+      "assignment": null,
+      "outcome": "unknown",
+      "rules": [],
+      "reasons": [
+        "assignment_missing"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "99999",
+        "maximumDistanceM": null,
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "preview-module_unavailable",
+    "schema": "Preview",
+    "value": {
+      "contract": "1.0",
+      "securityScope": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requestId": "00000000-0000-4000-8000-000000000007",
+      "contextRevision": 1,
+      "evidenceRevision": 3,
+      "evaluatedAt": "2026-11-18T12:00:00.000Z",
+      "basis": "unavailable",
+      "assignment": null,
+      "outcome": "unknown",
+      "rules": [],
+      "reasons": [
+        "module_unavailable"
+      ],
+      "eventExempt": false,
+      "applicability": {
+        "expiresAt": "2026-11-18T12:00:05.000Z",
+        "contextRevision": 1,
+        "minimumDistanceM": "99999",
+        "maximumDistanceM": null,
+        "qualificationRevision": "12",
+        "requiresQualificationRefresh": true
+      },
+      "provisional": true,
+      "trailerDisplay": []
+    }
+  },
+  {
+    "name": "safe-error-INGESTION_FORBIDDEN",
+    "schema": "Error",
+    "value": {
+      "error": {
+        "code": "INGESTION_FORBIDDEN",
+        "retryable": false
+      },
+      "requestId": "00000000-0000-4000-8000-000000000007"
+    }
+  },
+  {
+    "name": "safe-error-NOT_FOUND",
+    "schema": "Error",
+    "value": {
+      "error": {
+        "code": "NOT_FOUND",
+        "retryable": false
+      },
+      "requestId": "00000000-0000-4000-8000-000000000007"
+    }
+  },
+  {
+    "name": "safe-error-PAYLOAD_TOO_LARGE",
+    "schema": "Error",
+    "value": {
+      "error": {
+        "code": "PAYLOAD_TOO_LARGE",
+        "retryable": false
+      },
+      "requestId": "00000000-0000-4000-8000-000000000007"
+    }
+  },
+  {
+    "name": "safe-error-UNSUPPORTED_MEDIA_TYPE",
+    "schema": "Error",
+    "value": {
+      "error": {
+        "code": "UNSUPPORTED_MEDIA_TYPE",
+        "retryable": false
+      },
+      "requestId": "00000000-0000-4000-8000-000000000007"
     }
   }
 ]

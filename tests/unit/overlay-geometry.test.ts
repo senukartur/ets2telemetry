@@ -298,10 +298,11 @@ it.each([
   // 1233), at 775 (inner 1080, ET-070's one-row threshold) and at 768 (inner 1070). ET-084: the line is 1280 with the speed
   // limit, so one row needs an inner width of 1280: a 915 DIP strip (CSS floor(1307.14) = 1307, inner floor(1280.14) = 1280) does
   // and a 914 DIP one (CSS 1305, inner 1278) does not; at 883 and 882 it is two rows now.
+  // The qualification reserve adds 40 CSS px: 1320 needs 943 DIP; the 928 and 915 DIP cases now use two rows.
   {name: 'driving-only in 800 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 800, 600), bounds: {x: 16, y: 8, width: 768, height: 56}},
-  {name: 'driving-only in 960 x 540', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 960, 540), bounds: {x: 16, y: 8, width: 928, height: 29}},
+  {name: 'driving-only in 960 x 540', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 960, 540), bounds: {x: 16, y: 8, width: 928, height: 56}},
   {name: 'driving-only in 1280 x 720', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1280, 720), bounds: {x: 16, y: 8, width: 1248, height: 29}},
-  {name: 'driving-only in 947 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 947, 600), bounds: {x: 16, y: 8, width: 915, height: 29}},
+  {name: 'driving-only in 947 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 947, 600), bounds: {x: 16, y: 8, width: 915, height: 56}},
   {name: 'driving-only in 946 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 946, 600), bounds: {x: 16, y: 8, width: 914, height: 56}},
   {name: 'driving-only in 915 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 915, 600), bounds: {x: 16, y: 8, width: 883, height: 56}},
   {name: 'driving-only in 914 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 914, 600), bounds: {x: 16, y: 8, width: 882, height: 56}},
@@ -531,10 +532,10 @@ it.each([
 it('keeps the strip width of the setting 1 in smaller clients', () => {
   // 1280 x 720: 1248 wide at 1 (ET-052: three rows, 82; two rows, 56 before) and at 0.5 (ET-071: CSS floor(3565.71) = 3565,
   // inner 3535 < 3674, two rows, 29; one row, 16, before). 1024 x 768: 992 wide, CSS floor(1417.14) = 1417, inner 1390,
-  // three rows: ceil(79.8 + 2) = 82 (the earlier 70% was 896 × 82).
+  // four rows with the qualification reserve: ceil(106.4 + 2) = 109 (the earlier 70% was 896 × 82).
   expect(overlaySize('strip', client(0, 0, 1280, 720), 1)).toEqual({width: 1248, height: 82});
   expect(overlaySize('strip', client(0, 0, 1280, 720), 0.5)).toEqual({width: 1248, height: 29});
-  expect(overlaySize('strip', client(0, 0, 1024, 768), 1)).toEqual({width: 992, height: 82});
+  expect(overlaySize('strip', client(0, 0, 1024, 768), 1)).toEqual({width: 992, height: 109});
 });
 
 it('never makes the strip narrower than at the setting 1, nor wider than the client allows', () => {

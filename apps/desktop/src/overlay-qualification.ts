@@ -10,7 +10,7 @@ export function qualificationLeaseCue(lease:QualificationLease|null,current:Qual
   if(!Number.isFinite(ttl)||ttl<=0||nowMonotonicMs<lease.dispatchMonotonicMs||nowMonotonicMs>=lease.dispatchMonotonicMs+ttl||reply.requestId!==input.requestId||reply.contextRevision!==input.contextRevision||guard.contextRevision!==current.contextRevision||reply.contextRevision!==current.contextRevision||reply.evidenceRevision!==input.evidenceRevision||current.evidenceRevision<reply.evidenceRevision||current.game!==input.game||!qualificationRevision||compareQualificationCounter(guard.qualificationRevision,qualificationRevision)!==0)return 'neutral';
   const distance=current.actualDistance;
   if(guard.minimumDistanceM!==null||guard.maximumDistanceM!==null){
-    if(distance.availability!=='known'||distance.support!=='whole-trip'||distance.metres===null)return 'neutral';
+    if(distance.availability!=='known'||distance.support==='unknown'||distance.support!==input.actualDistance.support||distance.metres===null)return 'neutral';
     if(guard.minimumDistanceM!==null&&compareQualificationDecimal(distance.metres,guard.minimumDistanceM)<0||guard.maximumDistanceM!==null&&compareQualificationDecimal(distance.metres,guard.maximumDistanceM)>0)return 'neutral';
   }
   return reply.outcome==='unknown'?'neutral':reply.outcome;

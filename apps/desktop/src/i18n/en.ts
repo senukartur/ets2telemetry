@@ -4,7 +4,7 @@ import {channelCopyTable} from '../channel';
 // ET-055: a staging build shows its own product, folder and plugin names (channelCopyTable); production text is unchanged.
 export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.freeze({
   "nav.qualification": "My qualification",
-  "upload.companionScope": "If your token grants companion access, the app also reads your qualification and saved assessments and sends minimal active-job facts for provisional checks before upload: cargo code and mass, current/previous trailer bodies, supported actual distance, Hard Mode finality, actual start and an optional event reference. Samples, positions, profiles and diagnostics stay local.",
+  "upload.companionScope": "If your token permits qualification reads and provisional checks, the app also reads your qualification and saved assessments and sends minimal active-job facts for provisional checks before upload: cargo code and mass, current/previous trailer bodies, supported actual distance, Hard Mode finality, actual start and an optional event reference. Samples, positions, profiles and diagnostics stay local.",
   "upload.intro": "Game trips upload to your company's Dashboard. Recording and the Journal work without a connection.",
   "upload.connection": "Dashboard connection",
   "upload.unconfigured": "Dashboard synchronization is unavailable in this build because no service address is configured. Your journal and local recording continue to work.",

@@ -50,6 +50,24 @@ describe('server provisional applicability timelines (REG-003/008/009/010)',()=>
     const lease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0},current=structuredClone(input);current.actualDistance.metres='100001';current.evidenceRevision++;
     expect(qualificationLeaseCue(lease,current,reply.securityScope,'12',1)).toBe('neutral');
   });
+  it('keeps a server-issued proven partial-distance failure within its envelope and rejects unknown or changed support',()=>{
+    const reply=fixture<QualificationPreview>('already-over-maximum-proven-violation-lease'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');
+    input.actualDistance={availability:'known',support:'partial',metres:'500001',final:false};
+    const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0};
+    const cue=(current:QualificationPreviewInput)=>qualificationLeaseCue(lease,current,reply.securityScope,'12',1);
+    expect(reply.outcome).toBe('fail');expect(reply.applicability.maximumDistanceM).toBeNull();expect(cue(input)).toBe('fail');
+    const current=structuredClone(input);current.evidenceRevision++;current.actualDistance.metres='600000';expect(cue(current)).toBe('fail');
+    current.actualDistance.metres='500000';expect(cue(current)).toBe('neutral');
+    current.actualDistance.metres='600000';current.actualDistance.support='unknown';expect(cue(current)).toBe('neutral');
+    current.actualDistance.support='whole-trip';expect(cue(current)).toBe('neutral');
+  });
+  it('requires the exact issued final distance and retires it on a corrected context',()=>{
+    const reply=fixture<QualificationPreview>('final-distance-correction-exact-guard'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');input.actualDistance.final=true;
+    const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0};
+    expect(qualificationLeaseCue(lease,input,reply.securityScope,'12',1)).toBe('fail');
+    const corrected=structuredClone(input);corrected.actualDistance.metres='100000';expect(qualificationLeaseCue(lease,corrected,reply.securityScope,'12',1)).toBe('neutral');
+    corrected.actualDistance.metres=input.actualDistance.metres;corrected.contextRevision++;expect(qualificationLeaseCue(lease,corrected,reply.securityScope,'12',1)).toBe('neutral');
+  });
   it('preserves zero and canonical tiny numeric SDK facts without borrowing planned distance',()=>{
     expect(previewDecimal(0)).toBe('0');expect(previewDecimal(1e-7)).toBe('0.0000001');expect(previewDecimal(-1)).toBeNull();expect(previewDecimal(NaN)).toBeNull();expect(previewDecimal(1e21)).toBeNull();
   });

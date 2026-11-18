@@ -278,7 +278,7 @@ it('commits selected state only after successful IPC and retains sender/main-fra
   child.postMessage.mockImplementationOnce(() => {throw new Error('closed IPC');});
   await expect(select(trusted(), 'replay')).rejects.toThrow('closed IPC');
   child.emit('exit', 1);
-  expect(contents.send.mock.calls[0][1].selection).toBe('synthetic');
+  expect(contents.send.mock.calls.find(([channel])=>channel==='telemetry:service-state')![1].selection).toBe('synthetic');
   expect(sourceEvents()).toEqual([['SOURCE_SELECTED', undefined, {source: 'synthetic', origin: 'startup'}]]);
 });
 
@@ -342,7 +342,7 @@ it('does not dispatch or commit an older game request after a newer source selec
   const older = select(trusted(), 'ets2'); await vi.advanceTimersByTimeAsync(250);
   await select(trusted(), 'replay'); complete(); await expect(older).rejects.toThrow('retired');
   expect(child.postMessage).not.toHaveBeenCalledWith(expect.objectContaining({type: 'select', source: 'ets2'}));
-  child.emit('exit', 1); expect(contents.send.mock.calls[0][1].selection).toBe('replay');
+  child.emit('exit', 1); expect(contents.send.mock.calls.find(([channel])=>channel==='telemetry:service-state')![1].selection).toBe('replay');
   expect(sourceEvents()).toEqual([
     ['SOURCE_SELECTED', undefined, {source: 'game', origin: 'startup'}],
     ['SOURCE_SELECTION_RETIRED', undefined, {source: 'game', origin: 'user'}],
