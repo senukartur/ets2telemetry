@@ -50,7 +50,7 @@ export function qualificationResultMatches(result: QualificationResult, request:
   const assessment = result.assessment;
   if ((result.assessmentBasis === 'none') !== (assessment === null)) return false;
   if (result.receipt === 'not_received' && (result.state !== 'not_received' || result.requestedSourceMessageId !== null)) return false;
-  if (result.receipt === 'received' && (result.state === 'not_received' || result.requestedSourceMessageId === null)) return false;
+  if (result.receipt === 'received' && (result.state === 'not_received' || result.requestedSourceMessageId === null || result.canonicalTripId === null || result.latestSourceRevision === null || result.latestSourceRevision < request.revision)) return false;
   if (assessment?.availability === 'historical_unavailable' && (assessment.level !== null || assessment.limits !== null || assessment.outcome !== null || assessment.rules.length !== 0)) return false;
   if (result.assessmentBasis === 'current' && assessment && (!assessment.assessedSource || !sameQualificationSource(assessment.assessedSource, request.source) || assessment.sourceRevision !== request.revision || assessment.sourceEventId !== request.eventId || assessment.sourceMessageId === null || assessment.sourceMessageId !== result.requestedSourceMessageId)) return false;
   return true;

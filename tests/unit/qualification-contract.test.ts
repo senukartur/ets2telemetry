@@ -23,6 +23,11 @@ describe('reviewed companion contract (REG-010)',()=>{
     result.assessmentBasis='predecessor';
     expect(qualificationResultMatches(result,request)).toBe(true);
   });
+  it('requires exact receipt lineage even before a decision is complete',()=>{
+    const original=results.find(result=>result.state==='processing')!,request={source:original.source,eventId:original.requestedEventId,revision:original.requestedRevision};
+    expect(qualificationResultMatches(original,request)).toBe(true);
+    for(const change of [{requestedSourceMessageId:null},{canonicalTripId:null},{latestSourceRevision:null},{latestSourceRevision:request.revision-1}])expect(qualificationResultMatches({...original,...change},request)).toBe(false);
+  });
   it('compares immutable assessment facts independently of refreshable current-catalog labels',()=>{
     const result=structuredClone(results.find(result=>result.assessment)!);
     const before=qualificationDecisionJson(result),rules=structuredClone(result.assessment!.rules);
