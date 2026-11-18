@@ -288,21 +288,10 @@ it('keeps metric without a game and the fixture game profile for synthetic sourc
   current.observation!.state.speed = {available: true, value: 25, unit: 'm/s'}; current.observation!.state.fuel = {available: true, value: 73, unit: 'L'};
   expect(overlayPresentation(current, units)).toMatchObject({source: 'ETS2', origin: 'synthetic', speed: '56', speedUnit: 'mph', fuel: '19', fuelUnit: 'US gal'});
 });
-// ET-012a: each layout has its own anchor and size in the game's client area (DIP -960, 0, 960 x 540 here).
-// ET-012c reserves rows for the enabled sections and ET-012d does so for the card, cluster and HUD. ET-045e changed the
-// requirement for the scale: the default setting 1 renders at zoom 0.7, so with every section the strip is 928 × 82
-// (three rows at CSS width 1325), the card 210 × 270, the cluster 308 × 188 and the HUD 224 × 248; the card's left edge is
-// −960 + 960 − 16 − 210 = −226 and the bottom-anchored cluster's top 16 + (540 − 32 − 188) = 336.
-// ET-052 (the fifteenth section, the next mandatory break, adds a row to each of the three): the card is 210 × 287, the
-// cluster 308 × 203 with its top at 16 + (540 − 32 − 203) = 321, and the HUD 224 × 265. The strip is unchanged here: at 928
-// DIP the break joins game time's row (748 + 164 = 912 of 1298).
-// ET-070 (the fixed Hard Mode row adds one more to each): the card is 210 × 303, the cluster 308 × 217 with its top at
-// 16 + (540 − 32 − 217) = 307, and the HUD 224 × 282. The strip stays 82: the indicator follows the break (912 + 114 = 1026).
-// ET-071 (cruise control, a sixteenth section, adds one more row to each and a 140 CSS px strip item): the card is 210 × 320,
-// the cluster 308 × 232 with its top at 16 + (540 − 32 − 232) = 292, and the HUD 224 × 299. The strip's rows (inner 1298)
-// now end at range (1120), destination (1172) and the break (1240), so the indicator takes a fourth: ceil(152 × 0.7 + 2) = 109.
-// ET-084 (the speed limit adds a row to the card and the HUD and a 32 CSS px strip item): the card is 210 × 337 and the HUD
-// 224 × 315. Rest State adds one row to the card, cluster and HUD. The strip still reserves four rows.
+// Each layout has its own anchor inside the client (-960, 0, 960 x 540 DIP). At setting 1 (zoom 0.7),
+// the strip's CSS inner width is 1298: rows end at range 1198, destination 1172, mandatory break 1240,
+// and Hard Mode 264, for four rows / 109 DIP. Card is 210 x 354, cluster 308 x 248 and HUD 224 x 334.
+// Card x is -226; the bottom-anchored cluster y is 540 - 16 - 248 = 276.
 it.each([
   {layout: 'strip' as const, bounds: {x: -944, y: 8, width: 928, height: 109}},
   {layout: 'card' as const, bounds: {x: -226, y: 16, width: 210, height: 354}},
@@ -612,11 +601,9 @@ it('places a restarted overlay at its saved non-default placement in driving mod
   expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 291, width: 308, height: 233});
 });
 
-// ET-012c (decision S7): the strip reserves rows for the saved sections, so a sections save can change its height. The
-// expected rectangles are hand-computed at the setting 1 (zoom 0.7, ET-045e): in the 960 x 540 DIP client the strip is 928
-// wide at CSS width 1325 (inner 1298), three rows (ceil(114 × 0.7 + 2) = 82) with every section and one
-// (ceil(26.6 + 2) = 29) with driving-only. ET-071: every section is four rows (ceil(152 × 0.7 + 2) = 109) and driving-only,
-// with cruise control, still one (1234 of 1298).
+// The strip reserves rows for the saved sections. At setting 1 (zoom 0.7), the 960 x 540 DIP client
+// gives a 928 DIP strip, CSS 1325, inner 1298. Everything needs four rows (1198, 1172, 1240, 264):
+// ceil(152 x 0.7 + 2) = 109 DIP. Driving only needs 1312 CSS px, so it wraps to two rows, 56 DIP.
 it('re-places a visible strip for saved sections once, raising it without showing or focusing it again', () => {
   const {window, screen, overlay} = controller(); overlay.loaded(true); overlay.update(live());
   expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 8, width: 928, height: 109}]]);
