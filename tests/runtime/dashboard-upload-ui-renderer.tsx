@@ -1,7 +1,7 @@
 import React, {useEffect, useRef, useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import type {DashboardUploadBridge} from '../../packages/contracts/src/dashboard-upload';
-import type {JournalTripPage} from '../../packages/contracts/src/journal';
+import type {JournalTripPage,JournalTripDetail} from '../../packages/contracts/src/journal';
 import {AccountScreen} from '../../apps/desktop/src/dashboard-upload/account-screen';
 import {SyncChip} from '../../apps/desktop/src/dashboard-upload/sync-chip';
 import {JournalSyncBadge} from '../../apps/desktop/src/dashboard-upload/journal-sync';
@@ -17,7 +17,7 @@ import {Badge} from '@/components/ui/badge';
 import '../../apps/desktop/src/index.css';
 import '../../apps/desktop/src/renderer.css';
 
-const bridge = (window as unknown as {uploadUi: DashboardUploadBridge & QualificationBridge & {listJournalTrips(query: object): Promise<{ok: true; value: JournalTripPage}>}}).uploadUi;
+const bridge = (window as unknown as {uploadUi: DashboardUploadBridge & QualificationBridge & {listJournalTrips(query: object): Promise<{ok: true; value: JournalTripPage}>;getJournalTrip(uuid:string):Promise<{ok:true;value:JournalTripDetail}>}}).uploadUi;
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(done => {resolve = done;});
@@ -39,10 +39,10 @@ function Fixture() {
   const [holdingConfirmationReply, setHoldingConfirmationReply] = useState(false);
   const upload = useDashboardUpload(route === 'account', controlledBridge), heading = useRef<HTMLHeadingElement>(null);
   const qualificationEnabled=!!upload.state.status?.owner&&['connected','paused'].includes(upload.state.status.state)&&!upload.state.status.candidateId;
-  const [page, setPage] = useState<JournalTripPage>();
+  const [page, setPage] = useState<JournalTripPage>(),[detail,setDetail]=useState<JournalTripDetail>();
   useEffect(() => {heading.current?.focus();}, [route]);
   useEffect(() => {document.documentElement.lang = language;}, [language]);
-  useEffect(() => {void bridge.listJournalTrips({}).then(result => setPage(result.value));}, []);
+  useEffect(() => {void bridge.listJournalTrips({}).then(async result => {setPage(result.value);const row=result.value.sync?.rows.find(row=>row.qualification);if(row)setDetail((await bridge.getJournalTrip(row.tripUuid)).value);});}, []);
   return <div className="yu-app"><div className="yu-titlebar">Isolated upload presentation fixture</div><div className="yu-body"><aside className="yu-sidebar"><nav>
     <button className="yu-nav-item" data-testid="fixture.account" onClick={() => setRoute('account')}>{t('nav.account', undefined, language)}</button>
     <button className="yu-nav-item" data-testid="fixture.journal" onClick={() => setRoute('journal')}>{t('nav.journal', undefined, language)}</button>
@@ -64,7 +64,7 @@ function Fixture() {
       {route==='account'?<AccountScreen {...upload} language={language} onOpenJournal={()=>setRoute('journal')}/>:route==='qualification'?<QualificationScreen language={language} enabled={qualificationEnabled} bridge={bridge}/>:route==='overlay'?<section data-testid="fixture.overlay.preview">
         <div>{(['strip','card','cluster','hud'] as const).map(value=><button key={value} data-testid={'fixture.layout.'+value} onClick={()=>setLayout(value)}>{value}</button>)}{(['pass','fail','neutral'] as const).map(value=><button key={value} data-testid={'fixture.cue.'+value} onClick={()=>setCue(value)}>{value}</button>)}</div>
         <div className="overlay" style={{width:'100%',height:400}}><OverlayContent view={overlayView({source:'ETS2',origin:'game',status:'connected',speed:'0',fuel:'0',speedUnit:'km/h',fuelUnit:'L',freshness:'current',layout,paused:false,sections:[],editing:false,language,hardMode:{state:'active'},qualification:cue})}/></div>
-      </section>:<section data-testid="fixture.rows" className="yu-stack"><h2>{t('upload.column',undefined,language)}</h2>{page?.sync?.rows.map((row,index)=><div key={row.tripUuid}><span>Source {index+1} </span><JournalSyncBadge row={row} language={language}/><JournalQualificationBadge row={row} language={language}/>{row.qualification?<JournalQualificationResult row={row} language={language}/>:null}</div>)}</section>}
+      </section>:<section data-testid="fixture.rows" className="yu-stack"><h2>{t('upload.column',undefined,language)}</h2>{page?.sync?.rows.map((row,index)=><div key={row.tripUuid}><span>Source {index+1} </span><JournalSyncBadge row={row} language={language}/><JournalQualificationBadge row={row} language={language}/></div>)}{detail?.qualification?<JournalQualificationResult row={detail.qualification.row} language={language}/>:null}</section>}
     </main>
   </div></div></div>;
 }

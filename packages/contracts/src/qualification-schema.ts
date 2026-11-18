@@ -1,4 +1,4 @@
-// VTC-164 companion schema pinned at 793d99a2d98fe07e1d2ad399ecb572e00e2792e1.
+// VTC-164 companion schema pinned at be706fc329ed360e26e9a98c690fca8d30384101.
 export const qualificationSchema = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:vtc:companion:v1",
@@ -17,7 +17,9 @@ export const qualificationSchema = {
     },
     "SecurityScope": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9_-]{43}$"
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "minLength": 43,
+      "maxLength": 43
     },
     "ResultVersion": {
       "type": "string",
@@ -37,12 +39,16 @@ export const qualificationSchema = {
         "pluginSessionId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "tripId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         }
       },
       "required": [
@@ -169,9 +175,19 @@ export const qualificationSchema = {
               "items": {
                 "type": "string",
                 "format": "uuid",
-                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "minLength": 36,
+                "maxLength": 36
               },
               "maxItems": 100
+            },
+            "basis": {
+              "type": "string",
+              "enum": [
+                "variant",
+                "type"
+              ],
+              "description": "Absent means legacy variant/common-model comparison. Type selects the semantic type dictionary; a saved basis is never replaced by current classification."
             }
           },
           "required": [
@@ -234,7 +250,9 @@ export const qualificationSchema = {
         "id": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "name": {
           "type": "string",
@@ -244,7 +262,7 @@ export const qualificationSchema = {
         "editVersion": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 2147483647
+          "maximum": 4294967295
         }
       },
       "required": [
@@ -260,12 +278,17 @@ export const qualificationSchema = {
         "id": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "startedAt": {
           "type": "string",
           "format": "date-time",
-          "pattern": "Z$"
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
         },
         "level": {
           "$ref": "#/$defs/LevelIdentity"
@@ -297,8 +320,8 @@ export const qualificationSchema = {
           "oneOf": [
             {
               "type": "integer",
-              "minimum": 0,
-              "maximum": 2147483647
+              "minimum": 1,
+              "maximum": 4294967295
             },
             {
               "type": "null"
@@ -330,12 +353,10 @@ export const qualificationSchema = {
         "creditedTrips": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 2147483647
+          "maximum": 9007199254740991
         },
         "creditedDistanceM": {
-          "type": "string",
-          "maxLength": 39,
-          "pattern": "^(0|[1-9][0-9]{0,19})(\\.[0-9]{0,17}[1-9])?$"
+          "$ref": "#/$defs/AggregateDecimal"
         },
         "conditions": {
           "$ref": "#/$defs/Conditions"
@@ -345,7 +366,7 @@ export const qualificationSchema = {
             {
               "type": "integer",
               "minimum": 0,
-              "maximum": 2147483647
+              "maximum": 4294967295
             },
             {
               "type": "null"
@@ -375,7 +396,9 @@ export const qualificationSchema = {
                 "id": {
                   "type": "string",
                   "format": "uuid",
-                  "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+                  "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                  "minLength": 36,
+                  "maxLength": 36
                 },
                 "name": {
                   "type": "string",
@@ -423,7 +446,9 @@ export const qualificationSchema = {
         "ownerId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "game": {
           "$ref": "#/$defs/Game"
@@ -459,7 +484,10 @@ export const qualificationSchema = {
         "asOf": {
           "type": "string",
           "format": "date-time",
-          "pattern": "Z$"
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
         },
         "progressRevision": {
           "type": "string",
@@ -474,7 +502,10 @@ export const qualificationSchema = {
         "offlineUsableUntil": {
           "type": "string",
           "format": "date-time",
-          "pattern": "Z$"
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
         }
       },
       "required": [
@@ -934,7 +965,9 @@ export const qualificationSchema = {
               "items": {
                 "type": "string",
                 "format": "uuid",
-                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "minLength": 36,
+                "maxLength": 36
               },
               "maxItems": 100
             },
@@ -943,7 +976,9 @@ export const qualificationSchema = {
               "items": {
                 "type": "string",
                 "format": "uuid",
-                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "minLength": 36,
+                "maxLength": 36
               },
               "maxItems": 10
             },
@@ -1138,7 +1173,9 @@ export const qualificationSchema = {
         "requestId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "contextRevision": {
           "type": "integer",
@@ -1153,7 +1190,10 @@ export const qualificationSchema = {
         "evaluatedAt": {
           "type": "string",
           "format": "date-time",
-          "pattern": "Z$"
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
         },
         "basis": {
           "type": "string",
@@ -1214,7 +1254,10 @@ export const qualificationSchema = {
             "expiresAt": {
               "type": "string",
               "format": "date-time",
-              "pattern": "Z$"
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+              "minLength": 24,
+              "maxLength": 24,
+              "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
             },
             "contextRevision": {
               "type": "integer",
@@ -1308,29 +1351,38 @@ export const qualificationSchema = {
         "decisionId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "decisionSequence": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 2147483647
+          "maximum": 4294967295
         },
         "decidedAt": {
           "type": "string",
           "format": "date-time",
-          "pattern": "Z$"
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
         },
         "factId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "sourceMessageId": {
           "oneOf": [
             {
               "type": "string",
               "format": "uuid",
-              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+              "minLength": 36,
+              "maxLength": 36
             },
             {
               "type": "null"
@@ -1354,7 +1406,9 @@ export const qualificationSchema = {
             {
               "type": "string",
               "format": "uuid",
-              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+              "minLength": 36,
+              "maxLength": 36
             },
             {
               "type": "null"
@@ -1371,7 +1425,9 @@ export const qualificationSchema = {
             {
               "type": "string",
               "format": "uuid",
-              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+              "minLength": 36,
+              "maxLength": 36
             },
             {
               "type": "null"
@@ -1457,6 +1513,16 @@ export const qualificationSchema = {
               "type": "null"
             }
           ]
+        },
+        "trailerComparison": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TrailerComparison"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1477,7 +1543,8 @@ export const qualificationSchema = {
         "eventExempt",
         "reasons",
         "trailerDisplay",
-        "assessedSource"
+        "assessedSource",
+        "trailerComparison"
       ],
       "additionalProperties": false
     },
@@ -1495,15 +1562,19 @@ export const qualificationSchema = {
         "requestedEventId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "version": {
-          "$ref": "#/$defs/ResultVersion"
+          "$ref": "#/$defs/ResultVersion",
+          "description": "Opaque validator including all current presentation content except asOf. Equal domain revisions may have different versions; never sort this value."
         },
         "resultRevision": {
           "type": "string",
           "maxLength": 20,
-          "pattern": "^(0|[1-9][0-9]{0,19})$"
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "description": "Durable monotonic domain owner counter. Presentation-only changes leave it equal."
         },
         "unchanged": {
           "type": "boolean"
@@ -1529,7 +1600,9 @@ export const qualificationSchema = {
             {
               "type": "string",
               "format": "uuid",
-              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+              "minLength": 36,
+              "maxLength": 36
             },
             {
               "type": "null"
@@ -1553,7 +1626,9 @@ export const qualificationSchema = {
             {
               "type": "string",
               "format": "uuid",
-              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+              "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+              "minLength": 36,
+              "maxLength": 36
             },
             {
               "type": "null"
@@ -1639,7 +1714,9 @@ export const qualificationSchema = {
                     {
                       "type": "string",
                       "format": "uuid",
-                      "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+                      "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                      "minLength": 36,
+                      "maxLength": 36
                     },
                     {
                       "type": "null"
@@ -1696,12 +1773,17 @@ export const qualificationSchema = {
         "requestId": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "asOf": {
           "type": "string",
           "format": "date-time",
-          "pattern": "Z$"
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
         },
         "refreshAfterSeconds": {
           "type": "integer",
@@ -1805,7 +1887,8 @@ export const qualificationSchema = {
                 "UNSUPPORTED_MEDIA_TYPE",
                 "NOT_FOUND",
                 "RATE_LIMITED",
-                "TEMPORARILY_UNAVAILABLE"
+                "TEMPORARILY_UNAVAILABLE",
+                "RESULT_BATCH_TOO_LARGE"
               ]
             },
             "retryable": {
@@ -1836,7 +1919,9 @@ export const qualificationSchema = {
         "id": {
           "type": "string",
           "format": "uuid",
-          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$"
+          "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+          "minLength": 36,
+          "maxLength": 36
         },
         "code": {
           "oneOf": [
@@ -1860,7 +1945,8 @@ export const qualificationSchema = {
             {
               "type": "null"
             }
-          ]
+          ],
+          "description": "Current legacy common-model presentation only; always null for a semantic type identity."
         },
         "nameEn": {
           "oneOf": [
@@ -1893,7 +1979,61 @@ export const qualificationSchema = {
         "asOf": {
           "type": "string",
           "format": "date-time",
-          "pattern": "Z$"
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+          "minLength": 24,
+          "maxLength": 24,
+          "description": "Canonical UTC serialization with milliseconds: YYYY-MM-DDTHH:mm:ss.SSSZ (24 characters)."
+        },
+        "identityKind": {
+          "type": "string",
+          "enum": [
+            "variant",
+            "type",
+            "unavailable"
+          ]
+        },
+        "classification": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "const": "classified"
+                },
+                "typeId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                  "minLength": 36,
+                  "maxLength": 36
+                }
+              },
+              "required": [
+                "state",
+                "typeId"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "unclassified",
+                    "not_applicable",
+                    "unavailable"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "Current variant classification only, never the retained comparison mapping. Semantic identities are not_applicable; missing metadata is unavailable."
         }
       },
       "required": [
@@ -1903,9 +2043,66 @@ export const qualificationSchema = {
         "nameEn",
         "nameRu",
         "basis",
-        "asOf"
+        "asOf",
+        "identityKind",
+        "classification"
       ],
       "additionalProperties": false
+    },
+    "TrailerComparisonIdentity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 268,
+      "pattern": "^(?:type:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}|common:(?:ets2|ats):[0-9a-f]{2,256}|undefined)$",
+      "description": "Exact saved ASCII comparison token. undefined means unclassified at assessment; common contains the original model bytes in hexadecimal."
+    },
+    "TrailerComparison": {
+      "type": "object",
+      "properties": {
+        "basis": {
+          "type": "string",
+          "enum": [
+            "variant",
+            "type"
+          ]
+        },
+        "entries": {
+          "type": "array",
+          "maxItems": 1010,
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$",
+                "minLength": 36,
+                "maxLength": 36
+              },
+              "comparisonIdentity": {
+                "$ref": "#/$defs/TrailerComparisonIdentity"
+              }
+            },
+            "required": [
+              "id",
+              "comparisonIdentity"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "basis",
+        "entries"
+      ],
+      "additionalProperties": false,
+      "description": "Complete deterministically ordered saved QualificationSnapshot.trailerGroups. No current lookup or truncation; omitted mapping keys retain literal-ID fallback. Null on Assessment means old mapping unavailable."
+    },
+    "AggregateDecimal": {
+      "type": "string",
+      "maxLength": 64,
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]*[1-9])?$",
+      "description": "Exact canonical aggregate distance, matching the owning progress Decimal output. Unlike individual DECIMAL(38,18) values, SUM may exceed20 integer digits. Output only."
     }
   }
 };

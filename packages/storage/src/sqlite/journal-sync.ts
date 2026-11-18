@@ -1,8 +1,9 @@
 import type Database from 'better-sqlite3';
-import type {JournalSyncRow, JournalTripSync} from '../../../contracts/src/journal';
+import type {JournalSyncRow, JournalTripSync,JournalQualificationDetailRow} from '../../../contracts/src/journal';
 import {isDashboardOwner, uploadUuid, type DashboardOwner} from '../../../contracts/src/dashboard-upload';
 import {identityPending} from './identity-pending';
-import {isQualificationWire} from '../../../contracts/src/qualification';
+import {isQualificationWire,isQualificationVerdict,isQualificationResultMetadata,QUALIFICATION_DETAIL_BYTES} from '../../../contracts/src/qualification';
+import {fail} from '../errors';
 
 type Row = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as Row | undefined;
@@ -18,7 +19,10 @@ export const JOURNAL_SYNC_QUERIES = {
 } as const;
 
 /** SELECT-only evidence for precisely the returned page. Caller owns the SQLite read transaction. */
-export function journalSync(db: Database.Database, tripUuids: readonly string[]): JournalTripSync | undefined {
+type DetailSync={owner:DashboardOwner;connectionVersion:string;rows:JournalQualificationDetailRow[]};
+export function journalSync(db:Database.Database,tripUuids:readonly string[],details:true):DetailSync|undefined;
+export function journalSync(db:Database.Database,tripUuids:readonly string[],details?:false):JournalTripSync|undefined;
+export function journalSync(db: Database.Database, tripUuids: readonly string[],details=false): JournalTripSync|DetailSync|undefined {
   if (tripUuids.length > 50 || Number(db.pragma('user_version', {simple: true})) < 6) return;
   if (get(db, 'SELECT purpose FROM database_info WHERE id=1')?.purpose !== 'history') return;
   const config = get(db, 'SELECT * FROM upload_connection WHERE id=1');
@@ -81,27 +85,39 @@ export function journalSync(db: Database.Database, tripUuids: readonly string[])
   });
   if(Number(db.pragma('user_version',{simple:true}))>=11){
     const scope=get(db,'SELECT security_scope FROM qualification_refresh_state WHERE registration_ref=?',config.active_registration)?.security_scope;
-    let bytes=0;
     if(scope)for(const row of rows){
       if(row.state==='unavailable'||row.state==='unbound'||row.state==='identity-pending')continue;
-      const records=db.prepare(`SELECT v.snapshot_json,e.revision FROM qualification_result_heads h JOIN qualification_result_versions v USING(registration_ref,event_ref,security_scope,version)
-        JOIN upload_envelopes e ON e.event_id=h.event_ref JOIN upload_source_bindings b ON b.root_ref=e.root_ref
-        WHERE h.registration_ref=? AND h.security_scope=? AND b.trip_uuid=? AND b.registration_ref=? ORDER BY e.revision DESC LIMIT 2`).all(config.active_registration,scope,row.tripUuid,config.active_registration) as Row[];
-      const results=records.map(record=>{const value:unknown=JSON.parse(String(record.snapshot_json));return isQualificationWire('Result',value)?value:null;});
-      const latest=results[0]??null;
-      const applicable=latest&&Number(records[0].revision)===row.latestRevision&&row.state==='sent'&&latest.assessmentBasis==='current'&&latest.state==='decided'&&!latest.assessmentPending&&!latest.correctionPending&&latest.assessment!==null;
-      const showPrevious=latest&&(Number(records[0].revision)<(row.latestRevision??0)||latest.assessmentBasis==='predecessor'||row.state==='sent'||row.state==='pending');
-      let previous=applicable?results[1]??null:showPrevious?latest:null;
-      if((applicable||showPrevious)&&!previous?.assessment){
-        const retained=get(db,`SELECT v.snapshot_json FROM qualification_result_versions v JOIN upload_envelopes e ON e.event_id=v.event_ref
-          JOIN upload_source_bindings b ON b.root_ref=e.root_ref WHERE v.registration_ref=? AND v.security_scope=? AND b.trip_uuid=? AND b.registration_ref=?
-          AND json_type(v.snapshot_json,'$.assessment')='object' AND (v.event_ref<>? OR v.version<>?)
-          ORDER BY e.revision DESC,length(v.result_revision) DESC,v.result_revision DESC LIMIT 1`,config.active_registration,scope,row.tripUuid,config.active_registration,latest?.requestedEventId??'',latest?.version??'');
-        const value:unknown=retained?JSON.parse(String(retained.snapshot_json)):null;previous=isQualificationWire('Result',value)?value:null;
+      const head=get(db,`SELECT h.*,${details?'v.snapshot_json,':''}
+        EXISTS(SELECT 1 FROM upload_receipts r WHERE r.event_ref=h.event_ref) AS has_receipt,
+        json_extract(v.snapshot_json,'$.state') AS result_state,json_extract(v.snapshot_json,'$.assessmentBasis') AS assessment_basis,
+        json_extract(v.snapshot_json,'$.assessmentPending') AS assessment_pending,json_extract(v.snapshot_json,'$.correctionPending') AS correction_pending,
+        json_type(v.snapshot_json,'$.assessment') AS assessment_type,json_extract(v.snapshot_json,'$.assessment.availability') AS availability,json_extract(v.snapshot_json,'$.assessment.outcome') AS outcome,
+        json_extract(v.snapshot_json,'$.companyDecision') AS company_decision,json_extract(v.snapshot_json,'$.credit') AS credit_json FROM upload_source_bindings b
+        JOIN qualification_result_heads h ON h.kind='root' AND h.registration_ref=b.registration_ref AND h.root_ref=b.root_ref AND h.security_scope=?
+        JOIN qualification_result_versions v ON v.registration_ref=h.registration_ref AND v.security_scope=h.security_scope AND v.event_ref=h.event_ref AND v.view_key=h.view_key
+        WHERE b.registration_ref=? AND b.trip_uuid=?`,scope,config.active_registration,row.tripUuid);
+      let credit:unknown=null;if(head&&head.credit_json!==null){if(typeof head.credit_json!=='string')fail('DATABASE_CORRUPT');credit=JSON.parse(head.credit_json);}
+      const latest=head?{companyDecision:head.company_decision,credit}:undefined;
+      if(latest&&!isQualificationResultMetadata(latest))fail('DATABASE_CORRUPT');
+      const applicable=!!head&&Number(head.source_revision)===row.latestRevision&&row.state==='sent'&&head.assessment_basis==='current'&&head.result_state==='decided'&&Number(head.assessment_pending)===0&&Number(head.correction_pending)===0&&head.assessment_type==='object';
+      const awaiting=row.state==='sent'&&!applicable;
+      if(!details){
+        const current=applicable?{availability:head.availability,outcome:head.outcome}:null;if(current&&!isQualificationVerdict(current))fail('DATABASE_CORRUPT');
+        row.qualification={current,awaiting,...(latest?{latest}: {})};
+      }else{
+        const read=(json:unknown)=>{if(json===null||json===undefined)return null;if(typeof json!=='string')fail('DATABASE_CORRUPT');const value:unknown=JSON.parse(json);if(!isQualificationWire('Result',value))fail('DATABASE_CORRUPT');return value;};
+        const stored=read(head?.snapshot_json),current=applicable&&stored?{...stored,version:String(head.server_version),resultRevision:String(head.result_revision)}:null;
+        if(current&&!isQualificationWire('Result',current))fail('DATABASE_CORRUPT');
+        let previous=null;
+        if(head){
+          const beforeReceipt=Number(head.source_revision)===row.latestRevision&&Number(head.has_receipt)===0&&head.assessment_basis==='current'&&head.result_state==='decided';
+          const older=applicable||beforeReceipt,show=applicable||beforeReceipt||Number(head.source_revision)<(row.latestRevision??0)||head.assessment_basis==='predecessor'||row.state==='sent'||row.state==='pending';
+          const event=older?head.previous_event_ref:head.latest_event_ref,view=older?head.previous_view_key:head.latest_view_key;
+          if(show&&event&&view)previous=read(get(db,'SELECT snapshot_json FROM qualification_result_versions WHERE registration_ref=? AND event_ref=? AND security_scope=? AND view_key=?',config.active_registration,event,scope,view)?.snapshot_json);
+        }
+        const decoration={current,previous,awaiting,...(latest?{latest}: {})};if(Buffer.byteLength(JSON.stringify(decoration))>QUALIFICATION_DETAIL_BYTES)fail('DATABASE_CORRUPT');
+        (row as JournalQualificationDetailRow).qualification=decoration;
       }
-      const decoration={current:applicable?latest:null,previous,...(latest?{latest}:{}),awaiting:row.state==='sent'&&!applicable};
-      bytes+=Buffer.byteLength(JSON.stringify(decoration));if(bytes>1048576)continue;
-      row.qualification=decoration;
     }
   }
   return {owner, connectionVersion: String(config.version), rows};

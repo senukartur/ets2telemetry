@@ -9,7 +9,10 @@ export type QualificationPreviewInput = QualificationWire['PreviewInput'];
 export type QualificationResult = QualificationWire['Result'];
 export type QualificationSourceRequest = QualificationWire['SourceRequest'];
 export type QualificationResultBatch = QualificationWire['ResultBatch'];
+export type QualificationResultMetadata=Pick<QualificationResult,'companyDecision'|'credit'>;
+export interface QualificationVerdict {availability:QualificationWire['Assessment']['availability'];outcome:QualificationWire['Assessment']['outcome']}
 export const QUALIFICATION_RESPONSE_BYTES = 1_048_576;
+export const QUALIFICATION_DETAIL_BYTES=2*QUALIFICATION_RESPONSE_BYTES+4096;
 export const QUALIFICATION_REQUEST_BYTES = 16_384;
 
 interface Schema {
@@ -41,6 +44,11 @@ function matches(schema: Schema, value: unknown, depth: number): boolean {
 export function isQualificationWire<K extends keyof QualificationWire>(kind: K, value: unknown): value is QualificationWire[K] {
   try {return !!definitions[kind] && matches(definitions[kind], value, 0) && new TextEncoder().encode(JSON.stringify(value)).byteLength <= QUALIFICATION_RESPONSE_BYTES;} catch {return false;}
 }
+export const isQualificationVerdict=(value:unknown):value is QualificationVerdict=>uploadShape({availability:uploadOne('retained','historical_unavailable'),outcome:uploadNull(uploadOne('pass','fail','unknown'))})(value)&&((value as QualificationVerdict).availability!=='historical_unavailable'||(value as QualificationVerdict).outcome===null);
+export function isQualificationResultMetadata(value:unknown):value is QualificationResultMetadata {
+  const properties=definitions.Result.properties!;
+  return matches({type:'object',properties:{companyDecision:properties.companyDecision,credit:properties.credit},required:['companyDecision','credit'],additionalProperties:false},value,0);
+}
 export function sameQualificationSource(left: QualificationWire['SourceIdentity'], right: QualificationWire['SourceIdentity']): boolean {
   return left.provider === right.provider && left.game === right.game && left.pluginSessionId === right.pluginSessionId && left.tripId === right.tripId;
 }
@@ -55,12 +63,20 @@ export function qualificationResultMatches(result: QualificationResult, request:
   if (result.assessmentBasis === 'current' && assessment && (!assessment.assessedSource || !sameQualificationSource(assessment.assessedSource, request.source) || assessment.sourceRevision !== request.revision || assessment.sourceEventId !== request.eventId || assessment.sourceMessageId === null || assessment.sourceMessageId !== result.requestedSourceMessageId)) return false;
   return true;
 }
-/** Stable decision facts exclude explicitly current catalog labels; a label refresh cannot rewrite an assessment. */
+const qualificationCanonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(qualificationCanonical).join(',')}]` : uploadRecord(value) ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${qualificationCanonical(value[key])}`).join(',')}}` : JSON.stringify(value);
+/** Opaque view identity and current catalog labels cannot rewrite immutable domain facts. */
 export function qualificationDecisionJson(value: QualificationResult): string {
-  const result = structuredClone(value);
+  const result:Partial<QualificationResult> = structuredClone(value);delete result.version;delete result.resultRevision;result.unchanged=false;
   if (result.assessment) result.assessment.trailerDisplay = [];
-  const canonical = (v: unknown): string => Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : uploadRecord(v) ? `{${Object.keys(v).sort().map(key => `${JSON.stringify(key)}:${canonical(v[key])}`).join(',')}}` : JSON.stringify(v);
-  return canonical(result);
+  return qualificationCanonical(result);
+}
+/** The server view version excludes only catalog read timestamps from its current presentation. */
+export function qualificationPresentationJson(value:QualificationResult):string {
+  return qualificationCanonical((value.assessment?.trailerDisplay??[]).map(label=>Object.fromEntries(Object.entries(label).filter(([key])=>key!=='asOf'))));
+}
+export const qualificationStoredViewJson=(value:QualificationResult):string=>`[${qualificationDecisionJson(value)},${qualificationPresentationJson(value)}]`;
+export function qualificationAssessmentJson(value:QualificationResult):string|null {
+  if(!value.assessment)return null;const assessment=structuredClone(value.assessment);assessment.trailerDisplay=[];return qualificationCanonical(assessment);
 }
 export type QualificationAvailability = 'disconnected' | 'loading' | 'ready' | 'offline' | 'unsupported' | 'disabled' | 'permission-required' | 'unavailable';
 export interface QualificationState {
@@ -103,7 +119,9 @@ export function compareQualificationDecimal(left: string, right: string): -1 | 0
 /** A display-only percentage; exact bounds are compared before rounding the bounded ratio. */
 export function qualificationPercentage(credited: string, required: string | null): number | null {
   if (required === null) return null;
-  const total = scaled(required), current = scaled(credited);
+  if(!isQualificationWire('AggregateDecimal',credited)||!isQualificationDecimal(required))throw Error('INVALID_QUALIFICATION_DECIMAL');
+  const [currentWhole,currentFraction='']=credited.split('.'),[totalWhole,totalFraction='']=required.split('.'),places=Math.max(currentFraction.length,totalFraction.length);
+  const total=BigInt(totalWhole+totalFraction.padEnd(places,'0')),current=BigInt(currentWhole+currentFraction.padEnd(places,'0'));
   if (total === 0n || current >= total) return 100;
   return Number(current * 10_000n / total) / 100;
 }

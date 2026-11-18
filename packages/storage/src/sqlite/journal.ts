@@ -482,7 +482,7 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
     :all(db,JOURNAL_QUERIES.trailers,id,JOURNAL_DETAIL_TRAILERS);
   const qualifiedTrailers=snap && Number(get(db,`SELECT count(*) AS total FROM logical_snapshot_memberships WHERE logical_ref=? AND trip_ref<=? AND from_revision<? AND (through_revision IS NULL OR through_revision>=?)`,...trailerArgs.slice(0,4))!.total)>1;
   const refuels = journalRefuels(db, id, snap);
-  const qualification=journalSync(db,[tripUuid]);
+  const qualification=journalSync(db,[tripUuid],true);
   return {
     ...(qualification?.rows[0].qualification?{qualification:{owner:qualification.owner,connectionVersion:qualification.connectionVersion,row:qualification.rows[0]}}:{}),
     database: database(db),

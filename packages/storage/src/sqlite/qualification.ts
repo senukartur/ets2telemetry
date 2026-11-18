@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3';
-import {compareQualificationCounter, isQualificationWire, qualificationDecisionJson, qualificationResultMatches, type QualificationResult, type QualificationSnapshot} from '../../../contracts/src/qualification';
+import {createHash} from 'node:crypto';
+import {compareQualificationCounter, isQualificationCounter, isQualificationWire, qualificationDecisionJson, qualificationStoredViewJson, qualificationAssessmentJson, qualificationResultMatches, type QualificationResult, type QualificationSnapshot} from '../../../contracts/src/qualification';
 import type {CommitOptions} from '../api';
 import {fail} from '../errors';
 import {isQualificationCommand, type QualificationAuthority, type QualificationCommands, type QualificationCommandName, type QualificationLocalSource, type QualificationStoredState} from '../qualification';
@@ -100,10 +101,36 @@ function sourceOf(db: Database.Database, registration: string, event: string): R
   return get(db,`SELECT e.*,b.game,b.plugin_session_uuid,b.trip_uuid FROM upload_envelopes e JOIN upload_source_bindings b ON b.root_ref=e.root_ref
     WHERE e.registration_ref=? AND b.registration_ref=? AND e.event_id=?`,registration,registration,event);
 }
-function savedResult(db: Database.Database, registration: string, scope: string, event: string): QualificationResult | null {
-  const row = get(db,`SELECT v.snapshot_json FROM qualification_result_heads h JOIN qualification_result_versions v USING(registration_ref,event_ref,security_scope,version)
-    WHERE h.registration_ref=? AND h.security_scope=? AND h.event_ref=?`,registration,scope,event);
-  if (!row) return null;const result:unknown = JSON.parse(String(row.snapshot_json));if (!isQualificationWire('Result',result)) fail('DATABASE_CORRUPT');return result;
+const digest=(value:string)=>createHash('sha256').update(value).digest('hex');
+function decoded(value:unknown):QualificationResult {const result:unknown=JSON.parse(String(value));if(!isQualificationWire('Result',result))fail('DATABASE_CORRUPT');return result;}
+function eventHead(db:Database.Database,registration:string,scope:string,event:string):Row|undefined {
+  return get(db,`SELECT h.*,v.snapshot_json FROM qualification_result_heads h JOIN qualification_result_versions v USING(registration_ref,event_ref,security_scope,view_key)
+    WHERE h.kind='event' AND h.registration_ref=? AND h.security_scope=? AND h.event_ref=?`,registration,scope,event);
+}
+function transported(row:Row):QualificationResult {
+  const result={...decoded(row.snapshot_json),version:String(row.server_version),resultRevision:String(row.result_revision)};
+  if(!isQualificationWire('Result',result))fail('DATABASE_CORRUPT');return result;
+}
+function headGeneration(row:Row|undefined):string {const value=row?.generation??'0';if(!isQualificationCounter(value))fail('DATABASE_CORRUPT');return value;}
+function advanceRoot(db:Database.Database,registration:string,scope:string,local:Row,result:QualificationResult,viewKey:string,assessmentKey:string|null,assessment:string|null):void {
+  const old=get(db,"SELECT * FROM qualification_result_heads WHERE kind='root' AND registration_ref=? AND security_scope=? AND root_ref=?",registration,scope,local.root_ref);
+  if(old&&(Number(old.source_revision)>result.requestedRevision||Number(old.source_revision)===result.requestedRevision&&compareQualificationCounter(String(old.result_revision),result.resultRevision)>0))return;
+  let latestEvent=old?.latest_event_ref??null,latestView=old?.latest_view_key??null,latestKey=old?.latest_assessment_key??null;
+  let previousEvent=old?.previous_event_ref??null,previousView=old?.previous_view_key??null,previousKey=old?.previous_assessment_key??null;
+  if(assessmentKey){
+    for(const pointer of [{event:latestEvent,view:latestView,key:latestKey},{event:previousEvent,view:previousView,key:previousKey}])if(pointer.key===assessmentKey){
+      const retained=get(db,'SELECT snapshot_json FROM qualification_result_versions WHERE registration_ref=? AND event_ref=? AND security_scope=? AND view_key=?',registration,pointer.event,scope,pointer.view);
+      if(!retained||qualificationAssessmentJson(decoded(retained.snapshot_json))!==assessment)fail('INVALID_INPUT');
+    }
+    if(latestKey!==assessmentKey){previousEvent=latestEvent;previousView=latestView;previousKey=latestKey;}
+    latestEvent=result.requestedEventId;latestView=viewKey;latestKey=assessmentKey;
+  }
+  db.prepare(`INSERT INTO qualification_result_heads(kind,registration_ref,event_ref,security_scope,view_key,root_ref,server_version,result_revision,generation,source_revision,latest_event_ref,latest_view_key,latest_assessment_key,previous_event_ref,previous_view_key,previous_assessment_key)
+    VALUES('root',?,?,?,?,?,?,?,'0',?,?,?,?,?,?,?) ON CONFLICT(registration_ref,security_scope,root_ref) WHERE kind='root' DO UPDATE SET
+    event_ref=excluded.event_ref,view_key=excluded.view_key,server_version=excluded.server_version,result_revision=excluded.result_revision,source_revision=excluded.source_revision,
+    latest_event_ref=excluded.latest_event_ref,latest_view_key=excluded.latest_view_key,latest_assessment_key=excluded.latest_assessment_key,
+    previous_event_ref=excluded.previous_event_ref,previous_view_key=excluded.previous_view_key,previous_assessment_key=excluded.previous_assessment_key`)
+    .run(registration,result.requestedEventId,scope,viewKey,local.root_ref,result.version,result.resultRevision,result.requestedRevision,latestEvent,latestView,latestKey,previousEvent,previousView,previousKey);
 }
 export function pageQualificationSources(conn: StorageConnection, input: Input<'pageQualificationSources'>): {items:QualificationLocalSource[];next:string|null} {
   check('pageQualificationSources',input);const db=conn.reader();return db.transaction(() => {
@@ -112,35 +139,47 @@ export function pageQualificationSources(conn: StorageConnection, input: Input<'
       WHERE e.registration_ref=? AND b.registration_ref=? AND e.revision=b.http_revision AND e.event_id>? ORDER BY e.event_id LIMIT ?`).all(input.registrationId,input.registrationId,input.afterEvent??'',input.limit) as Row[];
     const items = rows.map(row => {
       const local=sourceOf(db,input.registrationId,String(row.event_id))!;
-      const result=savedResult(db,input.registrationId,input.securityScope,String(row.event_id));
-      return {request:{source:{provider:'ets2telemetry' as const,game:local.game as 'ets2'|'ats',pluginSessionId:String(local.plugin_session_uuid),tripId:String(local.trip_uuid)},eventId:String(row.event_id),revision:Number(local.revision),...(result?{ifVersion:result.version}:{})},localMaterialDigest:String(local.payload_digest),result};
+      const head=eventHead(db,input.registrationId,input.securityScope,String(row.event_id)),result=head?transported(head):null;
+      return {request:{source:{provider:'ets2telemetry' as const,game:local.game as 'ets2'|'ats',pluginSessionId:String(local.plugin_session_uuid),tripId:String(local.trip_uuid)},eventId:String(row.event_id),revision:Number(local.revision),...(result?{ifVersion:result.version}:{})},generation:headGeneration(head),localMaterialDigest:String(local.payload_digest),result};
     });
     return {items,next:rows.length===input.limit?String(rows.at(-1)!.event_id):null};
   })();
 }
 export function commitQualificationResults(conn: StorageConnection, input: Input<'commitQualificationResults'>, options?: CommitOptions): {saved:number;missingBase:string[]} {
-  check('commitQualificationResults',input);return syncTransaction(conn, db => {
+  check('commitQualificationResults',input);
+  // Prepare incoming serialization and hashes before opening the writer transaction; authority is rechecked below.
+  const prepared=input.batch.items.map(result=>{const content=qualificationStoredViewJson(result),assessment=qualificationAssessmentJson(result);return {result,content,assessment,domain:qualificationDecisionJson(result),viewKey:digest(content),assessmentKey:assessment===null?null:digest(assessment),snapshotJson:canonicalUpload({...result,unchanged:false})};});
+  return syncTransaction(conn, db => {
     if (!qualificationActive(db,input,input.securityScope)) return {saved:0,missingBase:[]};
-    if (input.batch.requestId!==input.request.requestId || input.batch.securityScope!==input.securityScope || input.batch.items.length!==input.request.items.length || new Set(input.request.items.map(item=>item.eventId)).size!==input.request.items.length) fail('INVALID_INPUT');
+    if (input.batch.requestId!==input.request.requestId || input.batch.securityScope!==input.securityScope || input.batch.items.length!==input.request.items.length || new Set(input.request.items.map(item=>item.eventId)).size!==input.request.items.length || input.expectedHeads.length!==input.request.items.length || new Set(input.expectedHeads.map(item=>item.eventId)).size!==input.request.items.length) fail('INVALID_INPUT');
     let saved=0;const missingBase:string[]=[];
-    for (const result of input.batch.items) {
+    for (const {result,content,domain,viewKey,assessment,assessmentKey,snapshotJson} of prepared) {
       const request=input.request.items.find(item=>item.eventId===result.requestedEventId);
       if (!request || !qualificationResultMatches(result,request)) fail('INVALID_INPUT');
       const local=sourceOf(db,input.registrationId,request.eventId);
       if (!local || local.game!==request.source.game || local.plugin_session_uuid!==request.source.pluginSessionId || local.trip_uuid!==request.source.tripId || Number(local.revision)!==request.revision) fail('INVALID_INPUT');
-      const old=savedResult(db,input.registrationId,input.securityScope,request.eventId);
+      const expected=input.expectedHeads.find(item=>item.eventId===request.eventId);if(!expected)fail('INVALID_INPUT');
+      const head=eventHead(db,input.registrationId,input.securityScope,request.eventId),old=head?transported(head):null;
       if (result.unchanged) {
         if (!old || old.version!==result.version || old.resultRevision!==result.resultRevision) missingBase.push(request.eventId);
-        else if(qualificationDecisionJson({...result,unchanged:false,assessment:old.assessment,credit:old.credit})!==qualificationDecisionJson(old))fail('INVALID_INPUT');
+        else if(qualificationDecisionJson({...result,assessment:null,credit:null})!==qualificationDecisionJson({...old,assessment:null,credit:null}))fail('INVALID_INPUT');
         continue;
       }
-      if (old && compareQualificationCounter(result.resultRevision,old.resultRevision)<0) continue;
-      if (old && result.resultRevision===old.resultRevision) {if (qualificationDecisionJson(result)!==qualificationDecisionJson(old)) fail('INVALID_INPUT');continue;}
-      const retained=get(db,'SELECT snapshot_json FROM qualification_result_versions WHERE registration_ref=? AND event_ref=? AND security_scope=? AND version=?',input.registrationId,request.eventId,input.securityScope,result.version);
-      if (retained) fail('INVALID_INPUT');
-      db.prepare(`INSERT INTO qualification_result_versions(registration_ref,event_ref,security_scope,version,result_revision,source_revision,local_material_digest,snapshot_json,fetched_at) VALUES(?,?,?,?,?,?,?,?,?)`)
-        .run(input.registrationId,request.eventId,input.securityScope,result.version,result.resultRevision,request.revision,local.payload_digest,canonicalUpload(result),input.fetchedUtcMs);
-      db.prepare(`INSERT INTO qualification_result_heads(registration_ref,event_ref,security_scope,version) VALUES(?,?,?,?) ON CONFLICT(registration_ref,event_ref,security_scope) DO UPDATE SET version=excluded.version`).run(input.registrationId,request.eventId,input.securityScope,result.version);saved++;
+      if(old&&compareQualificationCounter(result.resultRevision,old.resultRevision)<0)fail('INVALID_INPUT');
+      if(old&&result.resultRevision===old.resultRevision&&domain!==qualificationDecisionJson(old))fail('INVALID_INPUT');
+      if(old&&result.version===old.version){if(result.resultRevision!==old.resultRevision||content!==qualificationStoredViewJson(old))fail('INVALID_INPUT');continue;}
+      if(expected.generation!==headGeneration(head)||request.ifVersion!==old?.version)fail('INVALID_INPUT');
+      const known=get(db,"SELECT snapshot_json FROM qualification_result_versions WHERE registration_ref=? AND event_ref=? AND security_scope=? AND json_extract(snapshot_json,'$.version')=?",input.registrationId,request.eventId,input.securityScope,result.version);
+      if(known){const value=decoded(known.snapshot_json);if(value.resultRevision!==result.resultRevision||qualificationStoredViewJson(value)!==content)fail('INVALID_INPUT');}
+      const retained=get(db,'SELECT snapshot_json,local_material_digest FROM qualification_result_versions WHERE registration_ref=? AND event_ref=? AND security_scope=? AND view_key=?',input.registrationId,request.eventId,input.securityScope,viewKey);
+      if(retained){if(retained.local_material_digest!==local.payload_digest||qualificationStoredViewJson(decoded(retained.snapshot_json))!==content)fail('INVALID_INPUT');}
+      else db.prepare(`INSERT INTO qualification_result_versions(registration_ref,event_ref,security_scope,view_key,assessment_key,source_revision,local_material_digest,snapshot_json,fetched_at) VALUES(?,?,?,?,?,?,?,?,?)`)
+        .run(input.registrationId,request.eventId,input.securityScope,viewKey,assessmentKey,request.revision,local.payload_digest,snapshotJson,input.fetchedUtcMs);
+      const generation=(BigInt(headGeneration(head))+1n).toString();if(!isQualificationCounter(generation))fail('INVALID_INPUT');
+      db.prepare(`INSERT INTO qualification_result_heads(kind,registration_ref,event_ref,security_scope,view_key,server_version,result_revision,generation,source_revision) VALUES('event',?,?,?,?,?,?,?,?)
+        ON CONFLICT(registration_ref,security_scope,event_ref) WHERE kind='event' DO UPDATE SET view_key=excluded.view_key,server_version=excluded.server_version,result_revision=excluded.result_revision,generation=excluded.generation`)
+        .run(input.registrationId,request.eventId,input.securityScope,viewKey,result.version,result.resultRevision,generation,request.revision);
+      advanceRoot(db,input.registrationId,input.securityScope,local,result,viewKey,assessmentKey,assessment);saved++;
     }
     return {saved,missingBase};
   },options);

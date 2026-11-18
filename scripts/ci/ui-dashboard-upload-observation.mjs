@@ -51,6 +51,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
   const moduleGraphs = [], isolation = () => uploadUiIsolationPlugin(config, modules => moduleGraphs.push(modules));
   await mkdir(inputs.root); await writeFile(path.join(inputs.root, '.upload-ui-root'), 'ets2telemetry.dashboard-upload.ui.v1\n', {flag: 'wx'});
   await writeFile(path.join(inputs.root,'companion-v1.json'),await readFile(path.join(config.checkout,'tests/fixtures/qualification/companion-v1.json')),{flag:'wx'});
+  await writeFile(path.join(inputs.root,'journal-job.json'),await readFile(path.join(config.checkout,'tests/fixtures/protocol-v1/event-job-configured.json')),{flag:'wx'});
   for (const name of ['main', 'preload']) await build({configFile: false, root: config.checkout, logLevel: 'silent', define: inputs.define, plugins: [isolation()],
     build: {outDir: inputs.root, emptyOutDir: false, minify: false, lib: {entry: path.join(config.checkout, `tests/runtime/dashboard-upload-ui-${name}.ts`), formats: ['cjs'], fileName: () => `${name}.cjs`}, rollupOptions: {external: ['electron', /^node:/]}}});
   await build({configFile: false, root: config.checkout, base: './', logLevel: 'silent', define: inputs.define, plugins: [tailwindcss(), isolation()], resolve: {alias: inputs.alias},
@@ -182,7 +183,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
     record.security = await application.evaluate(({BrowserWindow}) => {const window = BrowserWindow.getAllWindows()[0], p = window.webContents.getLastWebPreferences(); return {sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, persistentSession: window.webContents.session.isPersistent(), localDocument: window.webContents.getURL().startsWith('file:')};});
     assert.deepEqual(record.security, {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true});
     assert.equal(await page.evaluate(() => typeof globalThis.require === 'undefined' && typeof globalThis.process === 'undefined'), true);
-    assert.deepEqual(await page.evaluate(() => Object.keys(globalThis.uploadUi).sort()), ['cancelDashboardUpload', 'confirmDashboardUpload', 'disconnectDashboardUpload', 'getDashboardUploadContext','getQualification', 'listJournalTrips','refreshQualification', 'subscribeDashboardUpload','subscribeQualification', 'verifyDashboardUploadToken']);
+    assert.deepEqual(await page.evaluate(() => Object.keys(globalThis.uploadUi).sort()), ['cancelDashboardUpload', 'confirmDashboardUpload', 'disconnectDashboardUpload', 'getDashboardUploadContext','getJournalTrip','getQualification', 'listJournalTrips','refreshQualification', 'subscribeDashboardUpload','subscribeQualification', 'verifyDashboardUploadToken']);
     assert.equal(await page.evaluate(() => typeof globalThis.desktop === 'undefined'), true); record.flags.bridgeIsolation = true;
     assert.equal(await application.evaluate(async ({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript('Notification.requestPermission()', true)), 'denied');
     assert.ok(await application.evaluate(() => globalThis.uploadUiFixture.denied.permissions > 0)); record.security.permissionsDenied = true;

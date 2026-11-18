@@ -11,7 +11,7 @@ import {QualificationPreviewFacts,type PreviewStorage,type QualificationLive} fr
 import {QualificationScheduler,qualificationRetry,qualificationClock,type QualificationClock,type QualificationTask} from './scheduler';
 import type {QualificationTransport,QualificationRoute,QualificationHttpResult} from './http';
 export type QualificationStorage=Pick<StorageClient,QualificationCommandName>&PreviewStorage;
-interface Active {authority:QualificationAuthority;owner:DashboardOwner;token:string;scope:string|null;capabilities:QualificationWire['Capabilities']|null;refresh:QualificationRefresh;facts:QualificationPreviewFacts;scheduler:QualificationScheduler}
+interface Active {authority:QualificationAuthority;owner:DashboardOwner;token:string;scope:string|null;capabilities:QualificationWire['Capabilities']|null;refresh:QualificationRefresh;facts:QualificationPreviewFacts;scheduler:QualificationScheduler;resultLimit:number;resultsHeld:boolean}
 /** Companion lifecycle is independent of recorder admission, upload requests and durable receipts. */
 export class QualificationService {
   #active:Active|null=null;#states={ets2:initialQualificationState('ets2'),ats:initialQualificationState('ats')};#generation=0;#abort=new AbortController();
@@ -34,7 +34,7 @@ export class QualificationService {
     const owner:DashboardOwner={origin:registration.origin,accountId:registration.accountId,companyId:registration.companyId,identityEpoch:registration.identityEpoch};
     const generation=++this.#generation;this.#abort=new AbortController();
     const facts=new QualificationPreviewFacts(this.db,authority),scheduler=new QualificationScheduler(task=>this.#run(task,generation),this.clock);
-    const active:Active={authority,owner,token,scope:null,capabilities:null,refresh:{afterEvent:null,retryAtMs:0,failureStreak:0,suspended:false},facts,scheduler};this.#active=active;facts.observe(this.#live);
+    const active:Active={authority,owner,token,scope:null,capabilities:null,refresh:{afterEvent:null,retryAtMs:0,failureStreak:0,suspended:false},facts,scheduler,resultLimit:25,resultsHeld:false};this.#active=active;facts.observe(this.#live);
     for(const game of ['ets2','ats'] as const)this.#emit(game,{...initialQualificationState(game,owner),refreshing:true});
     try{
       const cached=await stored(this.db.readQualificationCache(authority));if(this.#active!==active||!cached.active)return;
@@ -86,14 +86,22 @@ export class QualificationService {
         this.#emit(task,{snapshot:value,fetchedUtcMs:this.clock.now(),availability:value.state==='unavailable'?'disabled':'ready',stale:false,refreshing:false});return Math.max(5000,value.refreshAfterSeconds*1000);
       }
       if(task==='results'){
-        if(!active.capabilities.resultsEnabled)return Infinity;
-        const page=await stored(this.db.pageQualificationSources({...active.authority,securityScope:active.scope,afterEvent:active.refresh.afterEvent,limit:25}));if(this.#active!==active)return Infinity;
+        if(!active.capabilities.resultsEnabled||active.resultsHeld)return Infinity;
+        const page=await stored(this.db.pageQualificationSources({...active.authority,securityScope:active.scope,afterEvent:active.refresh.afterEvent,limit:active.resultLimit}));if(this.#active!==active)return Infinity;
         if(!page.items.length){active.refresh.afterEvent=null;return 5000;}
         const request={requestId:randomUUID(),items:page.items.map(item=>item.request)};
         const response=await this.#request('results',request,active);if(this.#active!==active)return Infinity;
+        if(response.ok&&response.statusCode===422&&response.retryAfter===null){
+          const error=jsonBody(response.body,4096);
+          if(isQualificationWire('Error',error)&&error.error.code==='RESULT_BATCH_TOO_LARGE'&&!error.error.retryable){
+            // Keep the same durable cursor: a rejected batch consumed none of its sources.
+            if(page.items.length===1){active.resultsHeld=true;return Infinity;}
+            active.resultLimit=Math.max(1,Math.floor(page.items.length/2));return 5000;
+          }
+        }
         if(!response.ok||response.statusCode!==200)return this.#failed(response,active);
         const batch=jsonBody(response.body,1048576);if(!isQualificationWire('ResultBatch',batch)||batch.securityScope!==active.scope)throw Error('INVALID_COMPANION_RESPONSE');
-        const saved=await stored(this.db.commitQualificationResults({...active.authority,securityScope:active.scope,request,batch,fetchedUtcMs:this.clock.now()}));if(this.#active!==active)return Infinity;
+        const saved=await stored(this.db.commitQualificationResults({...active.authority,securityScope:active.scope,expectedHeads:page.items.map(item=>({eventId:item.request.eventId,generation:item.generation})),request,batch,fetchedUtcMs:this.clock.now()}));if(this.#active!==active)return Infinity;
         // A conditional response without a base is retried unconditionally on the next bounded sweep.
         active.refresh.afterEvent=saved.missingBase.length?null:page.next;active.refresh.failureStreak=0;active.refresh.retryAtMs=0;
         await stored(this.db.saveQualificationRefresh({...active.authority,securityScope:active.scope,refresh:active.refresh}));return Math.max(5000,batch.refreshAfterSeconds*1000);

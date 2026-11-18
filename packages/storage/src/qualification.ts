@@ -6,7 +6,7 @@ export interface QualificationAuthority {registrationId: string; connectionVersi
 export interface QualificationRefresh {afterEvent: string | null; retryAtMs: number; failureStreak: number; suspended: boolean}
 export interface QualificationStoredCache {snapshot: QualificationSnapshot; fetchedUtcMs: number}
 export interface QualificationStoredState {active: boolean; securityScope: string | null; caches: QualificationStoredCache[]; refresh: QualificationRefresh}
-export interface QualificationLocalSource {request: QualificationSourceRequest; localMaterialDigest: string; result: QualificationResult | null}
+export interface QualificationLocalSource {request: QualificationSourceRequest; generation:string; localMaterialDigest: string; result: QualificationResult | null}
 export interface QualificationLocalPreview {tripUuid:string;rawTripUuid:string;materialVersion:string;actualDistance:QualificationWirePreviewDistance}
 type QualificationWirePreviewDistance = import('../../contracts/src/qualification').QualificationPreviewInput['actualDistance'];
 type Command<I, V> = {args: {input: I}; value: V};
@@ -20,7 +20,7 @@ export interface QualificationCommands {
   setQualificationScope: Command<QualificationAuthority & {securityScope: string}, {active: boolean}>;
   saveQualificationCache: Command<QualificationAuthority & {snapshot: QualificationSnapshot; fetchedUtcMs: number}, {saved: boolean}>;
   pageQualificationSources: Command<QualificationAuthority & {securityScope: string; afterEvent: string | null; limit: number}, {items: QualificationLocalSource[]; next: string | null}>;
-  commitQualificationResults: Command<QualificationAuthority & {securityScope: string; request: {requestId: string; items: QualificationSourceRequest[]}; batch: QualificationResultBatch; fetchedUtcMs: number}, {saved: number; missingBase: string[]}>;
+  commitQualificationResults: Command<QualificationAuthority & {securityScope: string; expectedHeads:{eventId:string;generation:string}[]; request: {requestId: string; items: QualificationSourceRequest[]}; batch: QualificationResultBatch; fetchedUtcMs: number}, {saved: number; missingBase: string[]}>;
   saveQualificationRefresh: Command<QualificationAuthority & {securityScope: string; refresh: QualificationRefresh}, {saved: boolean}>;
 }
 export type QualificationCommandName = keyof QualificationCommands;
@@ -36,7 +36,7 @@ const requests: Record<QualificationCommandName, (v: unknown) => boolean> = {
   setQualificationScope: shape({...authority, securityScope: scope}),
   saveQualificationCache: shape({...authority, snapshot: v => isQualificationWire('Qualification', v), fetchedUtcMs: uploadSafe}),
   pageQualificationSources: shape({...authority, securityScope: scope, afterEvent: nullable(uploadUuid), limit: v => uploadSafe(v) && v > 0 && v <= 25}),
-  commitQualificationResults: shape({...authority, securityScope: scope, request: v => isQualificationWire('ResultBatchInput', v), batch: v => isQualificationWire('ResultBatch', v), fetchedUtcMs: uploadSafe}),
+  commitQualificationResults: shape({...authority, securityScope: scope, expectedHeads:v=>Array.isArray(v)&&v.length>0&&v.length<=25&&v.every(shape({eventId:uploadUuid,generation:isQualificationCounter})), request: v => isQualificationWire('ResultBatchInput', v), batch: v => isQualificationWire('ResultBatch', v), fetchedUtcMs: uploadSafe}),
   saveQualificationRefresh: shape({...authority, securityScope: scope, refresh})
 };
 export const QUALIFICATION_COMMAND_NAMES = Object.freeze(Object.keys(requests) as QualificationCommandName[]);
@@ -52,5 +52,5 @@ export function isQualificationCommandValue(command: QualificationCommand, value
   if (command.name === 'setQualificationScope') return shape({active: one(true,false)})(value);
   if (command.name === 'saveQualificationCache' || command.name === 'saveQualificationRefresh') return shape({saved: one(true,false)})(value);
   if (command.name === 'commitQualificationResults') return shape({saved: v => uploadSafe(v) && v <= 25, missingBase: v => Array.isArray(v) && v.length <= 25 && v.every(uploadUuid)})(value);
-  return shape({items: v => Array.isArray(v) && v.length <= command.input.limit && v.every(shape({request: r => isQualificationWire('SourceRequest', r), localMaterialDigest: d => typeof d === 'string' && /^[0-9a-f]{64}$/.test(d), result: nullable(r => isQualificationWire('Result', r))})), next: nullable(uploadUuid)})(value);
+  return shape({items: v => Array.isArray(v) && v.length <= command.input.limit && v.every(shape({request: r => isQualificationWire('SourceRequest', r), generation:isQualificationCounter, localMaterialDigest: d => typeof d === 'string' && /^[0-9a-f]{64}$/.test(d), result: nullable(r => isQualificationWire('Result', r))})), next: nullable(uploadUuid)})(value);
 }

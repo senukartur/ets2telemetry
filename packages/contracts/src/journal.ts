@@ -5,7 +5,7 @@
 // so synthetic and replay data are never shown as game history. See docs/journal.md.
 import {isHardModeDetails, type HardModeDetails} from './hard-mode';
 import {isDashboardOwner, type DashboardOwner} from './dashboard-upload';
-import {isQualificationWire} from './qualification';
+import {isQualificationWire,isQualificationVerdict,isQualificationResultMetadata,QUALIFICATION_DETAIL_BYTES} from './qualification';
 import {validateServerMessage, type Available, type Currency, type EventOccurrence, type EventRecord, type GameMode, type JobConfiguration, type Money,
   type TrailerConfiguration, type TruckConfiguration, type UnavailableReason, type Uint64} from './protocol-v1';
 import {isTruckPowertrain, type TruckPowertrain} from './truck-powertrain';
@@ -122,7 +122,8 @@ export interface JournalTripListItem {
   netIncome?: {raw: string; currency: Currency} | null;
   job: JournalJobSummary;
 }
-export interface JournalQualification {current:import('./qualification').QualificationResult|null;previous:import('./qualification').QualificationResult|null;latest?:import('./qualification').QualificationResult;awaiting:boolean}
+export interface JournalQualification {current:import('./qualification').QualificationVerdict|null;latest?:import('./qualification').QualificationResultMetadata;awaiting:boolean}
+export interface JournalQualificationDetail {current:import('./qualification').QualificationResult|null;previous:import('./qualification').QualificationResult|null;latest?:import('./qualification').QualificationResultMetadata;awaiting:boolean}
 export interface JournalSyncRow {
   qualification?:JournalQualification;
   tripUuid: string;
@@ -131,6 +132,7 @@ export interface JournalSyncRow {
   reason: 'validation' | 'reconciliation' | null;
 }
 export interface JournalTripSync {owner: DashboardOwner; connectionVersion: string; rows: JournalSyncRow[]}
+export type JournalQualificationDetailRow=Omit<JournalSyncRow,'qualification'>&{qualification?:JournalQualificationDetail};
 /** Of the logical trips matching the filter at the page's snapshot: their number and their one-second samples. Only on a read without a cursor. */
 export interface JournalTripTotals {trips: number; recordedSeconds: number}
 export interface JournalTripPage {database: JournalDatabase; trips: JournalTripListItem[]; nextCursor: string | null; sync?: JournalTripSync; totals?: JournalTripTotals}
@@ -192,7 +194,7 @@ export interface JournalRefuels {
   unavailableReason?: 'retained-path-unproven' | 'annotation-limit';
 }
 export interface JournalTripDetail {
-  qualification?:{owner:DashboardOwner;connectionVersion:string;row:JournalSyncRow};
+  qualification?:{owner:DashboardOwner;connectionVersion:string;row:JournalQualificationDetailRow};
   database: JournalDatabase;
   trip: JournalTripListItem & {
     pluginSessionId: string;
@@ -482,9 +484,11 @@ function page(rows: unknown, limit: number, cursor: unknown, check: (value: unkn
   return list;
 }
 /** Validates a `journalTrips` answer exactly; throws JournalContractError otherwise. */
-function qualificationDecoration(value:unknown):void {
-  const decoration=exact(value,['current','previous','awaiting',...(isRecord(value)&&Object.hasOwn(value,'latest')?['latest']:[])]);boolean(decoration.awaiting);
-  if(Object.hasOwn(decoration,'latest')&&!isQualificationWire('Result',decoration.latest))bad();
+function qualificationDecoration(value:unknown,detail=false):void {
+  const decoration=exact(value,['current',...(detail?['previous']:[]),'awaiting',...(isRecord(value)&&Object.hasOwn(value,'latest')?['latest']:[])]);boolean(decoration.awaiting);
+  if(Object.hasOwn(decoration,'latest')&&!isQualificationResultMetadata(decoration.latest))bad();
+  if(!detail){if(decoration.current!==null&&!isQualificationVerdict(decoration.current))bad();return;}
+  if(new TextEncoder().encode(JSON.stringify(value)).byteLength>QUALIFICATION_DETAIL_BYTES)bad();
   for(const key of ['current','previous'] as const)if(decoration[key]!==null&&!isQualificationWire('Result',decoration[key]))bad();
   const current=decoration.current as import('./qualification').QualificationResult|null;
   if(current&&(current.assessmentBasis!=='current'||current.assessmentPending||current.correctionPending||current.state!=='decided'||!current.assessment))bad();
@@ -557,7 +561,9 @@ export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   if(Object.hasOwn(o,'qualification')){
     const decoration=exact(o.qualification,['owner','connectionVersion','row']);
     const row=o.trip as Record<string,unknown>;
-    validateJournalTripPage({database:o.database,trips:[Object.fromEntries(listKeys(row).map(key=>[key,row[key]]))],nextCursor:null,sync:{owner:decoration.owner,connectionVersion:decoration.connectionVersion,rows:[decoration.row]}});
+    if(!isRecord(decoration.row))bad();const detailRow=decoration.row as Record<string,unknown>,base={...detailRow};delete base.qualification;
+    validateJournalTripPage({database:o.database,trips:[Object.fromEntries(listKeys(row).map(key=>[key,row[key]]))],nextCursor:null,sync:{owner:decoration.owner,connectionVersion:decoration.connectionVersion,rows:[base]}});
+    if(Object.hasOwn(detailRow,'qualification'))qualificationDecoration(detailRow.qualification,true);
   }
   if (Object.hasOwn(o, 'energyPowertrain') && !isTruckPowertrain(o.energyPowertrain)) bad();
   if (Object.hasOwn(o, 'refuels')) {

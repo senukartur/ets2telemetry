@@ -41,7 +41,7 @@ describe('qualification presentation (REG-009/014/016)',()=>{
   });
   it('shows the retained previous explanation independently of latest company review metadata',()=>{
     const result=fixtures.filter(f=>f.schema==='ResultBatch').flatMap(f=>(f.value as import('../../packages/contracts/src/qualification').QualificationWire['ResultBatch']).items).find(item=>item.assessmentBasis==='current')!;
-    const latest={...result,assessment:null,assessmentBasis:'none' as const,state:'review' as const,companyDecision:'pending_review' as const,credit:null};
+    const latest={companyDecision:'pending_review' as const,credit:null};
     const row={tripUuid:result.source.tripId,state:'sent' as const,materialVersion:'1',latestRevision:1,lastDurableUploadUtcMs:1,reason:null,qualification:{current:null,previous:result,latest,awaiting:true}};
     const html=renderToStaticMarkup(React.createElement(JournalQualificationResult,{row,language:'en'}));
     expect(html).toContain('qualification-previous');expect(html).not.toContain('data-testid="qualification-assessment"');expect(html).toContain('Pending review');

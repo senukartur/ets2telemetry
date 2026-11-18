@@ -3,7 +3,7 @@ import path from 'node:path';
 import {readFileSync} from 'node:fs';
 import {initialDashboardUploadStatus, isDashboardUploadStatus, type DashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
 import {UPLOAD_CHANNELS, validUploadArguments, type UploadAction} from '../../apps/desktop/src/dashboard-upload/contract';
-import {validateJournalTripPage, type JournalSyncRow, type JournalTripListItem} from '../../packages/contracts/src/journal';
+import {validateJournalTripPage,validateJournalTripDetail,type JournalSyncRow, type JournalTripListItem} from '../../packages/contracts/src/journal';
 import {initialQualificationState,isQualificationState,type QualificationGame,type QualificationState,type QualificationWire} from '../../packages/contracts/src/qualification';
 import {QUALIFICATION_CHANNELS,validQualificationArguments} from '../../apps/desktop/src/qualification/contract';
 
@@ -25,8 +25,13 @@ const qualificationStates=Object.fromEntries((['ets2','ats'] as const).map(game=
   return [game,{...initialQualificationState(game,owner),snapshot,availability:'ready',stale:false,fetchedUtcMs:1795000000000}];
 })) as Record<QualificationGame,QualificationState>;
 const result=structuredClone(companion.filter(item=>item.schema==='ResultBatch').flatMap(item=>(item.value as QualificationWire['ResultBatch']).items).find(item=>item.assessmentBasis==='current')!);
-rows[7].qualification={current:result,previous:null,awaiting:false};
+rows[7].qualification={current:{availability:result.assessment!.availability,outcome:result.assessment!.outcome},awaiting:false,latest:{companyDecision:result.companyDecision,credit:result.credit}};
 const trips = rows.map(({tripUuid}): JournalTripListItem => ({tripUuid, game: 'ets2', isHardMode: false, hardModeDetails: null, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null, recordingCompleteness: 'partial', startedUtcMs: 1000, endedUtcMs: null, observedDistanceM: absent, fuelUsedL: absent, job: {source: 'event', sourceCity: absent, sourceCompany: absent, destinationCity: absent, destinationCompany: absent, cargo: absent, market: absent, isSpecialJob: absent, plannedDistance: {...absent, unit: 'm'}, expectedIncome: absent}}));
+const fixtureJob=(JSON.parse(readFileSync(path.join(__dirname,'journal-job.json'),'utf8')) as {data:{record:Record<string,unknown>}}).data.record;delete fixtureJob.type;
+const detail=validateJournalTripDetail({database:{purpose:'history',schemaVersion:11},trip:{...trips[7],pluginSessionId:result.source.pluginSessionId,openedBy:'event',openedEventSeq:'1',outcomeEventSeq:null,closedBy:null},
+  job:{source:'event',eventSeq:'1',checkpointNextEventSeq:null,values:fixtureJob},truck:null,trailers:{items:[],total:0},outcomeDetails:null,money:{incomplete:false,totals:[],unavailable:[]},
+  window:{known:true,pluginSessionId:result.source.pluginSessionId,fromEventSeq:'1',throughEventSeq:null,end:'open'},intervals:{items:[],total:0,nextCursor:null},samples:{count:0,firstUtcMs:null,lastUtcMs:null},exportBounds:{committedThroughEventSeq:'1',lastSampleId:null,lastIntervalId:null},
+  qualification:{owner,connectionVersion:'1',row:{...rows[7],qualification:{current:result,previous:null,awaiting:false,latest:{companyDecision:result.companyDecision,credit:result.credit}}}}});
 function publish(value: DashboardUploadStatus) {if (!isDashboardUploadStatus(value)) throw Error('INVALID_FIXTURE_STATUS'); status = structuredClone(value); window.webContents.send(UPLOAD_CHANNELS.status, status);}
 const fixture = {
   counts, denied, owner, origin, rows,
@@ -69,6 +74,10 @@ void app.whenReady().then(async () => {
   ipcMain.handle('journal:list-trips', (event, ...args: unknown[]) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || args.length !== 1 || JSON.stringify(args[0]) !== '{}') throw Error('INVALID_FIXTURE_JOURNAL');
     return {ok: true, value: validateJournalTripPage({database: {purpose: 'history', schemaVersion: 6}, trips, nextCursor: null, sync: {owner, connectionVersion: '1', rows}})};
+  });
+  ipcMain.handle('journal:get-trip',(event,...args:unknown[])=>{
+    if(event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||args.length!==1||args[0]!==rows[7].tripUuid)throw Error('INVALID_FIXTURE_JOURNAL');
+    return {ok:true,value:detail};
   });
   await window.loadFile(path.join(__dirname, 'renderer', 'tests', 'runtime', 'dashboard-upload-ui.html'));
   window.showInactive();
