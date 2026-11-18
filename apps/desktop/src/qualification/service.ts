@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto';
-import {initialQualificationState,isQualificationWire,compareQualificationCounter,type QualificationState,type QualificationGame,type QualificationWire} from '../../../../packages/contracts/src/qualification';
+import {initialQualificationState,isQualificationWire,qualificationResultBatchMatches,compareQualificationCounter,type QualificationState,type QualificationGame,type QualificationWire} from '../../../../packages/contracts/src/qualification';
 import type {StorageClient} from '../../../../packages/storage/src/client';
 import type {QualificationAuthority,QualificationCommandName,QualificationRefresh} from '../../../../packages/storage/src/qualification';
 import type {UploadActiveConfiguration} from '../../../../packages/storage/src/upload-sync';
@@ -100,7 +100,7 @@ export class QualificationService {
           }
         }
         if(!response.ok||response.statusCode!==200)return this.#failed(response,active);
-        const batch=jsonBody(response.body,1048576);if(!isQualificationWire('ResultBatch',batch)||batch.securityScope!==active.scope)throw Error('INVALID_COMPANION_RESPONSE');
+        const batch=jsonBody(response.body,1048576);if(!isQualificationWire('ResultBatch',batch)||batch.securityScope!==active.scope||!qualificationResultBatchMatches(batch,request))throw Error('INVALID_COMPANION_RESPONSE');
         const saved=await stored(this.db.commitQualificationResults({...active.authority,securityScope:active.scope,expectedHeads:page.items.map(item=>({eventId:item.request.eventId,generation:item.generation})),request,batch,fetchedUtcMs:this.clock.now()}));if(this.#active!==active)return Infinity;
         // A conditional response without a base is retried unconditionally on the next bounded sweep.
         active.refresh.afterEvent=saved.missingBase.length?null:page.next;active.refresh.failureStreak=0;active.refresh.retryAtMs=0;

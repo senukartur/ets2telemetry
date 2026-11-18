@@ -63,6 +63,11 @@ export function qualificationResultMatches(result: QualificationResult, request:
   if (result.assessmentBasis === 'current' && assessment && (!assessment.assessedSource || !sameQualificationSource(assessment.assessedSource, request.source) || assessment.sourceRevision !== request.revision || assessment.sourceEventId !== request.eventId || assessment.sourceMessageId === null || assessment.sourceMessageId !== result.requestedSourceMessageId)) return false;
   return true;
 }
+/** Every requested frozen event has exactly one correlated response, regardless of response order. */
+export function qualificationResultBatchMatches(batch:QualificationResultBatch,request:QualificationWire['ResultBatchInput']):boolean {
+  const requested=new Map(request.items.map(item=>[item.eventId,item]));
+  return batch.requestId===request.requestId&&requested.size===request.items.length&&batch.items.length===requested.size&&new Set(batch.items.map(item=>item.requestedEventId)).size===requested.size&&batch.items.every(item=>{const source=requested.get(item.requestedEventId);return !!source&&qualificationResultMatches(item,source);});
+}
 const qualificationCanonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(qualificationCanonical).join(',')}]` : uploadRecord(value) ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${qualificationCanonical(value[key])}`).join(',')}}` : JSON.stringify(value);
 /** Opaque view identity and current catalog labels cannot rewrite immutable domain facts. */
 export function qualificationDecisionJson(value: QualificationResult): string {

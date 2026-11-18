@@ -113,11 +113,11 @@
         "creditedTrips": 2,
         "creditedDistanceM": "200000.125",
         "conditions": {
-          "requiredTrips": 3,
-          "requiredDistanceM": "300000"
+          "requiredTrips": null,
+          "requiredDistanceM": null
         },
-        "remainingTrips": 1,
-        "remainingDistanceM": "99999.875",
+        "remainingTrips": null,
+        "remainingDistanceM": null,
         "conditionsMet": false,
         "nextLevel": null,
         "terminal": true
@@ -9938,7 +9938,7 @@
       "applicability": {
         "expiresAt": "2026-11-18T12:00:05.000Z",
         "contextRevision": 8101,
-        "minimumDistanceM": "99999",
+        "minimumDistanceM": "100000",
         "maximumDistanceM": "500000",
         "qualificationRevision": "12",
         "requiresQualificationRefresh": true
@@ -10092,7 +10092,7 @@
       "applicability": {
         "expiresAt": "2026-11-18T12:00:05.000Z",
         "contextRevision": 8102,
-        "minimumDistanceM": "99999",
+        "minimumDistanceM": "100000",
         "maximumDistanceM": "500000",
         "qualificationRevision": "12",
         "requiresQualificationRefresh": true
@@ -10258,7 +10258,7 @@
       "applicability": {
         "expiresAt": "2026-11-18T12:00:05.000Z",
         "contextRevision": 8103,
-        "minimumDistanceM": "99999",
+        "minimumDistanceM": "100000",
         "maximumDistanceM": "500000",
         "qualificationRevision": "12",
         "requiresQualificationRefresh": true
@@ -10953,13 +10953,13 @@
       },
       "actualDistance": {
         "availability": "known",
-        "metres": "99999",
+        "metres": "100000",
         "support": "whole-trip",
         "final": false
       },
       "hardMode": {
         "result": "qualified",
-        "final": false
+        "final": true
       },
       "start": null,
       "eventId": null
@@ -10996,13 +10996,13 @@
       },
       "actualDistance": {
         "availability": "known",
-        "metres": "99999",
+        "metres": "100000",
         "support": "whole-trip",
         "final": false
       },
       "hardMode": {
         "result": "qualified",
-        "final": false
+        "final": true
       },
       "start": null,
       "eventId": null
@@ -11035,13 +11035,13 @@
       },
       "actualDistance": {
         "availability": "known",
-        "metres": "99999",
+        "metres": "100000",
         "support": "whole-trip",
         "final": false
       },
       "hardMode": {
         "result": "qualified",
-        "final": false
+        "final": true
       },
       "start": null,
       "eventId": null

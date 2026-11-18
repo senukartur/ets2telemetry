@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {MIGRATIONS, openStorage, restoreBackup, type Migration} from '../../packages/storage/src';
-import {digestOf, failed, ok, readOnly, sha256, workspace, uploadTestSource, uploadTestWork, uploadGame,uploadReceipt, TEST_CLOSE_GRACE_MS} from './helpers';
+import {digestOf, failed, ok, readOnly, sha256, workspace, uploadTestSource, uploadTestOwner, uploadProof, uploadTestWork, uploadGame,uploadReceipt, TEST_CLOSE_GRACE_MS} from './helpers';
 import {StorageClient} from '../../packages/storage/src/client';
 import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import type {QualificationWire} from '../../packages/contracts/src/qualification';
@@ -11,7 +11,9 @@ import {QUALIFICATION_DETAIL_BYTES} from '../../packages/contracts/src/qualifica
 import {validateJournalTripDetail,validateJournalTripPage} from '../../packages/contracts/src/journal';
 import {TripExportSerializer,tripExportHeader} from '../../apps/desktop/src/journal-export';
 import {storageWorker, terminateWorkers} from './recording-helpers';
-import {r} from '../shared/trip-messages';
+import {r,job,Script,ETS2_A,ETS2_B,run,sessionInput} from '../shared/trip-messages';
+import {canonicalJson,initialTripState,jobKey,tripUuidFor} from '../../packages/telemetry-core/src';
+import {QualificationPreviewFacts,type QualificationLive} from '../../apps/desktop/src/qualification/preview-facts';
 
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => {ws = await workspace();});
@@ -52,6 +54,59 @@ describe('qualification schema 11 (REG-013/014)', () => {
     const hash = sha256(file);
     failed(await openStorage(ws.options({path: file, migrations: MIGRATIONS.slice(0, 10)})), 'SCHEMA_NEWER');
     expect(sha256(file)).toBe(hash);
+  });
+});
+
+describe('native job identity through preview and SQLite (REG-003/008/010)',()=>{
+  it('accepts sorted native keys and cargo-market pickup on the same recorded trip, while rejecting changed evidence',async()=>{
+    const client=new StorageClient(storageWorker().handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'history',appVersion:'test'}));
+    const owner=await uploadTestOwner(client);ok(await client.confirmUploadOwner({confirmationId:owner.runId,registrationId:owner.registrationId,credentialGeneration:'generation',expectedVersion:'0'}));
+    const script=new Script(ETS2_A),welcome=uploadGame(script.welcome()),offered=job({market:{available:true,value:'cargo_market'},cargoLoaded:{available:true,value:false}}),tripUuid=tripUuidFor(script.session,'1');
+    let state=run(initialTripState(),[sessionInput(welcome)]).state;ok(await client.upsertSession({message:welcome}));
+    const opening=uploadGame(script.event(r.jobConfigured(offered))),opened=run(state,[opening]);state=opened.state;
+    ok(await client.commitEvent({message:opening,effects:opened.effects[0],profile:uploadProof(script)}));
+    await uploadTestWork(client,{registrationId:owner.registrationId,tripUuid});
+    const authority={registrationId:owner.registrationId,connectionVersion:'1'};ok(await client.setQualificationScope({...authority,securityScope:scope}));
+    const native=(configuration:ReturnType<typeof job>):QualificationLive=>{const message=uploadGame(script.checkpoint(configuration));return JSON.parse(canonicalJson({source:message.source,capture:message.capture,state:message.data.state})) as QualificationLive;};
+    const live=native(offered),facts=new QualificationPreviewFacts(client,authority);
+    try{
+      const persisted=ok(await client.journalTrip(tripUuid)).job.values;
+      expect(JSON.stringify(persisted)).not.toBe(JSON.stringify(live.state.configuration.job.available?live.state.configuration.job.value:null));expect(jobKey(persisted)).toBe(jobKey(offered));
+      facts.observe(live);const first=await facts.read();expect(first).not.toBeNull();expect(first!.cargoMassKg.value).toBe(String(offered.cargoMass.available?offered.cargoMass.value:null));
+      const loaded=job({...offered,cargoLoaded:{available:true,value:true}}),pickup=uploadGame(script.event(r.jobConfigured(loaded))),picked=run(state,[pickup]);state=picked.state;
+      expect(picked.effects[0].some(effect=>effect.kind==='trip.open'||effect.kind==='trip.close')).toBe(false);ok(await client.commitEvent({message:pickup,effects:picked.effects[0],profile:uploadProof(script)}));
+      const pickupLive=native(loaded);facts.observe(pickupLive);expect(facts.current).toBeNull();const afterPickup=await facts.read();expect(afterPickup).not.toBeNull();expect(afterPickup!.contextRevision).toBeGreaterThan(first!.contextRevision);
+      expect(ok(await client.journalTrips({})).trips.map(trip=>trip.tripUuid)).toEqual([tripUuid]);expect(ok(await client.journalTrip(tripUuid)).job.values.cargoLoaded).toEqual({available:true,value:false});
+      for(const mutation of [job({...loaded,cargoId:{available:true,value:'other-cargo'}}),job({...loaded,cargoMass:{available:true,value:19001,unit:'kg'}}),job({...loaded,destinationCompanyId:{available:true,value:'other-company'}})]){
+        facts.observe(native(mutation));expect(facts.current).toBeNull();expect(await facts.read()).toBeNull();facts.observe(pickupLive);const restored=await facts.read();expect(restored).not.toBeNull();expect(restored!.contextRevision).toBeGreaterThan(afterPickup!.contextRevision);
+      }
+      const foreign=structuredClone(pickupLive);foreign.source.pluginSessionId=ETS2_B;facts.observe(foreign);expect(await facts.read()).toBeNull();facts.observe(pickupLive);expect(await facts.read()).not.toBeNull();
+    }finally{await facts.close();await client.close();}
+  });
+});
+
+describe('exact batch coverage (REG-008/010/012)',()=>{
+  it('rejects duplicate, missing and extra responses atomically for distinct sources, including idempotent and unchanged duplicates',async()=>{
+    const storage=await ws.open({purpose:'history'}),first=await uploadTestSource(storage),secondScript=new Script(ETS2_B),secondTrip=tripUuidFor(secondScript.session,'1');
+    ok(storage.commitEvent({message:uploadGame(first.script.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:first.tripUuid,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',endedUtcMs:3000,recordingCompleteness:'complete'}]}));
+    ok(storage.upsertSession({message:uploadGame(secondScript.welcome())}));ok(storage.commitEvent({message:uploadGame(secondScript.event(r.jobConfigured())),profile:uploadProof(secondScript),effects:[{kind:'trip.open',tripUuid:secondTrip,game:'ets2',gameMode:{mode:'unknown',method:'none',confidence:'none'},jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
+    ok(storage.commitEvent({message:uploadGame(secondScript.event(r.delivered())),effects:[{kind:'trip.close',tripUuid:secondTrip,outcome:'delivered',closeReason:'outcome',outcomeEvent:'this-event',endedUtcMs:3000,recordingCompleteness:'complete'}]}));
+    for(const tripUuid of [first.tripUuid,secondTrip]){const workId=await uploadTestWork(storage,{registrationId:first.registrationId,tripUuid});ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:4000}));}
+    const authority={registrationId:first.registrationId,connectionVersion:'1',securityScope:scope};ok(storage.setQualificationScope(authority));const locals=ok(storage.pageQualificationSources({...authority,afterEvent:null,limit:25})).items;expect(locals).toHaveLength(2);
+    const template=fixtures.filter(f=>f.schema==='ResultBatch').flatMap(f=>(f.value as QualificationWire['ResultBatch']).items).find(item=>item.assessmentBasis==='current')!;
+    const results=locals.map((local,index)=>{const result=structuredClone(template);Object.assign(result,{source:local.request.source,requestedRevision:local.request.revision,requestedEventId:local.request.eventId,resultRevision:'1',version:`source-${index}`});Object.assign(result.assessment!,{assessedSource:result.source,sourceRevision:result.requestedRevision,sourceEventId:result.requestedEventId,sourceMessageId:result.requestedSourceMessageId});return result;});
+    const request={requestId:randomUUID(),items:locals.map(item=>item.request)},input={...authority,expectedHeads:locals.map(item=>({eventId:item.request.eventId,generation:item.generation})),request,batch:{contract:'1.0' as const,securityScope:scope,requestId:request.requestId,asOf:'2026-11-18T01:00:00.000Z',refreshAfterSeconds:5,items:results},fetchedUtcMs:5000};
+    for(const items of [[results[0],results[0]],[results[0]],[...results,results[1]],[results[0],{...results[1],requestedEventId:randomUUID()}]]){
+      failed(storage.commitQualificationResults({...input,batch:{...input.batch,items}}),'INVALID_INPUT');expect(ok(storage.pageQualificationSources({...authority,afterEvent:null,limit:25})).items).toEqual(locals);
+    }
+    expect(ok(storage.commitQualificationResults({...input,batch:{...input.batch,items:[results[1],results[0]]}})).saved).toBe(2);
+    const saved=ok(storage.pageQualificationSources({...authority,afterEvent:null,limit:25})).items,current={...input,request:{...request,items:saved.map(item=>item.request)},expectedHeads:saved.map(item=>({eventId:item.request.eventId,generation:item.generation}))};
+    const changed={...results[0],version:'changed-a',resultRevision:'2',assessment:{...results[0].assessment!,decisionId:randomUUID()}},unchanged={...results[0],unchanged:true,assessment:null,credit:null};
+    for(const items of [[results[0],results[0]],[changed,changed],[unchanged,unchanged],[changed,unchanged]]){
+      failed(storage.commitQualificationResults({...current,batch:{...current.batch,items}}),'INVALID_INPUT');expect(ok(storage.pageQualificationSources({...authority,afterEvent:null,limit:25})).items).toEqual(saved);
+    }
+    expect(ok(storage.commitQualificationResults({...current,batch:{...current.batch,items:[{...results[1],version:'counter-b',resultRevision:'2'},{...results[0],version:'counter-a',resultRevision:'2'}]}})).saved).toBe(2);
+    storage.close();readOnly(ws.database,db=>{expect(db.prepare('SELECT count(*) FROM qualification_result_versions').pluck().get()).toBe(2);expect(db.prepare('SELECT count(*) FROM qualification_result_heads').pluck().get()).toBe(4);expect(db.pragma('foreign_key_check')).toEqual([]);});
   });
 });
 

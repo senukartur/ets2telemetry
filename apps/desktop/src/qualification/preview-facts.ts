@@ -5,6 +5,7 @@ import type {StorageClient} from '../../../../packages/storage/src/client';
 import type {QualificationAuthority} from '../../../../packages/storage/src/qualification';
 import type {UploadProjection} from '../../../../packages/storage/src/upload-projection';
 import {chainComplete,type RuleContext} from '../../../../packages/storage/src/upload-rule-context';
+import {jobKey as canonicalJobKey} from '../../../../packages/telemetry-core/src/trips/identity';
 import {stored} from '../dashboard-upload/scheduler';
 export type PreviewStorage=Pick<StorageClient,'readQualificationPreview'|'beginQualificationPreview'|'advanceQualificationPreview'|'releaseQualificationPreview'>;
 export type QualificationLive=Pick<LiveObservationV1,'source'|'capture'> & {state:Pick<CurrentState,'configuration'|'simulation'>};
@@ -46,7 +47,7 @@ export class QualificationPreviewFacts {
     else if(before&&this.#job&&JSON.stringify(before.state.configuration.trailers[0])!==JSON.stringify(live.state.configuration.trailers[0])){
       if(this.#couplings.length<9)this.#couplings.push(firstBody(before.state.configuration.trailers));else this.#couplings[8]=null;
     }
-    if(changed||!live?.state.configuration.job.available){this.#generation++;this.#current=null;}
+    if(changed||!live?.state.configuration.job.available){this.#generation++;this.#current=null;this.#context='';}
   }
   async #release():Promise<void>{const pin=this.#pin;if(!pin)return;for(let turn=0;turn<64;turn++){const value=await this.db.releaseQualificationPreview({...this.authority,pinId:pin});if(!value.ok)throw Error('PREVIEW_RELEASE_FAILED');if(value.value.state==='released'){this.#pin=null;return;}}throw Error('PREVIEW_RELEASE_PENDING');}
   read():Promise<QualificationPreviewInput|null>{
@@ -75,7 +76,7 @@ export class QualificationPreviewFacts {
     }
     if(generation!==this.#generation||this.#proof?.key!==key)return null;
     const projection=this.#proof.projection,job=live.state.configuration.job.value;
-    if(JSON.stringify(projection.facts.job)!==JSON.stringify(job)){this.#current=null;return null;}
+    if(!projection.facts.job||canonicalJobKey(projection.facts.job)!==canonicalJobKey(job)){this.#current=null;return null;}
     const cargo=job.cargoId.available&&job.cargoId.value.length<=128&&job.cargoId.value.length>0?job.cargoId.value:null;
     const mass=job.cargoMass.available?previewDecimal(job.cargoMass.value):null;
     const trailers=qualificationTrailerFacts(projection.ruleContext,live.state.configuration.trailers,this.#couplings);

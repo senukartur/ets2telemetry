@@ -15,7 +15,7 @@ const success=(value:unknown):Extract<QualificationHttpResult,{ok:true}>=>({ok:t
 const stored=<T>(value:T)=>Promise.resolve({ok:true as const,value});
 afterEach(()=>vi.useRealTimers());
 function harness(request:(route:QualificationRoute,body?:Uint8Array)=>Promise<QualificationHttpResult>,overrides:Partial<QualificationStorage>={}){
-  const updates:QualificationState[]=[],saveQualificationRefresh=vi.fn(()=>Promise.resolve({ok:true as const,value:{saved:true}}));
+  const updates:QualificationState[]=[],saveQualificationRefresh=vi.fn((input:Parameters<QualificationStorage['saveQualificationRefresh']>[0])=>{void input;return Promise.resolve({ok:true as const,value:{saved:true}});});
   const db={readQualificationPreviewPins:()=>stored({items:[]}),readQualificationCache:()=>stored({active:true,securityScope:cap.securityScope,caches:[{snapshot,fetchedUtcMs:100}],refresh:{afterEvent:null,retryAtMs:0,failureStreak:0,suspended:false}}),setQualificationScope:()=>stored({active:true}),saveQualificationCache:()=>stored({saved:true}),pageQualificationSources:()=>stored({items:[],next:null}),saveQualificationRefresh,...overrides} as unknown as QualificationStorage;
   const http={request:vi.fn((route:QualificationRoute,_token:string,body?:Uint8Array)=>request(route,body)),abort:vi.fn(),close:vi.fn()};
   const service=new QualificationService(db,http,value=>updates.push(value));return {service,http,updates,saveQualificationRefresh};
@@ -42,6 +42,18 @@ function sizeError():QualificationHttpResult {
   if(!fixture)throw Error('MISSING_REVIEWED_SIZE_ERROR_FIXTURE');return {...success(fixture.value),statusCode:422};
 }
 describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
+  it('retains and persists the current sweep cursor when a response duplicates one source and omits another',async()=>{
+    vi.useFakeTimers();let responses=0;const template=fixtures.filter(f=>f.schema==='ResultBatch').flatMap(f=>(f.value as QualificationWire['ResultBatch']).items).find(item=>item.assessmentBasis==='current')!;
+    const f=resultHarness(request=>{
+      if(++responses===1)return undefined;const source=request.items[0],result={...template,source:source.source,requestedRevision:source.revision,requestedEventId:source.eventId,assessment:{...template.assessment!,assessedSource:source.source,sourceRevision:source.revision,sourceEventId:source.eventId}};
+      return success({contract:'1.0',securityScope:cap.securityScope,requestId:request.requestId,asOf:'2026-11-18T01:00:00.000Z',refreshAfterSeconds:5,items:request.items.map(()=>structuredClone(result))});
+    });
+    try{
+      await f.service.activate(configuration,'protected-token');await vi.advanceTimersByTimeAsync(60000);
+      const cursor=f.requests[0].items.at(-1)!.eventId;expect(f.requests.length).toBeGreaterThan(1);expect(f.commit).toHaveBeenCalledTimes(1);
+      expect(f.page.mock.calls.slice(1).every(([input])=>input.afterEvent===cursor)).toBe(true);expect(f.saveQualificationRefresh.mock.calls.every(([input])=>input.refresh.afterEvent===cursor)).toBe(true);
+    }finally{await f.service.stop();}
+  });
   it('reduces an oversized batch without skipping its cursor or starving progress and resets on activation',async()=>{
     vi.useFakeTimers();const f=resultHarness(request=>request.items.length>6?sizeError():undefined);
     try{

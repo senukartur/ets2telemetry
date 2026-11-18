@@ -8,6 +8,13 @@ import type {QualificationPreview,QualificationPreviewInput} from '../../package
 const fixtures=JSON.parse(readFileSync('tests/fixtures/qualification/companion-v1.json','utf8')) as {name:string;value:unknown}[];
 const fixture=<T>(name:string)=>structuredClone(fixtures.find(f=>f.name===name)!.value) as T;
 describe('server provisional applicability timelines (REG-003/008/009/010)',()=>{
+  it.each(['semantic-type-classified-pass','semantic-type-wrong-and-unclassified-fail','semantic-type-unclassified-unknown'])('keeps the corrected paired %s fixture inside its exact issued guard',name=>{
+    const input=fixture<QualificationPreviewInput>(`${name}-body-code-input`),reply=fixture<QualificationPreview>(name);
+    expect(input.actualDistance.metres).toBe('100000');expect(input.hardMode).toEqual({result:'qualified',final:true});expect(reply.applicability.minimumDistanceM).toBe('100000');
+    expect(reply.requestId).toBe(input.requestId);expect(reply.rules.find(rule=>rule.rule==='hard_mode')?.result).toBe('pass');
+    const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0};expect(qualificationLeaseCue(lease,input,reply.securityScope,reply.applicability.qualificationRevision,1)).toBe(reply.outcome==='unknown'?'neutral':reply.outcome);
+    const older=structuredClone(input);older.actualDistance.metres='99999';older.evidenceRevision++;expect(qualificationLeaseCue(lease,older,reply.securityScope,reply.applicability.qualificationRevision,1)).toBe('neutral');
+  });
   it('separates growing evidence from context and releases its exact pin when an active job disappears during preparation',async()=>{
     const script=new Script(ETS2_A),checkpoint=script.checkpoint(job()),live:QualificationLive={source:{...checkpoint.source,origin:'game'},capture:checkpoint.capture,state:checkpoint.data.state};
     const root='70000000-0000-4000-8000-000000000001',authority={registrationId:'70000000-0000-4000-8000-000000000002',connectionVersion:'1'};
@@ -48,6 +55,7 @@ describe('server provisional applicability timelines (REG-003/008/009/010)',()=>
   it('never changes a server pending below-minimum result into passing as metres grow',()=>{
     const reply=fixture<QualificationPreview>('below-minimum-crossed-while-in-flight'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');
     const lease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0},current=structuredClone(input);current.actualDistance.metres='100001';current.evidenceRevision++;
+    expect(input.hardMode.final).toBe(false);expect(reply.rules.find(rule=>rule.rule==='hard_mode')?.result).toBe('unknown');
     expect(qualificationLeaseCue(lease,current,reply.securityScope,'12',1)).toBe('neutral');
   });
   it('keeps a server-issued proven partial-distance failure within its envelope and rejects unknown or changed support',()=>{

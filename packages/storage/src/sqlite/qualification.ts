@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import {createHash} from 'node:crypto';
-import {compareQualificationCounter, isQualificationCounter, isQualificationWire, qualificationDecisionJson, qualificationStoredViewJson, qualificationAssessmentJson, qualificationResultMatches, type QualificationResult, type QualificationSnapshot} from '../../../contracts/src/qualification';
+import {compareQualificationCounter, isQualificationCounter, isQualificationWire, qualificationDecisionJson, qualificationStoredViewJson, qualificationAssessmentJson, qualificationResultMatches, qualificationResultBatchMatches, type QualificationResult, type QualificationSnapshot} from '../../../contracts/src/qualification';
 import type {CommitOptions} from '../api';
 import {fail} from '../errors';
 import {isQualificationCommand, type QualificationAuthority, type QualificationCommands, type QualificationCommandName, type QualificationLocalSource, type QualificationStoredState} from '../qualification';
@@ -151,7 +151,7 @@ export function commitQualificationResults(conn: StorageConnection, input: Input
   const prepared=input.batch.items.map(result=>{const content=qualificationStoredViewJson(result),assessment=qualificationAssessmentJson(result);return {result,content,assessment,domain:qualificationDecisionJson(result),viewKey:digest(content),assessmentKey:assessment===null?null:digest(assessment),snapshotJson:canonicalUpload({...result,unchanged:false})};});
   return syncTransaction(conn, db => {
     if (!qualificationActive(db,input,input.securityScope)) return {saved:0,missingBase:[]};
-    if (input.batch.requestId!==input.request.requestId || input.batch.securityScope!==input.securityScope || input.batch.items.length!==input.request.items.length || new Set(input.request.items.map(item=>item.eventId)).size!==input.request.items.length || input.expectedHeads.length!==input.request.items.length || new Set(input.expectedHeads.map(item=>item.eventId)).size!==input.request.items.length) fail('INVALID_INPUT');
+    if (!qualificationResultBatchMatches(input.batch,input.request) || input.batch.securityScope!==input.securityScope || input.expectedHeads.length!==input.request.items.length || new Set(input.expectedHeads.map(item=>item.eventId)).size!==input.request.items.length) fail('INVALID_INPUT');
     let saved=0;const missingBase:string[]=[];
     for (const {result,content,domain,viewKey,assessment,assessmentKey,snapshotJson} of prepared) {
       const request=input.request.items.find(item=>item.eventId===result.requestedEventId);

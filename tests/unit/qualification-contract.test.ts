@@ -2,10 +2,14 @@ import {describe, expect, it} from 'vitest';
 import {readFileSync} from 'node:fs';
 import {compareQualificationCounter, compareQualificationDecimal, isQualificationDecimal, qualificationPercentage, isQualificationWire, qualificationResultMatches, qualificationDecisionJson, qualificationPresentationJson, type QualificationWire} from '../../packages/contracts/src/qualification';
 
-// Synthetic VTC-164 fixtures, pinned at be706fc329ed360e26e9a98c690fca8d30384101.
+// Synthetic VTC-164 fixtures, pinned at 504d0c9a7245cdc878806526d3d4615e7b74b5c5.
 const fixtures = JSON.parse(readFileSync('tests/fixtures/qualification/companion-v1.json','utf8')) as {name:string;schema:keyof QualificationWire;value:unknown}[];
 const results=fixtures.filter(f=>f.schema==='ResultBatch').flatMap(f=>(f.value as QualificationWire['ResultBatch']).items);
 describe('reviewed companion contract (REG-010)',()=>{
+  it('keeps terminal progress free of configured next-level targets',()=>{
+    const terminal=fixtures.filter(f=>f.schema==='Qualification').map(f=>f.value as QualificationWire['Qualification']).find(value=>value.progress?.terminal)!;
+    expect(terminal.progress).toMatchObject({conditions:{requiredTrips:null,requiredDistanceM:null},conditionsMet:false,nextLevel:null,remainingTrips:null,remainingDistanceM:null});
+  });
   for(const fixture of fixtures) it(fixture.name,()=>{
     expect(isQualificationWire(fixture.schema,fixture.value)).toBe(true);
     expect(isQualificationWire(fixture.schema,{...fixture.value as object,privateNotes:'forbidden'})).toBe(false);
