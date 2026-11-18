@@ -68,6 +68,12 @@ Mode detection checks one known TruckersMP module inside the game process when t
 
 Each trip row and detail header also shows the trip's job type: **Cargo market**, **Freight market**, **Quick job**, or **World of Trucks** (external contracts and the external market), with a **Special transport** badge for special transport jobs. This includes trips recorded by earlier versions.
 
+### My qualification
+
+After confirming a Dashboard account, **My qualification** appears in the sidebar. Choose ETS2 or ATS to see the server's current/next level, credited trips and actual distance, remaining conditions and five trip requirements. A token without companion rights needs explicit reissuance on Dashboard; upload-only tokens continue uploading normally. Temporary outages retain the same account's saved snapshots with their last update; disconnecting or switching owners removes the previous current view.
+
+The Lucide Medal in the overlay is a provisional current-trip check, separate from Hard Mode: check means the current server preview passes, cross means a proven mismatch, and grey means pending, unknown or stale. Journal details show the saved final server assessment and preserve previous explanations after corrections. Historical snapshots that were never saved are unavailable. Qualification, company acceptance, credited progress and promotion are separate; an upload receipt means none of them. Qualification decorations are excluded from JSON export.
+
 ## Updating
 
 ### In the application (ET-055)

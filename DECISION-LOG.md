@@ -902,3 +902,7 @@ On [ET-113](https://trello.com/c/45Hq80nV) the owner decided: the distance and f
 ## ET-112k junction waits for the profile proof — November 14, 2026
 
 On [ET-112](https://trello.com/c/bgIyf8U2) the owner approved fixing the partial recording caused by a reload's profile proof arriving after its first reading: proofs are never backdated; instead the engine-1 junction waits, at most 10 s, while the truck stays stationary at the same save point and the readings stay linked, and the first reading with the proof decides. See [logical completeness](docs/trips.md#trip-lifecycle-and-completeness).
+
+## ET-119 qualification progress and server results — November 18, 2026
+
+On [ET-119](https://trello.com/c/ecFxl641) the owner approved a connected-account My qualification page, the Lucide Medal icon in navigation, Journal and a provisional icon-only overlay indicator and retained server assessments in Journal/details. The concrete design adds SQLite schema 11, narrow get/refresh/subscribe qualification IPC and a separate bounded utility-process HTTP lane reusing protected account credentials. Server decisions and snapshots remain authoritative; upload receipts never establish qualification. Qualification decorations stay outside the existing export format.

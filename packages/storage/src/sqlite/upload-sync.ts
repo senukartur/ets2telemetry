@@ -180,10 +180,11 @@ export function getUploadSchedulingHints(conn:StorageConnection,input:{registrat
 }
 
 export function readRetainedUploadMaterializations(conn:StorageConnection):import('../upload-sync').RetainedUploadMaterializations {
-  const db=conn.reader(),pins=all(db,'SELECT pin_id,root_ref,state FROM upload_projection_pins ORDER BY pin_id LIMIT ?',MAX_UPLOAD_PROJECTION_PINS),items:import('../upload-sync').RetainedUploadMaterializations['items']=[];let unmanagedPins=0;
+  const db=conn.reader(),pins=all(db,'SELECT pin_id,root_ref,state FROM upload_projection_pins ORDER BY pin_id LIMIT ?',MAX_UPLOAD_PROJECTION_PINS),items:import('../upload-sync').RetainedUploadMaterializations['items']=[];let unmanagedPins=0,qualificationPins=0;
   for(const pin of pins){const work=get(db,'SELECT * FROM upload_materializations WHERE pin_id=?',pin.pin_id),binding=get(db,'SELECT registration_ref FROM upload_source_bindings WHERE root_ref=?',pin.root_ref);
+    if(!work&&Number(db.pragma('user_version',{simple:true}))>=11&&get(db,'SELECT 1 FROM qualification_refresh_state WHERE preview_pin=? AND registration_ref=?',pin.pin_id,binding?.registration_ref??null)){qualificationPins++;continue;}
     if(!work||work.pin_released!==0n||work.root_ref!==pin.root_ref||work.registration_ref!==binding?.registration_ref||!isUploadUuid(work.work_id)||!isUploadUuid(work.registration_ref)||!['preparing','folding','complete','frozen','equal','held','stale'].includes(String(work.state))||['folding','complete'].includes(String(work.state))&&pin.state!=='ready'){unmanagedPins++;continue;}
     items.push({workId:String(work.work_id),registrationId:String(work.registration_ref),state:work.state as typeof items[number]['state']});
   }
-  return {examined:pins.length,unmanagedPins,items};
+  return {examined:pins.length-qualificationPins,unmanagedPins,items};
 }

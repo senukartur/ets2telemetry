@@ -12,6 +12,7 @@ import {SCHEMA_V7} from './schema-v7';
 import {SCHEMA_V8} from './schema-v8';
 import {SCHEMA_V9} from './schema-v9';
 import {SCHEMA_V10} from './schema-v10';
+import {SCHEMA_V11} from './schema-v11';
 
 /** PRAGMA application_id of every database this application creates: the ASCII bytes 'ETS2'. */
 export const APPLICATION_ID = 0x45545332;
@@ -34,7 +35,8 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   // ET-112b2: membership decisions and per-session profile boundaries; additive, no backfill.
   Object.freeze({version: 9, name: '0009-membership-decisions', up(db: Database.Database) {for (const statement of SCHEMA_V9) db.exec(statement);}}),
   // ET-112c: the logical trip's distance and fuel engine and the engine-1 ledger flags; additive, no backfill.
-  Object.freeze({version: 10, name: '0010-quantity-engine', up(db: Database.Database) {for (const statement of SCHEMA_V10) db.exec(statement);}})
+  Object.freeze({version: 10, name: '0010-quantity-engine', up(db: Database.Database) {for (const statement of SCHEMA_V10) db.exec(statement);}}),
+  Object.freeze({version: 11, name: '0011-qualification-results', up(db: Database.Database) {for (const statement of SCHEMA_V11) db.exec(statement);}})
 ]);
 
 /** The schema version a migration list produces; versions must be 1, 2, ... without gaps. */

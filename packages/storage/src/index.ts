@@ -3,6 +3,8 @@ import type {TrailerBaselineInput} from './api';
 import type {UploadSyncCommands} from './upload-sync';
 import * as sync from './sqlite/upload-sync';
 import * as queue from './sqlite/upload-queue';
+import * as qualification from './sqlite/qualification';
+import type {QualificationCommands} from './qualification';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // In-process storage API (ET-013). It loads native better-sqlite3, so only the storage worker and the Electron-runtime
@@ -39,6 +41,17 @@ function attempt<T>(body: () => T): Result<T> {
 /** One open database. Commands run synchronously, one at a time, on its single verified writer connection. */
 export class Storage {
   constructor(private readonly connection: StorageConnection) {}
+  readQualificationPreviewPins(input:QualificationCommands['readQualificationPreviewPins']['args']['input']) {return attempt(()=>qualification.readQualificationPreviewPins(this.connection,input));}
+  beginQualificationPreview(input:QualificationCommands['beginQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.beginQualificationPreview(this.connection,input,options));}
+  advanceQualificationPreview(input:QualificationCommands['advanceQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.advanceQualificationPreview(this.connection,input,options));}
+  releaseQualificationPreview(input:QualificationCommands['releaseQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.releaseQualificationPreview(this.connection,input,options));}
+  readQualificationPreview(input:QualificationCommands['readQualificationPreview']['args']['input']) {return attempt(()=>qualification.readQualificationPreview(this.connection,input));}
+  readQualificationCache(input:QualificationCommands['readQualificationCache']['args']['input']) {return attempt(()=>qualification.readQualificationCache(this.connection,input));}
+  setQualificationScope(input:QualificationCommands['setQualificationScope']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.setQualificationScope(this.connection,input,options));}
+  saveQualificationCache(input:QualificationCommands['saveQualificationCache']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.saveQualificationCache(this.connection,input,options));}
+  pageQualificationSources(input:QualificationCommands['pageQualificationSources']['args']['input']) {return attempt(()=>qualification.pageQualificationSources(this.connection,input));}
+  commitQualificationResults(input:QualificationCommands['commitQualificationResults']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.commitQualificationResults(this.connection,input,options));}
+  saveQualificationRefresh(input:QualificationCommands['saveQualificationRefresh']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.saveQualificationRefresh(this.connection,input,options));}
   get summary(): OpenSummary { return this.connection.summary; }
   get closed(): boolean { return this.connection.closed; }
   upsertSession(input: {message: unknown}) { return attempt(() => writes.upsertSession(this.connection, input)); }

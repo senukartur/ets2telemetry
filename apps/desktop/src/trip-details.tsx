@@ -5,6 +5,7 @@ import type {JournalSyncRow} from '../../../packages/contracts/src/journal';
 // Relative imports, so that renderer tests load the page without the '@' alias (like journal-table.tsx).
 import {Badge} from './components/ui/badge';
 import {JournalSyncBadge} from './dashboard-upload/journal-sync';
+import {JournalQualificationResult} from './qualification/journal-result';
 import {journalSyncView} from './dashboard-upload/view';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
 import {t} from './i18n';
@@ -84,6 +85,7 @@ export function TripSite({row, language, options}: {row: JournalSyncRow; languag
 /** The side column of the trip detail. */
 export function TripSide({detail, side, site, language, options}: {detail: JournalTripDetail; side: JournalTripSideText; site: JournalSyncRow | null; language: AppLanguage; options?: JournalTextOptions}) {
   return <div className="yu-trip-side">
+    {site&&detail.qualification?<JournalQualificationResult row={detail.qualification.row} language={language}/>:null}
     <div data-testid="trip.hardMode"><HardModeTrip qualified={detail.trip.isHardMode} details={detail.trip.hardModeDetails} delivered={detail.trip.outcome === 'delivered'} language={language} /></div>
     <SideCard title={t('tr.money', undefined, language)} testId="trip.money">
       {side.money.rows.length ? <SideRows rows={side.money.rows} testId="trip.money" /> : null}

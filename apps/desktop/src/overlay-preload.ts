@@ -2,6 +2,7 @@ import {contextBridge, ipcRenderer} from 'electron';
 import type {OverlayBridge, OverlayPresentation} from '../../../packages/contracts/src';
 import {overlayGauges, overlayUrgency, staleOverlay} from './overlay-sections';
 import {sanitizeOverlayHardMode} from './overlay-hard-mode';
+import {sanitizeOverlayQualification} from './overlay-qualification';
 import {RecoveryBudget} from './recovery-budget';
 
 let listener: ((update: OverlayPresentation) => void) | undefined;
@@ -15,7 +16,7 @@ const unavailable: OverlayPresentation = {source: 'No game', origin: 'none', sta
 let current = unavailable;
 /** ET-070: a present Hard Mode indicator is replaced by its validated form; a missing one stays missing (not active). */
 function withHardMode(update: OverlayPresentation): OverlayPresentation {
-  return 'hardMode' in update ? {...update, hardMode: sanitizeOverlayHardMode(update.hardMode)} : update;
+  return {...update,...('hardMode'in update?{hardMode:sanitizeOverlayHardMode(update.hardMode)}:{}),...(update.qualification!==undefined?{qualification:sanitizeOverlayQualification(update.qualification)}:{})};
 }
 function close(): void {const previous = port; port = undefined; previous?.close(); clearTimeout(expiry); expiry = undefined;}
 // Stale keeps the layout and the section list, each section as an unavailable placeholder, so nothing old looks current.

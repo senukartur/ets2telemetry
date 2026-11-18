@@ -1,4 +1,5 @@
 import {UPLOAD_SYNC_NAMES,isUploadSyncName,isUploadSyncRequest,isUploadSyncResult,type UploadSyncCommands,type UploadSyncCommand} from '../upload-sync';
+import {QUALIFICATION_COMMAND_NAMES,isQualificationCommandName,isQualificationCommand,isQualificationCommandValue,type QualificationCommands} from '../qualification';
 import type {ProfileObservation} from '../../../telemetry-core/src/trips/continuation';
 import {isHardModeObservation, type HardModeObservation} from '../../../contracts/src/hard-mode';
 // Messages between the StorageClient in the telemetry service and the storage worker host (ET-013). Node-safe: plain
@@ -26,7 +27,7 @@ export interface WorkerOpenOptions {path: string; purpose: Purpose; backupsDirec
 
 /** Arguments and success value of every worker command; each mirrors the in-process Storage method of the same name. */
 /** Hard Mode freshness verdicts are private, frozen at service monotonic intake/offer; never worker UTC ages. */
-export interface StorageCommands extends UploadSyncCommands {
+export interface StorageCommands extends UploadSyncCommands, QualificationCommands {
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
   recordTrailerBaseline: {args: {input: {message: unknown}}; value: undefined};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
@@ -74,6 +75,7 @@ export interface StorageResponse {type: 'storage.response'; id: number; result: 
 export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: number; result: {ok: false; error: JournalAnswerError}; journalAnswerInvalid: true};
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
+  ...QUALIFICATION_COMMAND_NAMES,
   ...UPLOAD_SYNC_NAMES, 'recordTrailerBaseline', 'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'resolvePendingMemberships', 'committedThrough', 'getSession', 'getEvent',
   'listEvents', 'getTrip', 'deleteTrip', 'listTrips', 'listSamples', 'storageInfo', 'beginUploadProjection', 'advanceUploadProjection', 'getUploadProjectionPreparation', 'releaseUploadProjection', 'readUploadProjectionPage', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
@@ -150,6 +152,7 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   const id = message.id, command = message.command;
   if (!isRecord(command) || typeof command.name !== 'string' || !(COMMAND_NAMES as readonly string[]).includes(command.name)) return {ok: false, id};
   const name = command.name as CommandName;
+  if(isQualificationCommandName(name))return isQualificationCommand(command)?{ok:true,id,command:command as StorageCommand}:{ok:false,id};
   if(name==='recordTrailerBaseline' && (Object.keys(command).sort().join(',')!=='input,name'||!isRecord(command.input)||Object.keys(command.input).join(',')!=='message'))return {ok:false,id};
   if(isUploadSyncName(name))return isUploadSyncRequest(command)?{ok:true,id,command:command as StorageCommand}:{ok:false,id};
   if(name==='beginUploadProjection' && (Object.keys(command).sort().join(',')!=='input,name' || !isUploadProjectionBegin(command.input)))return {ok:false,id};
@@ -190,6 +193,7 @@ function isStorageError(value: unknown): value is StorageError {
  * storage core produced.
  */
 function validValue(command: StorageCommand, value: unknown): boolean {
+  if(isQualificationCommand(command))return isQualificationCommandValue(command,value);
   const name = command.name;
   if(isUploadSyncName(name))return isUploadSyncResult(command as UploadSyncCommand,value);
   switch (command.name) {

@@ -1,6 +1,10 @@
 import {APP_VERSION as version} from './app-version';
 import {DashboardUploadService} from './dashboard-upload/service';
 import {UploadHttp} from './dashboard-upload/http';
+import {QualificationService} from './qualification/service';
+import {QualificationHttp} from './qualification/http';
+import {isQualificationServiceRequest} from './qualification/service-contract';
+import {initialQualificationState} from '../../../packages/contracts/src/qualification';
 import {configuredDashboardOrigin} from './dashboard-upload/config';
 import {isUploadServiceRequest,isUploadServiceCancel,type UploadServiceReply} from './dashboard-upload/service-contract';
 import {ACTIVE_CHANNEL} from './channel';
@@ -146,6 +150,7 @@ function onV1State(state: V1SourceState): void {
   recordV1State(state);
   if (state.selection !== effectiveSelection) return;
   const current = state.fresh && state.observation && (state.status === 'connected' || state.status === 'paused') ? state.observation : undefined;
+  qualification?.observe(current?.source.origin==='game'?current:null);
   if (current?.source.origin === 'game' && !steamDiscoveryStarted) {steamDiscoveryStarted = true; void readSteamRoot({signal: hardModeLifetime.signal}).then(root => {if (root.kind === 'found') steamRoot = root.path;}, () => undefined);}
   profileObserver.select(current ? {gameClockId:current.state.gameTime.clockId,source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
   hardMode.select(current ? {gameClockId:current.state.gameTime.clockId,source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
@@ -171,6 +176,7 @@ const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HIST
   profileEvidence: () => profileObserver.evidence(), profileStatus: () => profileObserver.status(), hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onV1Healthy: target => coordinator.healthy(target), onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 let dashboardUpload:DashboardUploadService|undefined,uploadGeneration:string|undefined,uploadCommandPending=false;
+let qualification:QualificationService|undefined;
 const uploadOrigin=configuredDashboardOrigin(ACTIVE_CHANNEL);
 async function uploadCommand(incoming:unknown):Promise<void>{
   if(!isUploadServiceRequest(incoming))return;
@@ -184,7 +190,9 @@ async function uploadCommand(incoming:unknown):Promise<void>{
     for(let turn=0;!runtime.history.client&&!stopping&&!exiting&&turn<300;turn++)await new Promise<void>(resolve=>setTimeout(resolve,100));
     if(stopping||exiting)return;
     const client=runtime.history.client;if(!client){answer({ok:false,error:'STORAGE_UNAVAILABLE'});return;}
-    dashboardUpload??=new DashboardUploadService(client,new UploadHttp(uploadOrigin),uploadOrigin,version,status=>{if(!stopping&&!exiting)port.postMessage({type:'dashboard-upload:status',generation:uploadGeneration,status});});
+    qualification??=new QualificationService(client,new QualificationHttp(uploadOrigin),(state,connectionVersion)=>{if(!stopping&&!exiting)port.postMessage({type:'qualification:status',generation:uploadGeneration,connectionVersion,state});});
+    qualification.observe(lastV1?.fresh&&lastV1.observation?.source.origin==='game'?lastV1.observation:null);
+    dashboardUpload??=new DashboardUploadService(client,new UploadHttp(uploadOrigin),uploadOrigin,version,status=>{if(!stopping&&!exiting)port.postMessage({type:'dashboard-upload:status',generation:uploadGeneration,status});},undefined,qualification);
     answer(await dashboardUpload.execute(incoming.command));
   }catch{answer({ok:false,error:'STORAGE_UNAVAILABLE'});}finally{uploadCommandPending=false;}
 }
@@ -324,6 +332,10 @@ port.on('message', event => {
   if (command?.type === 'stop') stop();
   else if(command?.type==='dashboard-upload:cancel'){if(!stopping&&!exiting&&isUploadServiceCancel(incoming)&&command.generation===uploadGeneration)dashboardUpload?.cancel();}
   else if(command?.type==='dashboard-upload:request'){if(!stopping&&!exiting)void uploadCommand(incoming);}
+  else if(command?.type==='qualification:request'&&!stopping&&!exiting&&isQualificationServiceRequest(incoming)&&incoming.generation===uploadGeneration){
+    const state=qualification?(incoming.action==='get'?qualification.get(incoming.game):qualification.refresh(incoming.game)):initialQualificationState(incoming.game);
+    port.postMessage({type:'qualification:answer',id:incoming.id,generation:incoming.generation,connectionVersion:qualification?.connectionVersion??null,state});
+  }
   else if (command?.type === 'hard-mode-refresh') {void hardMode.refresh(true);}
   else if (command?.type === 'unsubscribe') subscriptions.close();
   else if (command?.type === 'subscribe' && event.ports.length === 1) subscriptions.attach(event.ports[0]);

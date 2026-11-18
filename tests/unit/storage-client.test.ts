@@ -836,6 +836,11 @@ it('strictly validates private Hard Mode freshness verdicts on observer and even
 });
 
 describe('REG-007/010/011/012 private upload synchronization boundary',()=>{
+  it('prioritizes recorder commits over qualification reads queued behind an existing bounded command',async()=>{
+    const f=fixture(),opening=f.client.open(OPEN),preview=f.client.readQualificationPreview({registrationId:P1,connectionVersion:'1',game:'ets2',pluginSessionId:P1}),recorder=f.client.commitEvent({message:{}});
+    f.ok(1,SUMMARY);await opening;expect(f.sent[1].command.name).toBe('commitEvent');f.ok(2,COMMITTED);await recorder;
+    expect(f.sent[2].command.name).toBe('readQualificationPreview');f.ok(3,{current:null});await expect(preview).resolves.toEqual({ok:true,value:{current:null}});
+  });
   const command={name:'claimUploadAttempt' as const,input:{attemptId:P1,registrationId:P1,expectedVersion:'1',mode:'live' as const,nowMs:0}};
   it('validates exact owner/CAS/class fields and bounded typed receipt bytes without accepting secrets or hooks',()=>{
     expect(isUploadSyncRequest(command)).toBe(true);

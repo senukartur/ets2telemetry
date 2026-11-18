@@ -1,4 +1,5 @@
 import type {TrailerBaselineInput} from './api';
+import {QUALIFICATION_COMMAND_NAMES,isQualificationCommand,type QualificationCommands} from './qualification';
 import {UPLOAD_SYNC_NAMES,isUploadSyncRequest,type UploadSyncCommands} from './upload-sync';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
@@ -73,10 +74,21 @@ interface InFlight extends Pending {id: number; timer: unknown}
 /** Whether an argument is an object whose fields can be copied; anything else is forwarded for the parser to refuse. */
 const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 const failure = (code: StorageErrorCode): {ok: false; error: StorageError} => ({ok: false, error: storageError(code)});
-const backgroundCommands = new Set<CommandName>([...UPLOAD_SYNC_NAMES,'beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection']);
+const backgroundCommands = new Set<CommandName>([...QUALIFICATION_COMMAND_NAMES,...UPLOAD_SYNC_NAMES,'beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection']);
 const isBackground = (name: CommandName) => backgroundCommands.has(name);
 
 export class StorageClient {
+  readQualificationPreviewPins(input:QualificationCommands['readQualificationPreviewPins']['args']['input']) {return isQualificationCommand({name:'readQualificationPreviewPins',input})?this.#request({name:'readQualificationPreviewPins',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  beginQualificationPreview(input:QualificationCommands['beginQualificationPreview']['args']['input']) {return isQualificationCommand({name:'beginQualificationPreview',input})?this.#request({name:'beginQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  advanceQualificationPreview(input:QualificationCommands['advanceQualificationPreview']['args']['input']) {return isQualificationCommand({name:'advanceQualificationPreview',input})?this.#request({name:'advanceQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  releaseQualificationPreview(input:QualificationCommands['releaseQualificationPreview']['args']['input']) {return isQualificationCommand({name:'releaseQualificationPreview',input})?this.#request({name:'releaseQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  readQualificationPreview(input:QualificationCommands['readQualificationPreview']['args']['input']) {return isQualificationCommand({name:'readQualificationPreview',input})?this.#request({name:'readQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  readQualificationCache(input:QualificationCommands['readQualificationCache']['args']['input']) {return isQualificationCommand({name:'readQualificationCache',input})?this.#request({name:'readQualificationCache',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  setQualificationScope(input:QualificationCommands['setQualificationScope']['args']['input']) {return isQualificationCommand({name:'setQualificationScope',input})?this.#request({name:'setQualificationScope',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  saveQualificationCache(input:QualificationCommands['saveQualificationCache']['args']['input']) {return isQualificationCommand({name:'saveQualificationCache',input})?this.#request({name:'saveQualificationCache',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  pageQualificationSources(input:QualificationCommands['pageQualificationSources']['args']['input']) {return isQualificationCommand({name:'pageQualificationSources',input})?this.#request({name:'pageQualificationSources',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  commitQualificationResults(input:QualificationCommands['commitQualificationResults']['args']['input']) {return isQualificationCommand({name:'commitQualificationResults',input})?this.#request({name:'commitQualificationResults',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  saveQualificationRefresh(input:QualificationCommands['saveQualificationRefresh']['args']['input']) {return isQualificationCommand({name:'saveQualificationRefresh',input})?this.#request({name:'saveQualificationRefresh',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
   #state: ClientState = 'running';
   #nextId = 1;
   #inFlight: InFlight | undefined;

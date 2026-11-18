@@ -671,7 +671,7 @@ it('re-sizes the edit strip for saved sections from the unchanged draft fraction
   overlay.moveStarted(); overlay.moved({x: -944, y: 100, width: 928, height: 109});
   window.setBounds.mockClear(); tracked.calls.length = 0;
   overlay.setLayout('strip', DEFAULT_OVERLAY_PLACEMENTS.strip, OVERLAY_PRESETS['driving-only']);
-  // Driving-only: free height 540 − 16 − 29 = 495, y = round(8 + 0.2217 × 495) = round(117.74) = 118.
+  // Driving-only with the qualification reserve: free height 540 − 16 − 56 = 468, y = round(8 + 0.2217 × 468) = round(111.76) = 112.
   expect(window.setBounds.mock.calls).toEqual([[{x: -944, y: 112, width: 928, height: 56}]]);
   expect(tracked.calls).toEqual(['setBounds', 'setAlwaysOnTop', 'moveTop']);
   expect(overlay.editState()).toEqual({active: true, layout: 'strip', scale: 1, placement: 'visible'});
@@ -679,7 +679,8 @@ it('re-sizes the edit strip for saved sections from the unchanged draft fraction
   expect(overlay.endEdit()).toEqual({x: 0.5, y: 0.2217, scale: 1});
 });
 it('reports an edit strip that no longer fits its saved sections as too large and hides it before click-through', () => {
-  // A 1920 x 160 physical client is 960 x 80 DIP: driving-only needs 29 + 16 = 45, every section (ET-071) 109 + 16 = 125.
+  // A 1920 x 160 physical client is 960 x 80 DIP: driving-only with the qualification reserve needs 56 + 16 = 72,
+  // every section (ET-071) needs 109 + 16 = 125 and still cannot fit.
   const tracked = trackedController('strip', undefined, OVERLAY_PRESETS['driving-only']), {overlay, window} = tracked;
   tracked.metadata.height = 160; editing(tracked);
   expect(window.setBounds).toHaveBeenLastCalledWith({x: -944, y: 8, width: 928, height: 56});

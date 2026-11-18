@@ -70,7 +70,7 @@ export function AccountScreen({state, controller, language, onOpenJournal}: {sta
     <CardHeader className="yu-account-header"><CardTitle><h2 ref={confirmation} tabIndex={-1} id="upload-confirm-heading">{text('confirmTitle')}</h2></CardTitle>{phase}</CardHeader>
     <CardContent>
       <Owner owner={status.owner} fields={['origin', 'accountId', 'companyId', 'identityEpoch']} language={language} />
-      <p>{text('scope')}</p><div className="yu-account-notice" data-tone="warn"><p>{text('binding')}</p><p>{text('historyDriver')}</p></div>
+      <p>{text('scope')}</p><p>{text('companionScope')}</p><div className="yu-account-notice" data-tone="warn"><p>{text('binding')}</p><p>{text('historyDriver')}</p></div>
       <p className="yu-account-preview" data-testid="account.preview">{text('preview')}</p>
       <div className="yu-account-actions"><Button onClick={() => {clear(); void controller.confirm();}} disabled={view.busy} data-testid="account.confirm"><ShieldCheck aria-hidden="true" />{text('confirm')}</Button><Button variant="outline" onClick={cancel} disabled={view.busy} data-testid="account.cancel">{text('cancel')}</Button></div>
       {commit}

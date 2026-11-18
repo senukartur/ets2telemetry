@@ -4,6 +4,7 @@ import {UploadScheduler,stored,type UploadStorage,type UploadClock} from './sche
 import {advertisedEventMinor,connectionResponse,registrationResponse,responseFailure,type UploadLimits} from './control-response';
 import type {UploadTransport,UploadHttpResult} from './http';
 import type {UploadServiceCommand,UploadServiceReply} from './service-contract';
+interface CompanionLifecycle {activate(configuration:import('../../../../packages/storage/src/upload-sync').UploadActiveConfiguration,token:string):Promise<void>;retire():Promise<void>;stop():Promise<void>;uploaded():void}
 const failure=(error:DashboardUploadError):UploadServiceReply=>({ok:false,error});
 function controlFailure(result:UploadHttpResult):DashboardUploadError {
   if(!result.ok)return result.statusCode===401||result.statusCode===403?'AUTHENTICATION':result.code==='TIMEOUT'?'TIMEOUT':result.code==='ABORTED'?'CANCELLED':result.code==='NETWORK'?'NETWORK':'CONFIGURATION';
@@ -12,7 +13,7 @@ function controlFailure(result:UploadHttpResult):DashboardUploadError {
 /** Trusted utility composition; this object is never constructed when the channel origin is absent. */
 export class DashboardUploadService {
   readonly scheduler:UploadScheduler;#control=false;#stopped=false;#startup:Promise<void>;#abort=new AbortController();#controlEpoch=0;
-  constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,private readonly origin:string,producerVersion:string,publish:(status:DashboardUploadStatus)=>void,time?:UploadClock){this.scheduler=new UploadScheduler(db,http,origin,producerVersion,publish,time);this.#startup=stored(db.getUploadConfiguration()).then(async configuration=>{if(configuration.purpose!=='history')throw Error('RECONCILIATION');await stored(db.recoverUploadAttempt({startup:true}));});this.#startup.catch(()=>undefined);}
+  constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,private readonly origin:string,producerVersion:string,publish:(status:DashboardUploadStatus)=>void,time?:UploadClock,private readonly companion?:CompanionLifecycle){this.scheduler=new UploadScheduler(db,http,origin,producerVersion,publish,time,()=>this.companion?.uploaded());this.#startup=stored(db.getUploadConfiguration()).then(async configuration=>{if(configuration.purpose!=='history')throw Error('RECONCILIATION');await stored(db.recoverUploadAttempt({startup:true}));});this.#startup.catch(()=>undefined);}
   /** The body stays the v1.0 control contract; the event minor for new freezes comes from the response header only. */
   async #verify(token:string):Promise<{owner:DashboardOwner;limits:UploadLimits;contractMinor:0|1|2}|DashboardUploadError>{
     const result=await this.http.request('connection',token,undefined,this.#abort.signal);if(!result.ok||result.statusCode!==200)return controlFailure(result);
@@ -20,7 +21,7 @@ export class DashboardUploadService {
   }
   async execute(command:UploadServiceCommand):Promise<UploadServiceReply>{
     if(this.#stopped)return failure('RETIRED');if(this.#control)return failure('BUSY');this.#control=true;const epoch=this.#controlEpoch;
-    try{await this.#startup;if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');await this.scheduler.suspend();if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');this.#abort=new AbortController();
+    try{await this.#startup;if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');void this.companion?.retire().catch(()=>undefined);await this.scheduler.suspend();if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');this.#abort=new AbortController();
       const configuration=await stored(this.db.getUploadConfiguration());
       if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');
       if(configuration.purpose!=='history')return failure('RECONCILIATION');
@@ -28,6 +29,11 @@ export class DashboardUploadService {
       if(command.action==='configuration')return {ok:true,value:{kind:'configuration',configuration}};
       if(command.action==='disconnect'){const connection=await stored(this.db.disconnectUploadOwner({expectedVersion:command.expectedVersion}));if(this.#stopped||epoch!==this.#controlEpoch)return failure('RETIRED');return {ok:true,value:{kind:'connection',connection}};}
       if(configuration.status!=='ready')return failure('RECONCILIATION');
+      if(command.action==='activate'){
+        if(!configuration.registration||configuration.version!==command.version||configuration.credentialGeneration!==command.generation)return failure('RECONCILIATION');
+        // Protected committed credentials also authorize scoped offline recovery. Companion admission remains independent.
+        void this.companion?.activate(configuration,command.token).catch(()=>undefined);
+      }
       if(command.action==='confirm'){const connection=await stored(this.db.confirmUploadOwner({confirmationId:command.confirmationId,registrationId:command.registrationId,credentialGeneration:command.credentialGeneration,expectedVersion:command.expectedVersion}));return {ok:true,value:{kind:'connection',connection}};}
       const verified=await this.#verify(command.token);if(typeof verified==='string')return failure(verified);if(this.#stopped||this.#abort.signal.aborted||epoch!==this.#controlEpoch)return failure('RETIRED');
       // The private reply carries exactly the owner and limits; the event minor stays inside the service.
@@ -51,6 +57,6 @@ export class DashboardUploadService {
       return {ok:true,value:{kind:'prepared',owner:verified.owner,registration,expectedVersion:configuration.version}};
     }catch{return failure(this.#stopped||epoch!==this.#controlEpoch?'RETIRED':'STORAGE_UNAVAILABLE');}finally{this.#control=false;}
   }
-  stop():Promise<void>{this.#stopped=true;this.#abort.abort();this.http.abort();return this.scheduler.stop().finally(()=>this.http.close());}
-  cancel():void {this.#controlEpoch++;this.#abort.abort();this.http.abort();void this.scheduler.suspend().catch(()=>undefined);}
+  stop():Promise<void>{this.#stopped=true;this.#abort.abort();this.http.abort();void this.companion?.stop().catch(()=>undefined);return this.scheduler.stop().finally(()=>this.http.close());}
+  cancel():void {this.#controlEpoch++;this.#abort.abort();this.http.abort();void this.companion?.retire().catch(()=>undefined);void this.scheduler.suspend().catch(()=>undefined);}
 }

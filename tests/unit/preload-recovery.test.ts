@@ -187,7 +187,7 @@ it('preserves the frozen narrow bridge and rejects privileged source values befo
     'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'listJournalTrips', 'openPluginFolder', 'refreshHardMode',
     'resetOverlayEditPlacement', 'retryPluginSetup', 'selectSource', 'setAutostart', 'setGearDisplay', 'setLanguage', 'setTheme', 'setOverlayBackgroundOpacity', 'setOverlayEditScale', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections', 'setPluginGameExcluded', 'setUnitProfile',
     'showPluginFile', 'subscribeAppState', 'subscribeLive', 'uninstallApplication', 'updateApplication', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit',
-    'getDashboardUploadContext', 'verifyDashboardUploadToken', 'confirmDashboardUpload', 'cancelDashboardUpload', 'disconnectDashboardUpload', 'subscribeDashboardUpload'].sort());
+    'getDashboardUploadContext', 'verifyDashboardUploadToken', 'confirmDashboardUpload', 'cancelDashboardUpload', 'disconnectDashboardUpload', 'subscribeDashboardUpload','getQualification','refreshQualification','subscribeQualification'].sort());
   await expect(bridge.selectSource('C:\\arbitrary.exe' as never)).rejects.toThrow('Invalid source selection');
   expect(ipc.invoke).not.toHaveBeenCalled();
   await bridge.selectSource('ats'); expect(ipc.invoke).toHaveBeenCalledWith('telemetry:select', 'ats');
@@ -232,7 +232,7 @@ it('appends the application state and exit methods after the original three brid
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip', 'deleteJournalTrip',
     'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode',
     'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit',
-    'getDashboardUploadContext', 'verifyDashboardUploadToken', 'confirmDashboardUpload', 'cancelDashboardUpload', 'disconnectDashboardUpload', 'subscribeDashboardUpload']);
+    'getDashboardUploadContext', 'verifyDashboardUploadToken', 'confirmDashboardUpload', 'cancelDashboardUpload', 'disconnectDashboardUpload', 'subscribeDashboardUpload','getQualification','refreshQualification','subscribeQualification']);
 });
 it('allows one application state listener, forwards pushed state and unsubscribes once', () => {
   const listener = vi.fn(); const stop = bridge.subscribeAppState(listener);

@@ -26,9 +26,10 @@ const serviceEvents = [{event: 'STORAGE_VERIFIED'}, ...['ingestion', 'capture', 
 const windows = [{url: 'file:///app/renderer/index.html', rendererPid: 100, sandbox: true, isolation: true, node: false, isDefaultSession: true, isOverlaySession: false, sessionPersistent: true, alwaysOnTop: false},
   {url: 'file:///app/renderer/index.html?view=overlay', rendererPid: 101, sandbox: true, isolation: true, node: false, isDefaultSession: false, isOverlaySession: true, sessionPersistent: false, alwaysOnTop: true}];
 const uploadScreens = ['no-token', 'confirmation', 'first-upload', 'offline', 'journal'];
-const uploadFlags = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation'];
+const uploadFlags = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation','qualification'];
 function uploadFixture() {
   return {origin: 'synthetic', passed: true, productionAuthority: false, tokenPresentInScreenshots: false, moduleGraphs: [8, 6, 2100],
+    qualificationShots:['en','ru'].flatMap(language=>[...['ready','offline','dark'].map(state=>`qualification-${language}-${state}.png`),...['strip','card','cluster','hud'].flatMap(layout=>['pass','fail','neutral'].map(cue=>`qualification-overlay-${language}-${layout}-${cue}.png`))]),
     flags: Object.fromEntries(uploadFlags.map(flag => [flag, true])),
     security: {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true, remoteFetchDenied: true, navigationDenied: true, newWindowDenied: true, permissionsDenied: true},
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => uploadScreens.map(screen => ({file: `ui-upload-${screen}-${language}-${size.width}x${size.height}.png`, screen, language, ...size, imageWidth: size.width, imageHeight: size.height, bytes: 600, tokenCleared: true}))))};
@@ -59,6 +60,8 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'configured fixture token screenshot', uiCase: 'shell', change: value => {value.uploadUi!.screenshots[0].tokenCleared = false;}},
     {name: 'configured fixture missing locale-size-state', uiCase: 'shell', change: value => {value.uploadUi!.screenshots.pop();}},
     {name: 'configured fixture duplicate screenshot', uiCase: 'shell', change: value => {value.uploadUi!.screenshots[0] = {...value.uploadUi!.screenshots[1]};}},
+    {name: 'qualification missing cue screenshot',uiCase:'shell',change:value=>{value.uploadUi!.qualificationShots.pop();}},
+    {name: 'qualification duplicate cue screenshot',uiCase:'shell',change:value=>{value.uploadUi!.qualificationShots[0]=value.uploadUi!.qualificationShots[1];}},
     {name: 'configured fixture node enabled', uiCase: 'shell', change: value => {value.uploadUi!.security.nodeIntegration = true;}},
     {name: 'configured fixture missing module graphs', uiCase: 'shell', change: value => {Reflect.deleteProperty(value.uploadUi!, 'moduleGraphs');}},
     {name: 'configured fixture unchecked renderer build', uiCase: 'shell', change: value => {value.uploadUi!.moduleGraphs.pop();}},
@@ -147,6 +150,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     for (const [index, variant] of variants.entries()) {
       const directory = path.join(resources.directory, String(index)); await mkdir(directory);
       const value = fixture(variant.uiCase);
+      for(const file of value.uploadUi?.qualificationShots??[])await writeFile(path.join(directory,file),png(1280,800));
       for (const [imageIndex, shot] of [...value.ui.screenshots, ...(value.uploadUi?.screenshots ?? [])].entries()) {
         if ((variant.omitFile && imageIndex === 0) || (variant.omitScreen === shot.screen && shot.language === 'ru')) continue;
         await writeFile(path.join(directory, shot.file), (variant.badPng && imageIndex === 0) || variant.badScreen === shot.screen ? Buffer.alloc(600) : png(shot.imageWidth, shot.imageHeight));

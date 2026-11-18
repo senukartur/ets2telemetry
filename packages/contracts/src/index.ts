@@ -44,8 +44,9 @@ export interface LiveTelemetry {
   v1?: LiveTelemetryV1;
 }
 import type {DashboardUploadBridge} from './dashboard-upload';
+import type {QualificationBridge} from './qualification';
 export type {DashboardUploadBridge,DashboardUploadStatus,DashboardUploadError,DashboardOwner} from './dashboard-upload';
-export interface DesktopBridge extends DashboardUploadBridge {
+export interface DesktopBridge extends DashboardUploadBridge, QualificationBridge {
   setNowPlayingEnabled(enabled: boolean): Promise<SettingsView>;
   setNowPlayingStyle(style: NowPlayingStyle): Promise<SettingsView>;
   setNowPlayingBackgroundOpacity(opacity: number): Promise<SettingsView>;
@@ -231,6 +232,8 @@ export type OverlayHardModeState = 'active' | 'inactive' | 'lost';
 export interface OverlayHardMode {state: OverlayHardModeState; passed?: number}
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {
+  /** Provisional server preview only; absence means no authorized connected qualification module. */
+  qualification?:import('./qualification').QualificationCue;
   /** Saved background opacity in whole percentages; absent legacy projections use 80%. */
   backgroundOpacity?: number;
   /** Opt-in diagnostic pixels only; no renderer command or game-protocol field. */
@@ -275,3 +278,4 @@ export * from './uninstall';
 export * from './hard-mode';
 
 export * from './now-playing';
+export * from './qualification';

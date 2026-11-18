@@ -20,7 +20,7 @@ export class UploadScheduler {
   #pending:{tripUuid:string;workId:string|null}[]=[];#sourceAfter:string|null=null;#receiptAfter:string|null=null;#sources=0;#delivered=0;#lastReceipt:number|null=null;
   #status:DashboardUploadStatus;#reconstruct=true;#passRunning=false;#stale=false;#nextRefresh=0;#progressGeneration=0;
   #paused:UploadStoreStatus['paused']=null;#hintsReconciliation=false;#held:UploadSchedulingHints['held']=null;#sourceHeld=false;#unmanaged=false;#scopeReady=false;#retryError:DashboardUploadError|null=null;#retryEventId:string|null=null;
-  constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,origin:string,private readonly producerVersion:string,private readonly publish:(status:DashboardUploadStatus)=>void,private readonly time:UploadClock=clock){this.#status=initialDashboardUploadStatus(origin);this.#rate=new UploadRate(60,10,time.now());}
+  constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,origin:string,private readonly producerVersion:string,private readonly publish:(status:DashboardUploadStatus)=>void,private readonly time:UploadClock=clock,private readonly onDurableUpload?:()=>void){this.#status=initialDashboardUploadStatus(origin);this.#rate=new UploadRate(60,10,time.now());}
   get status():DashboardUploadStatus{return structuredClone(this.#status);}
   async activate(configuration:UploadActiveConfiguration,token:string,limits:UploadLimits,contractMinor:0|1|2 = 0):Promise<void>{
     await this.suspend();if(this.#stopped||configuration.status!=='ready'||configuration.purpose!=='history'||!configuration.registration||!configuration.credentialGeneration)return;
@@ -72,7 +72,7 @@ export class UploadScheduler {
     if(result.ok&&[200,202].includes(result.statusCode)){
       // A complete known ACK must reach SQLite even after rotation/disconnect/stop.
       const receipt=await stored(this.db.commitUploadReceipt({attemptId:attempt.attemptId!,statusCode:result.statusCode,body:result.body}));
-      if(receipt.status==='delivered'||receipt.status==='duplicate'){this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#recount();this.#diagnostic(true);}return;}
+      if(receipt.status==='delivered'||receipt.status==='duplicate'){try{this.onDurableUpload?.();}catch{/* A refresh hint has no receipt or recording authority. */}this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#recount();this.#diagnostic(true);}return;}
     }
     if(!result.ok&&result.code==='ABORTED'){
       const recovered=await stored(this.db.recoverUploadAttempt({attemptId:attempt.attemptId!}));
