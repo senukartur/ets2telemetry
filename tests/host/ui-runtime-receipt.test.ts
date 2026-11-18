@@ -4,11 +4,11 @@ import path from 'node:path';
 import {temporaryResources} from '../shared/resources';
 import {receiptBatchTimeout, validateRuntimeReceipts} from '../shared/runtime-receipt-validator';
 
-const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'zero', 'missing', 'paused', 'stale'],
+const screens = {shell: ['live', 'hardMode', 'journal', 'settings', 'account'], live: ['current', 'long-cargo', 'zero', 'missing', 'paused', 'stale'],
   journal: ['list', 'mode-trip', 'weak-mode-trip', 'trip', 'intervals', 'timeline', 'samples'], settings: ['general', 'overlay', 'overlay-sections', 'plugin', 'about', 'data', 'save-error'], overlay: ['strip', 'card', 'cluster', 'hud']};
 const common = ['bilingual', 'bothSizes', 'security', 'offlineFonts', 'recordingIndicator', 'osPointerIsolated', 'hoverUnderDesktopCursor', 'versionLine', 'updateHidden'];
 const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmount', 'exitHintKeyboard', 'exitAvailable', 'noAccountPlaceholder', 'accountBuildConfiguration'],
-  live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'noTripPlaceholder', 'jobViewport', 'jobRowsAfterV1Gap', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak'],
+  live: ['numericGauge', 'unavailableVsZero', 'paused', 'staleDashes', 'rawNames', 'noTripPlaceholder', 'jobViewport', 'jobRowsAfterV1Gap', 'hmNamesReadable','fullWidthTelemetry','tankUnknownVsZero','mandatoryBreak','longCargoContained'],
   journal: ['syntheticBanner', 'pageReturn', 'chartBounded', 'rawTabs', 'noPlannedSearch', 'tripRegions', 'tableReadable','signedChart','syncHidden'], settings: ['allPanels', 'allSections', 'committedSave', 'sourceSelector', 'uninstallRefusal', 'refusedSave', 'readOnly', 'controlsKeyboard', 'lastEnabled', 'fontLicense', 'overlayVisibility', 'visibilityFailedSave', 'actionResult', 'overlayOpacity','opacityFailedSave','opacityReadOnly','overlayUnified', 'overlayEditing', 'overlayScroll', 'scaleControl', 'gearDisplay', 'gearDisplayFailedSave'],
   overlay: ['fourLayouts', 'transparent', 'contained', 'independentFont', 'missing', 'paused', 'staleDashes', 'heroSubsets','formatterProfiles', 'stableNumbers', 'opacityKeyboardFocus','opacityGestures','backgroundOpacityOverlay','clusterRpmContained', 'scaleRange', 'clusterSpeedArc', 'gearDisplayManual', 'gearboxLabels','overlayExamplePreview']};
 // ET-045e: six English 1280x800 overlay scale references, captured at their own window sizes, beside the 64 layout screenshots.
@@ -16,6 +16,7 @@ const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', '
 const previewScreens = ['settings-preview-strip', 'settings-preview-card', 'settings-preview-cluster', 'settings-preview-hud', 'settings-preview-narrow'];
 const previewNames = ['strip', 'card', 'cluster', 'hud', 'narrow-strip', 'large-strip', 'large-card'];
 const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state'];
+const previewSectionsStrip = ['speed', 'speed-limit', ...previewSections.filter(id => !['speed', 'speed-limit'].includes(id))];
 // ET-084: the card and the cluster draw the speed limit sign with speed, gear and RPM, so it comes before cruise control in their DOM.
 const previewSectionsHero = ['speed', 'gear', 'rpm', 'speed-limit', ...previewSections.filter(id => !['speed', 'gear', 'rpm', 'speed-limit'].includes(id))];
 type Case = keyof typeof screens;
@@ -40,7 +41,7 @@ function fixture(uiCase: Case) {
     flags: Object.fromEntries([...common, ...flags[uiCase]].map(flag => [flag, true])),
     overlayPreview: uiCase === 'overlay' ? ['en', 'ru'].flatMap(language => previewNames.map(name => ({language, viewportWidth: 1280, viewportHeight: 800, name,
       layout: name.endsWith('strip') ? 'strip' : name.endsWith('card') ? 'card' : name, scale: name.startsWith('large-') ? '3' : '1',
-      width: 210, height: 320, outside: [] as string[], fitsScene: true, sections: name.endsWith('card') || name === 'cluster' ? [...previewSectionsHero] : [...previewSections],
+      width: 210, height: 320, outside: [] as string[], fitsScene: true, sections: name.endsWith('card') || name === 'cluster' ? [...previewSectionsHero] : name.includes('strip') ? [...previewSectionsStrip] : [...previewSections],
       cardRows: name.endsWith('card') ? {count: 15, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
       ...size, screen, imageWidth: size.width, imageHeight: size.height, bytes: 600})))).concat(uiCase === 'settings' ? sizes.map(size => ({file: `ui-settings-read-only-en-${size.width}x${size.height}.png`, language: 'en', ...size, screen: 'read-only', imageWidth: size.width, imageHeight: size.height, bytes: 600})) : [])
@@ -108,6 +109,7 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'large preview uses saved scale', uiCase: 'overlay', change: value => {value.ui.overlayPreview.find(row => row.name === 'large-card')!.scale = '1';}},
     {name: 'preview sections omitted', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections.pop();}},
     {name: 'preview sections reordered', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections.reverse();}},
+    {name: 'Strip preview puts the limit after cruise control', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections = [...previewSections];}},
     {name: 'preview has escaped rows', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].outside = ['overlay-section-cargo'];}},
     {name: 'preview does not fit scene', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].fitsScene = false;}},
     {name: 'preview has no visible bounds', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].height = 0;}},

@@ -13,6 +13,12 @@ const MAX_ROW = '9223372036854775807', MAX_EVENT = '18446744073709551614';
 const LIST_CURSOR = 'l5:00000000-0000-4000-8000-000000000001:5:9:any.any.any.unknown.other';
 
 describe('main parses each journal invoke with its exact argument count and fixes the page size (J10)', () => {
+  it('copies bounded search and enumerated sorting through every query boundary', () => {
+    const query = {search: 'Berlin', sort: 'distance', direction: 'asc'};
+    expect(copyTripsQuery(query)).toEqual(query);
+    expect(parseJournalQuery({kind: 'trips', query})).toEqual({kind: 'trips', query});
+    for (const invalid of [{search: 'x'.repeat(121)}, {search: '\u0000'}, {sort: 'income'}, {direction: 'DESC'}]) expect(copyTripsQuery(invalid)).toBeUndefined();
+  });
   it.each<[string, Parameters<typeof journalRequest>[0], unknown[], JournalQuery]>([
     ['list-trips without a filter', 'trips', [{}], {kind: 'trips', query: {}}],
     ['list-trips with every filter', 'trips', [{cursor: MAX_ROW, game: 'ats', outcome: 'none', completeness: 'unknown'}],
@@ -121,6 +127,17 @@ const raw = (reply: unknown) => new Raw(reply);
 const LONG_NAME = 'é'.repeat(128) + 'x';
 /** A job market of 129 UTF-8 bytes, one over the protocol's ID_BYTES (ET-072). */
 const LONG_MARKET = 'é'.repeat(64) + 'x';
+
+describe('sorted trip replies', () => {
+  it('accepts SQLite UTF-8 cargo order and rejects reversed rows, including supplementary characters', () => {
+    const trips = ['\uE000', '🚚'].map((value, index) => ({...LIST_ITEM, tripUuid: index === 0 ? TRIP : OTHER_TRIP,
+      job: {...LIST_ITEM.job, cargo: {available: true, value}}}));
+    const query: JournalQuery = {kind: 'trips', query: {sort: 'cargo', direction: 'asc'}};
+    const reply = {ok: true, value: {...TRIP_PAGE, trips, nextCursor: null, totals: {trips: 2, recordedSeconds: 0}}};
+    expect(parseJournalReply(query, reply)).toEqual(reply);
+    expect(parseJournalReply(query, {...reply, value: {...reply.value, trips: [...trips].reverse()}})).toBeUndefined();
+  });
+});
 
 describe('the export header read (ET-016 PR-5)', () => {
   const DATABASE_UUID = 'f0000000-0000-4000-8000-000000000001', INFO = {database: {purpose: 'history', schemaVersion: 2}, databaseUuid: DATABASE_UUID};

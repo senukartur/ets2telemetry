@@ -270,6 +270,9 @@ describe('storage worker', () => {
     expect(ok(await client.journalTrips({mode: 'single-player', jobType: 'freight-market', game: 'ats', outcome: 'delivered'})).trips.map(trip => trip.tripUuid)).toEqual([T.zeroValues]);
     expect(ok(await client.journalTrips({mode: 'truckersmp'})).trips).toEqual([]);
     expect(ok(await client.journalTrips({jobType: 'quick-job'})).trips).toEqual([]);
+    expect(ok(await client.journalTrips({search: 'synthetic cancel cargo', sort: 'started', direction: 'asc'})).trips.map(trip => trip.tripUuid)).toEqual([T.cancelled]);
+    expect(ok(await client.journalTrips({search: 'synthetic cancel cargo', sort: 'started', includeNetIncome: true})).trips[0].netIncome).toBeNull();
+    expect(ok(await client.journalTrips({sort: 'started', direction: 'asc'})).trips.map(trip => trip.tripUuid)).toEqual([T.delivered, T.cancelled, T.differentJob, T.gapClosed, T.restartClosed, T.open, T.zeroValues, T.manySamples]);
     expect(ok(await client.journalTrips({cursor: '2'})).trips.map(trip => trip.tripUuid)).toEqual([T.delivered]);
     const detail = ok(await client.journalTrip(T.delivered));
     expect(detail.window).toEqual({known: true, pluginSessionId: ETS2_A, fromEventSeq: '4', throughEventSeq: '9', end: 'close-event'});

@@ -401,14 +401,14 @@ const localTime = utcMs => {
 /** T4: the UUID of the trip that the job configuration eventSeq 3 of the simulator's plugin session opened. */
 const journeyTripUuid = session => uuidOf(createHash('sha256').update(`ets2telemetry-trip-v1:${session}:3`, 'utf8').digest('hex'));
 /** The job market badge of trip@3's header (ET-072): the job of eventSeq 3 sends no job.market, so the header names it unavailable. */
-const JOURNEY_JOB_TYPE = `Job market: ${NOT_OBSERVED}`;
+const JOURNEY_JOB_TYPE = 'Job type unknown';
 /**
  * trip@3's list row: delivered and partial after the service restart, no city, cargo or market names; the Job type column
  * (ET-076) states only the reason. Its observed distance is the engine-1 ledger (ET-112c): the journey's frames carry no
  * fuel or position, so no sample is a complete anchor and the distance is not observed (the raw row keeps 0 m).
  */
 const journalRow = trip => ({trip, started: localTime(labelAt(30)), game: 'ETS2', route: JOURNEY_ROUTE, outcome: 'Delivered', completeness: 'Partial',
-  observed: NOT_OBSERVED, cargo: NOT_OBSERVED, jobType: NOT_OBSERVED});
+  observed: '—', cargo: NOT_OBSERVED, jobType: JOURNEY_JOB_TYPE});
 /**
  * trip@3's detail: every field of the summary. The job of eventSeq 3 has ids, 152 km planned, income 12345 and cargo not
  * loaded; job.delivered (8) has revenue 12000, 250 XP, damage 0.03125, 152.5 km and 300 game minutes; the truck has a

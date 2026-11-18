@@ -251,7 +251,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
           await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
         }
       }
-      // ET-110: the sync button chip is exactly as tall as a production badge chip (24 px) in both themes and at zoom.
+      // The sync button chip shares the standard 20 px badge height in both themes and at zoom.
       await page.setViewportSize({width: 1280, height: 800}); await page.getByTestId('fixture.account').click();
       for (const status of [connected, {...connected, progress: {...connected.progress, identityPendingSources: 0, heldSources: 0}}, {...connected, state: 'paused', error: 'AUTHENTICATION'}]) {
         await publish(status);
@@ -261,7 +261,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
           for (const zoom of [1, 1.5, 2]) {
             await application.evaluate(({BrowserWindow}, zoom) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(zoom), zoom);
             const heights = await page.evaluate(() => ['shell.status.sync', 'fixture.chip'].map(id => globalThis.document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().height));
-            assert.ok(Math.abs(heights[0] - 24) < 0.05 && Math.abs(heights[0] - heights[1]) < 0.05, `UPLOAD_SYNC_CHIP_HEIGHT_${language}_${colorScheme}_${zoom}_${heights.join('_')}`);
+            assert.ok(Math.abs(heights[0] - 20) < 0.05 && Math.abs(heights[0] - heights[1]) < 0.05, `UPLOAD_SYNC_CHIP_HEIGHT_${language}_${colorScheme}_${zoom}_${heights.join('_')}`);
           }
           await application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
         }

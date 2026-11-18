@@ -13,13 +13,18 @@ h1[tabindex="-1"]:focus { outline: none; }
 [data-slot="card-title"] { border-left: var(--yu-title-bar); padding-left: 10px; font-size: 15px; font-weight: 700; }
 [data-slot="card-title"] h1, [data-slot="card-title"] h2 { font-size: inherit; margin: 0; }
 [data-slot="card-content"] { padding: 14px 16px; }
-[data-slot="badge"] { border-radius: 6px; height: auto; min-height: 23px; padding: 2px 7px; max-width: 100%; }
-.badge-ok { color: var(--yu-ok-fg); background: var(--yu-ok-bg); border-color: var(--yu-ok-border); }
-.badge-warn { color: var(--yu-warn-fg); background: var(--yu-warn-bg); border-color: var(--yu-warn-border); }
-.badge-error { color: var(--yu-err-fg); background: var(--yu-err-bg); border-color: var(--yu-err-border); }
-.badge-neutral { color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); border-color: var(--yu-neutral-border); }
-.badge-ets2 { color: var(--yu-ets2-fg); background: var(--yu-ets2-bg); border-color: var(--yu-ets2-border); }
-.badge-ats { color: var(--yu-ats-fg); background: var(--yu-ats-bg); border-color: var(--yu-ats-border); }
+[data-slot="badge"] { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 5px; max-width: 100%; overflow: hidden; box-sizing: border-box; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: var(--yu-radius-badge); height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); max-height: var(--yu-control-h-xs); padding: 0 7px; font-size: 12px; font-weight: 500; line-height: 16px; white-space: nowrap; vertical-align: middle; }
+[data-slot="badge"] > svg { width: 13px !important; height: 13px !important; flex: none; margin: 0; stroke-width: 1.8; }
+[data-slot="badge"] > span:not(.sr-only):not(.yu-chip-dot) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.badge-ok { color: var(--yu-badge-ok-fg); background: var(--yu-badge-ok-bg); }
+.badge-warn { color: var(--yu-badge-warn-fg); background: var(--yu-badge-warn-bg); }
+.badge-error { color: var(--yu-badge-error-fg); background: var(--yu-badge-error-bg); }
+.badge-neutral { color: var(--yu-badge-neutral-fg); background: var(--yu-badge-neutral-bg); }
+.badge-info { color: var(--yu-badge-info-fg); background: var(--yu-badge-info-bg); }
+.badge-ets2 { color: var(--yu-badge-ets2-fg); background: var(--yu-badge-ets2-bg); }
+.badge-ats { color: var(--yu-badge-ats-fg); background: var(--yu-badge-ats-bg); }
+.yu-badge-label { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; max-width: 100%; vertical-align: middle; }
+.yu-badge-note { font-size: 11px; font-weight: 400; line-height: 1.5; color: var(--yu-text-muted); white-space: normal; overflow-wrap: anywhere; }
 .yu-app { height: 100vh; display: grid; grid-template-rows: 32px minmax(0,1fr); }
 .yu-titlebar { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 160px 0 10px; background: var(--yu-bg-chrome); color: var(--yu-text-secondary); border-bottom: 1px solid var(--yu-divider-chrome); font-size: 12px; app-region: drag; -webkit-app-region: drag; user-select: none; }
 .yu-body { display: grid; grid-template-columns: var(--yu-sidebar-w) minmax(0,1fr); min-height: 0; }
@@ -45,7 +50,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-recording:focus-visible { outline: 2px solid var(--yu-accent-light); outline-offset: 2px; }
 .yu-recording .yu-dot { width: 8px; height: 8px; }
 .yu-recording-label { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; line-height: 1.3; color: var(--yu-text); }
-.yu-recording-badge { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid var(--yu-neutral-border); background: var(--yu-neutral-bg); color: var(--yu-neutral-fg); }
 .yu-recording-info { flex: none; width: 14px; height: 14px; color: var(--yu-text-subtle); transition: color .15s; }
 .yu-recording:hover .yu-recording-info, .yu-recording:focus-visible .yu-recording-info, .yu-recording[data-state$="-open"] .yu-recording-info { color: var(--yu-text-secondary); }
 /* Recording dot: the colour follows recordingTone and the animation recordingMotion (desktop-ui-view.ts). */
@@ -80,7 +84,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-update-progress i { display: block; height: 100%; background: var(--yu-accent-light); }
 /* ET-055 UP11: the version line; a staging build adds a warn-toned badge. */
 .yu-version { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--yu-text-muted); font-variant-numeric: tabular-nums; margin: 0; padding: 2px 8px 4px; }
-.yu-version-badge { font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--yu-warn-border); background: var(--yu-warn-bg); color: var(--yu-warn-fg); }
 .yu-column { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .yu-exit { width: 100%; justify-content: flex-start; gap: 8px; height: 32px; padding: 0 8px; border: 1px solid var(--yu-divider-chrome); background: var(--yu-bg-app); color: var(--yu-text-secondary); font-size: 12px; font-weight: 500; }
 .yu-exit:not(:disabled):hover { background: var(--yu-neutral-bg); color: var(--yu-text); }
@@ -90,7 +93,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-breadcrumb [aria-current="page"] { color: var(--yu-text); font-weight: 500; }
 .yu-breadcrumb-separator { color: var(--yu-text-subtle); }
 .yu-status-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.yu-chip[data-slot="badge"] { height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; gap: 5px; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; }
 .yu-chip-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 /* Relative: visually hidden (sr-only) descriptions stay inside the scroll area instead of growing the window (ET-057). */
 .yu-content { position: relative; flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 16px 20px 24px; }
@@ -113,42 +115,74 @@ h1[tabindex="-1"]:focus { outline: none; }
 /* ET-076 trip list (mockup T3): the toolbar, then one card whose table container is the only horizontal scroller. */
 /* minmax(0, 1fr): a column sized by content would widen to the table's min-width, and the page would scroll sideways instead of the table card. */
 .yu-journal { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
-.yu-journal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
-.yu-journal-toolbar .yu-segmented button { min-height: 26px; height: 26px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--yu-text-secondary); font-size: 12px; }
+.yu-journal-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 6px; min-width: 0; }
+.yu-journal-toolbar .yu-segmented button { min-height: 26px; height: 26px; padding: 0 10px; border: 0; border-radius: 4px; background: transparent; color: var(--yu-text-secondary); font-size: 13px; }
 .yu-journal-toolbar .yu-segmented button[aria-pressed="true"] { background: var(--yu-segment-selected-bg); box-shadow: var(--yu-segment-selected-shadow); color: var(--yu-text-strong); font-weight: 500; }
 .yu-journal-toolbar .yu-segmented button[aria-pressed="false"]:hover { background: var(--yu-hover-bg); }
-.yu-journal-note { flex: 1 1 160px; min-width: 0; font-size: 12px; color: var(--yu-text-muted); text-align: right; }
-.yu-journal-card { min-width: 0; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
+.yu-journal-toolbar [data-slot="select-trigger"] { height: 30px; min-height: 30px; font-size: 13px; padding: 0 12px; border-color: var(--yu-border-strong); background: var(--yu-bg-app); }
+.yu-journal-note { margin-left: auto; min-width: 0; font-size: 12px; line-height: 18px; color: var(--yu-text-muted); }
+.yu-journal-search { display: flex; align-items: center; gap: 6px; width: 230px; height: 32px; padding: 0 9px; border: 1px solid var(--yu-border-strong); border-radius: 6px; color: var(--yu-text-muted); background: var(--yu-bg-app); }
+.yu-journal-search:focus-within { outline: 2px solid var(--yu-accent-text); outline-offset: 2px; }
+.yu-journal-search svg { width: 14px; height: 14px; flex: none; }
+.yu-journal-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--yu-text-strong); font-size: 13px; }
+.yu-journal-search input::placeholder { color: var(--yu-text-muted); }
+.yu-journal-filter { display: inline-flex; align-items: center; border: 1px dashed var(--yu-border-strong); border-radius: 6px; }
+.yu-journal-filter [data-slot="select-trigger"] { gap: 5px; padding: 0 8px; border: 0; background: transparent; box-shadow: none; }
+.yu-journal-filter [data-slot="select-trigger"] > [data-slot="select-icon"], .yu-journal-filter [data-slot="select-trigger"] > svg:last-child { display: none; }
+.yu-journal-filter[data-active="true"] { border-style: solid; border-color: var(--yu-accent-text); background: var(--yu-selected-bg); color: var(--yu-accent-text); }
+.yu-journal-filter[data-active="true"] [data-slot="select-trigger"] { color: inherit; }
+.yu-journal-filter > [data-slot="button"] { width: 26px; height: 28px; color: inherit; }
+.yu-journal-filter svg { width: 13px; height: 13px; }
+.yu-journal-sort { display: inline-flex; align-items: center; gap: 5px; min-height: 34px; color: inherit; cursor: pointer; }
+.yu-journal-sort svg { width: 12px; height: 12px; }
+.yu-journal-sort:focus-visible { outline: 2px solid var(--yu-accent-text); outline-offset: 2px; }
+.yu-journal-table th[aria-sort="ascending"], .yu-journal-table th[aria-sort="descending"] { color: var(--yu-text-strong); }
+.yu-journal-card[aria-busy="true"] { position: relative; }
+.yu-journal-card[aria-busy="true"]::before { content: ""; position: absolute; inset: 0 0 auto; height: 2px; background: var(--yu-accent-text); z-index: 1; }
+.yu-journal-card[aria-busy="true"] tbody { opacity: .5; pointer-events: none; }
+.yu-journal-skeleton { display: block; width: 75%; height: 12px; margin: 8px 0; border-radius: 3px; background: var(--yu-border); }
+.yu-journal-card { min-width: 0; overflow: hidden; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: var(--yu-bg-card); }
+.yu-journal-card > [data-slot="table-container"] { max-height: max(220px, calc(100dvh - 285px)); }
+.yu-journal-table thead { position: sticky; top: 0; z-index: 1; }
 .yu-journal-card > [role="status"], .yu-journal-card > [data-slot="alert"], .yu-journal-empty { margin: 0; padding: 12px; }
 .yu-journal-empty p { margin: 0; }
-.yu-journal-table { min-width: 1040px; font-size: 13px; font-variant-numeric: tabular-nums; }
-.yu-journal-table th { padding: 8px; background: var(--yu-bg-inset); color: var(--yu-text-muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
-.yu-journal-table td { padding: 7px 8px; vertical-align: top; overflow-wrap: normal; }
+.yu-journal-table { min-width: 1354px; table-layout: auto; font-size: 13px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.yu-journal-table[data-has-site="true"] { min-width: 1482px; }
+.yu-journal-col-started { width: 104px; }
+.yu-journal-col-game { width: 116px; }
+.yu-journal-col-cargo { width: 236px; }
+.yu-journal-col-job { width: 140px; }
+.yu-journal-col-route { width: 192px; }
+.yu-journal-col-distance { width: 90px; }
+.yu-journal-col-income { width: 130px; }
+.yu-journal-col-outcome { width: 124px; }
+.yu-journal-col-recording { width: 120px; }
+.yu-journal-col-site { width: 128px; }
+.yu-journal-col-open { width: 48px; }
+.yu-journal-table th { height: 34px; padding: 0 10px; background: var(--yu-bg-app); color: var(--yu-text-muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.yu-journal-table td { padding: 9px 10px; vertical-align: middle; white-space: normal; overflow-wrap: anywhere; }
+.yu-journal-table :is(th,td):nth-child(3) { min-width: 236px; }
+.yu-journal-table :is(th,td):nth-child(5) { min-width: 192px; }
 .yu-journal-table tbody tr { border-top: 1px solid var(--yu-divider); }
 .yu-journal-table tbody tr:hover td { background: var(--yu-selected-bg); }
 .yu-journal-table :is(th,td):first-child { padding-left: 12px; }
 .yu-journal-table :is(th,td):last-child { padding-right: 12px; text-align: right; }
-.yu-journal-table .yu-journal-num { text-align: right; white-space: nowrap; }
-.yu-journal-table small { display: block; font-size: 11px; color: var(--yu-text-muted); }
+.yu-journal-table .yu-journal-num { text-align: right; white-space: normal; }
+.yu-journal-table small { display: block; font-size: 11px; line-height: 1.5; color: var(--yu-text-muted); }
 .yu-journal-table [data-testid="journal-row-started"] { white-space: nowrap; color: var(--yu-text-secondary); }
-.yu-journal-table [data-testid="journal-row-cargo"] { font-weight: 500; color: var(--yu-text-strong); }
-.yu-journal-table [data-testid="journal-row-expected"] { font-size: 11px; color: var(--yu-text-muted); }
-.yu-journal-mode-line { display: flex; align-items: center; gap: 2px; margin-top: 2px; }
-.yu-journal-mode { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--yu-text-muted); }
-.yu-journal-mode svg { flex: none; width: 12px; height: 12px; }
-.yu-journal-mode[data-kind="truckersmp"], .yu-journal-mode[data-kind="convoy"] { color: var(--yu-accent-text); }
-.yu-journal-mode[data-variant="warn"] { color: var(--yu-warn-fg); }
-.yu-journal-mode[data-variant="ok"] { color: var(--yu-ok-fg); }
+.yu-journal-table [data-testid="journal-row-cargo"] { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-weight: 500; color: var(--yu-text-strong); }
+.yu-journal-table [data-testid="journal-row-expected"] { font-size: 12px; color: var(--yu-text-secondary); white-space: normal; }
+.yu-journal-table th .yu-label-hint { white-space: normal; }
+.yu-journal-mode-line { display: flex; align-items: center; gap: 5px; margin-top: 4px; }
 /* Table-specific 18 px size: overrides the base 22 px .yu-info-hint sizing through descendant specificity. */
 .yu-journal-table button.yu-info-hint { position: relative; width: 18px; height: 18px; min-width: 18px; min-height: 18px; max-width: 18px; max-height: 18px; }
 /* The pointer target stays 32 px high inside the cell's 7 px padding, so the row keeps its height and does not reach the next row. */
 .yu-journal-table button.yu-info-hint::after { content: ""; position: absolute; inset: -7px 0; }
-.yu-journal-job-world .yu-tag[data-slot="badge"] { color: var(--yu-accent-text); }
 .yu-journal-special { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 11px; color: var(--yu-warn-fg); }
 .yu-journal-special svg { flex: none; width: 12px; height: 12px; }
 .yu-journal-open[data-slot="button"] { color: var(--yu-text-muted); }
 .yu-journal-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--yu-border); font-size: 12px; color: var(--yu-text-muted); }
-.yu-journal-footer > span { flex: 1 1 200px; min-width: 0; }
+.yu-journal-footer > .yu-journal-sync-note { flex: 1 1 200px; min-width: 0; }
 .yu-topbar-actions { display: flex; align-items: center; gap: 6px; }
 .yu-topbar-actions:empty { display: none; }
 .yu-trip-section {background:var(--yu-bg-inset);border:1px solid var(--yu-border);border-radius:8px;padding:14px;min-width:0}
@@ -169,7 +203,6 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-dot[data-tone="error"] {--yu-dot-color:var(--yu-dot-err);background:var(--yu-dot-err)}
 .yu-dot[data-tone="accent"] {--yu-dot-color:var(--yu-accent-light);background:var(--yu-accent-light)}
 
-[data-testid="journal-row-outcome"] [data-slot="badge"] {white-space:normal;overflow-wrap:normal}
 [data-testid="journal-row-completeness"] {white-space:nowrap;overflow-wrap:normal}
 [data-testid="trip.hardMode"] {grid-column:1/-1}
 
@@ -184,10 +217,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-trip-back svg { width: 14px; height: 14px; }
 .yu-trip-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: start; }
 .yu-trip-heading { display: grid; gap: 6px; min-width: 0; }
-.yu-trip-titleline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.yu-trip-titleline { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; }
 .yu-trip-titleline h1 { margin: 0; font-size: var(--yu-text-screen); font-weight: 700; line-height: 1.3; color: var(--yu-text-strong); overflow-wrap: anywhere; }
-.yu-trip-chip[data-slot="badge"] { max-width: 100%; min-height: 0; height: auto; gap: 4px; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: normal; text-align: left; }
-.yu-trip-chip[data-slot="badge"] svg { width: 12px; height: 12px; flex: none; }
 .yu-trip-route { margin: 0; font-size: 12px; color: var(--yu-text-muted); overflow-wrap: anywhere; }
 .yu-trip-export { display: contents; }
 .yu-trip-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; max-width: 360px; }
@@ -295,7 +326,7 @@ h1[tabindex="-1"]:focus { outline: none; }
 .yu-segment-info {position:absolute;right:8px;top:50%;width:12px;height:12px;transform:translateY(-50%);color:var(--yu-text-muted);pointer-events:none;transition:color .15s}
 .yu-segment-option-hinted:hover .yu-segment-info, .yu-segment-option-hinted:has(:focus-visible) .yu-segment-info, .yu-segment-option-hinted[data-state$="-open"] .yu-segment-info {color:var(--yu-accent-light)}
 .yu-gear-examples {display:flex;flex-wrap:wrap;gap:4px}
-.yu-gear-chip {min-width:24px;padding:1px 6px;border:1px solid var(--yu-border);border-radius:var(--yu-radius-badge);background:var(--yu-bg-input);color:var(--yu-text);font-size:12px;text-align:center;font-variant-numeric:tabular-nums}
+.yu-gear-chip { min-width: 24px; font-variant-numeric: tabular-nums; }
 
 .yu-font-license summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
 .yu-font-license summary:focus-visible { outline: 2px solid var(--yu-accent); outline-offset: 2px; }
@@ -350,6 +381,7 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-overlay-settings .yu-layout-option {padding:6px;border-radius:var(--yu-radius-control)}
 .yu-overlay-settings .yu-layout-option label {padding:0;gap:4px;justify-items:center;font-size:11px;min-height:62px}
 .yu-overlay-settings .yu-layout-option>[role="radio"] {right:12px;bottom:8px;width:12px;height:12px;min-height:12px}
+.yu-overlay-settings .yu-layout-option [data-slot="radio-group-indicator"] {position:absolute;inset:0;width:100%;height:100%}
 .yu-overlay-settings .yu-layout-option:focus-within {outline:2px solid var(--yu-accent-light);outline-offset:2px}
 .yu-overlay-settings .yu-layout-preview {height:38px}
 .yu-overlay-card-heading {display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
@@ -365,8 +397,6 @@ button[aria-disabled="true"], [role="switch"][aria-disabled="true"] { cursor: no
 .yu-overlay-section-row label svg {flex:none;color:var(--yu-text-muted);width:14px;height:14px}
 .yu-overlay-settings button:not([role="radio"]):not([role="switch"]) {white-space:normal;height:auto}
 .yu-overlay-settings :is(button,[role="slider"]) {scroll-margin-block:8px}
-.yu-overlay-cruise-badge {border:1px solid var(--yu-ok-border);background:var(--yu-ok-bg);color:var(--yu-ok-fg);border-radius:var(--yu-radius-control);padding:3px 8px;font-size:11px}
-.yu-overlay-cruise-badge[data-state="off"],.yu-overlay-cruise-badge[data-state="unavailable"] {border-color:var(--yu-neutral-border);background:var(--yu-neutral-bg);color:var(--yu-neutral-fg)}
 .yu-overlay-scene {position:relative;isolation:isolate;min-height:190px;padding:18px 18px 36px;border:1px solid var(--yu-border);border-radius:var(--yu-radius-control);background:linear-gradient(180deg,var(--yu-bg-chrome),var(--yu-bg-input));overflow:hidden}
 .yu-overlay-scene::before {content:'';position:absolute;z-index:-1;inset:35% 0 0;background:linear-gradient(100deg,transparent 15%,var(--yu-neutral-bg) 15% 85%,transparent 85%);border-top:1px solid var(--yu-divider)}
 .yu-overlay-scene::after {content:'';position:absolute;z-index:-1;left:50%;top:45%;bottom:0;border-left:2px dashed var(--yu-border-input);transform:rotate(12deg)}
@@ -423,7 +453,6 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-account [data-slot="card-content"] { display: grid; gap: 12px; padding: 14px; }
 .yu-account :is(p,dl,ol,ul,h2,h3) { margin: 0; }
 .yu-account :is(p,dt,dd,strong,[data-slot="badge"]) { overflow-wrap: anywhere; }
-.yu-account [data-slot="badge"] { max-width: 100%; white-space: normal; border-radius: var(--yu-radius-badge); font-size: 11px; }
 .yu-account-owner { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 8px 16px; }
 .yu-account dt { color: var(--yu-text-muted); font-size: 11px; }
 .yu-account dd { margin: 3px 0 0; font-variant-numeric: tabular-nums; }
@@ -490,16 +519,11 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-account-problems > li[data-tone="warn"] > svg { color: var(--yu-warn-fg); }
 .yu-account-problem { font-weight: 500; color: var(--yu-text); }
 .yu-account-problems [data-variant="link"] { flex: none; padding: 0 4px; color: var(--yu-accent-text); }
-.yu-sync-chip[data-tone="ok"] { color: var(--yu-ok-fg); border-color: var(--yu-ok-border); background: var(--yu-ok-bg); }
-.yu-sync-chip[data-tone="warn"] { color: var(--yu-warn-fg); border-color: var(--yu-warn-border); background: var(--yu-warn-bg); }
-.yu-sync-chip[data-tone="error"] { color: var(--yu-err-fg); border-color: var(--yu-err-border); background: var(--yu-err-bg); }
 
-/* ET-074: the site sync chip is 24 px tall like the other chips; its hit area extends to 32 px. ET-110: the global button
+/* ET-074: the site sync chip is 20 px tall like the other badges; its hit area extends to 32 px. ET-110: the global button
    rules above exclude it, because their 32 px minimum outranked this rule and made the chip taller than the others. */
-.yu-sync-chip { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--yu-neutral-border); color: var(--yu-neutral-fg); background: var(--yu-neutral-bg); max-width: 100%; text-align: left; }
-.yu-sync-chip svg { width: 13px; height: 13px; flex: none; }
-.yu-topbar button.yu-sync-chip { position: relative; box-sizing: border-box; height: var(--yu-control-h-xs); min-height: var(--yu-control-h-xs); padding: 0 8px; line-height: 1; border-radius: var(--yu-radius-chip); font-size: 12px; font-weight: 500; white-space: nowrap; }
-.yu-topbar button.yu-sync-chip::after { content: ""; position: absolute; inset: -4px 0; }
+.yu-topbar button.yu-sync-chip { position: relative; overflow: visible; text-align: left; }
+.yu-topbar button.yu-sync-chip::after { content: ""; position: absolute; inset: -6px 0; }
 
 /* ET-074 Live page (mockup T1): one column with 12 px gaps that fills the content width (ET-110). */
 .yu-live { display: grid; gap: 12px; min-width: 0; }
@@ -562,7 +586,7 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-gear { flex: none; width: 120px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .yu-gear > .yu-muted { font-size: 12px; }
 .yu-gear > strong { min-width: 84px; padding: 6px 10px; border: 1px solid var(--yu-gear-border); border-radius: 8px; background: var(--yu-gear-bg); color: var(--yu-text-strong); font-size: 46px; line-height: 1; text-align: center; }
-.yu-gear > [data-slot="badge"] { max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; text-align: center; }
+.yu-gear > [data-slot="badge"] { text-align: center; }
 .yu-fuel { flex: 1 1 300px; min-width: 0; display: flex; align-items: stretch; gap: 16px; font-variant-numeric: tabular-nums; }
 .yu-tank { position: relative; flex: none; width: 22px; height: 150px; border: 1px solid var(--yu-border-strong); border-radius: 5px; overflow: hidden; background: var(--yu-bg-app); }
 /* The fill's percentage height resolves against this inset track, so 50% is half of the inner height. */
@@ -586,8 +610,7 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-live-card [data-slot="card-title"] { flex: 1; min-width: 0; border-left: 0; padding-left: 0; font-size: 13px; color: var(--yu-text-strong); }
 .yu-live-card > [data-slot="card-content"] { padding: 6px 14px 10px; }
 .yu-live-card > [data-slot="card-content"] > p { margin: 6px 0 2px; }
-.yu-tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.yu-tag[data-slot="badge"] { min-height: 0; padding: 1px 6px; border: 0; border-radius: 4px; background: var(--yu-bg-raised); color: var(--yu-text-secondary); font-size: 11px; font-weight: 500; }
+.yu-tags { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%; }
 .yu-live-card > .yu-job-body { display: flex; flex-direction: column; gap: 14px; padding: 12px 14px; }
 .yu-route { display: grid; grid-template-columns: minmax(0, max-content) minmax(32px, 1fr) minmax(0, max-content); align-items: center; gap: 14px; }
 .yu-route-end { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -602,7 +625,7 @@ progress.yu-route-line::-webkit-progress-bar { background: var(--yu-bg-raised); 
 progress.yu-route-line::-webkit-progress-value { border-radius: 3px; background: var(--yu-accent-light); }
 .yu-job-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
 .yu-job-metrics > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.yu-job-metrics span { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--yu-text-muted); }
+.yu-job-metrics > div > span:not(.yu-job-break) { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--yu-text-muted); }
 .yu-job-metrics strong { font-size: 15px; color: var(--yu-text-strong); }
 .yu-job-metrics small { font-size: 11px; color: var(--yu-text-muted); }
 .yu-job-metrics .yu-job-break { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: inherit; }
@@ -691,7 +714,6 @@ progress.yu-route-line::-webkit-progress-value { border-radius: 3px; background:
 .yu-plugin-target p { margin: 0; font-size: 12px; }
 .yu-plugin-target .yu-plugin-target-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .yu-plugin-folder { font-size: 12px; color: var(--yu-text-muted); }
-.yu-plugin-target-head [data-slot="badge"] { white-space: normal; }
 .yu-plugin-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .yu-plugin-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; }
 /* About: the brand block, the update check laid out in its row, the font licence row and the uninstall warning. */

@@ -141,7 +141,8 @@ it.each(['en', 'ru'] as const)('gives every option its own hint, as a tooltip an
     const tooltip = html.match(new RegExp(`<div data-testid="${id}-tooltip"[^>]*>.*?</div></div>`))?.[0] ?? '';
     expect(tooltip).toContain('data-side="bottom" data-align="end"');
     expect(tooltip).toContain(`<p class="font-medium">${escaped(copy.names[mode])}</p><p>${escaped(text)}</p>`);
-    expect(tooltip).toContain(`<p class="yu-gear-examples" aria-hidden="true">${EXAMPLES[game][mode].map(label => `<span class="yu-gear-chip">${label}</span>`).join('')}</p>`);
+    expect(tooltip).toContain('<p class="yu-gear-examples" aria-hidden="true">');
+    for (const label of EXAMPLES[game][mode]) expect(tooltip).toMatch(new RegExp(`<span[^>]*class="[^"]*yu-gear-chip[^"]*"[^>]*>${label}</span>`));
     expect(tooltip.includes(escaped(copy.fallback))).toBe(mode === 'manual');
     expect(tooltip).toContain(`<p class="text-xs text-muted-foreground">${escaped(copy.reverse)}</p>`);
     // The option, not the radio, is the trigger, and the icon only marks it.

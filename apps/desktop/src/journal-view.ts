@@ -8,7 +8,7 @@ import {JOURNAL_MARKET_KINDS, JOURNAL_TRIP_PAGE} from '../../../packages/contrac
 import type {Currency, EventRecord, Money, UnavailableReason} from '../../../packages/contracts/src/protocol-v1';
 import {resolveDisplayUnits, type DisplayUnits} from '../../../packages/telemetry-core/src/display-profile';
 import {
-  formatConsumption as coreFormatConsumption, formatDistance as coreFormatDistance, formatGear, formatMass as coreFormatMass, formatMoney as coreFormatMoney, formatPercent, formatPosition, formatRpm as coreFormatRpm,
+  formatConsumption as coreFormatConsumption, formatDistance as coreFormatDistance, formatGear, formatMass as coreFormatMass, formatMoney as coreFormatMoney, formatMoneyAmount, formatPercent, formatPosition, formatRpm as coreFormatRpm,
   formatSpeed as coreFormatSpeed, formatTruckAmount
 } from '../../../packages/telemetry-core/src/format';
 import {truckPowertrain} from '../../../packages/telemetry-core/src/truck-powertrain';
@@ -59,10 +59,10 @@ export interface JournalTripRow {
   mode: JournalModeBadge;
   /** The job type line; `specialTransport` is its label only when the game marked the job as special. */
   jobType: JournalJobLine; specialTransport: string | null;
-  tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; game: string; route: string; cargo: string;
+  tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; startedLabel: string; game: string; route: string; cargo: string;
   /** `Source company · destination company`. */
   companies: string;
-  /** `Delivered`, `Cancelled`, `In progress` or `No outcome — <why it closed>`; `outcomeKind` is the raw outcome for the badge's tone. */
+  /** Display outcome and badge tone. A recording superseded by another job is presented as cancelled. */
   outcome: string; outcomeKind: JournalOutcome;
   /** Recording completeness, always shown as its own badge. */
   completeness: JournalBadge;
@@ -77,7 +77,7 @@ export interface JournalTripRow {
 }
 export interface JournalListText {rows: JournalTripRow[]; empty: string | null; emptyNote: string | null; hasNext: boolean}
 export interface JournalDetailText {
-  mode: JournalModeBadge; jobType: JournalJobBadge; specialTransport: string | null; title: string; outcome: string; completeness: JournalBadge; sections: JournalSection[];
+  mode: JournalModeBadge; jobType: JournalJobBadge; specialTransport: string | null; title: string; outcome: string; outcomeKind: JournalOutcome; completeness: JournalBadge; sections: JournalSection[];
   /** The pending profile check chip, as on the list row; absent otherwise. */
   membership?: string;
 }
@@ -150,6 +150,19 @@ const name = (value: string) => value === '' ? JOURNAL_STRINGS.emptyText : value
 const nameOf = (input: Avail<string>) => show(input, name);
 
 const formatters = new Map<string, Intl.DateTimeFormat>();
+/** Compact journal date; the full local timestamp remains available on the table's time element. */
+function listTime(utcMs: number, timeZone?: string): string {
+  const date = new Date(utcMs);
+  if (!Number.isFinite(date.getTime())) return unavailable('invalid');
+  const key = `list:${timeZone ?? ''}`;
+  let format = formatters.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(language === 'ru' ? 'ru-RU' : 'en-GB', {timeZone, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23'});
+    formatters.set(key, format);
+  }
+  const parts = Object.fromEntries(format.formatToParts(date).map(part => [part.type, part.value]));
+  return `${parts.day} ${parts.month.replace(/\.$/, '')}, ${parts.hour}:${parts.minute}`;
+}
 /** A UTC label as local clock time, `YYYY-MM-DD HH:MM:SS`. The label is never used for real durations. */
 function localTime(utcMs: number, timeZone?: string): string {
   // A label outside the Date range (about ±8.64e15 ms) is an invalid reading, never a thrown RangeError.
@@ -170,6 +183,8 @@ const currencyOf = (currency: Currency): MoneyCurrency => currency.status === 's
 /** Exact raw digits with `CODE (SDK-documented)` or `(currency unknown)`; telemetry-core's formatMoney. */
 const moneyText = (money: {raw: string; sdkType: Money['sdkType']; currency: Currency}) =>
   formatMoney({kind: 'revenue', raw: money.raw, sdkType: money.sdkType, currency: currencyOf(money.currency)});
+/** Compact expected income: exact amount and currency, retaining the unknown-currency warning when needed. */
+const expectedMoneyText = (money: Money) => localizedMeasurement(formatMoneyAmount({kind: 'revenue', raw: money.raw, sdkType: money.sdkType, currency: currencyOf(money.currency)}), language);
 const distance = (units: DisplayUnits) => (meters: number) => formatDistance(meters, units.distance, 1);
 const amount = (units: DisplayUnits, powertrain: TruckPowertrain) => (value: number) => powertrain === 'unknown'
   ? unavailable('not-observed') : localizedMeasurement(formatTruckAmount(value, powertrain === 'electric' ? 'kWh' : units.volume, 1), language);
@@ -196,10 +211,13 @@ function journalBannerText(database: JournalDatabase | undefined): string | null
   return database ? JOURNAL_PURPOSE_TEXT[database.purpose] : null;
 }
 
+/** Display-only classification; the stored outcome and close reason remain available in the trip and its export. */
+const outcomeKind = (trip: Pick<JournalTripListItem, 'outcome' | 'closeReason'>): JournalOutcome =>
+  trip.outcome === 'none' && trip.closeReason === 'different-job' ? 'cancelled' : trip.outcome;
 /** `Delivered`, `Cancelled`, `In progress`, or `No outcome — <close reason>`; never inferred from completeness. */
 function outcomeText(trip: Pick<JournalTripListItem, 'outcome' | 'closeReason'>): string {
-  const text = JOURNAL_OUTCOME_TEXT[trip.outcome];
-  return trip.outcome === 'none' && trip.closeReason !== null ? `${text} — ${JOURNAL_CLOSE_REASON_TEXT[trip.closeReason]}` : text;
+  const kind = outcomeKind(trip), text = JOURNAL_OUTCOME_TEXT[kind];
+  return kind === 'none' && trip.closeReason !== null ? `${text} — ${JOURNAL_CLOSE_REASON_TEXT[trip.closeReason]}` : text;
 }
 function completenessBadge(completeness: JournalTripListItem['recordingCompleteness']): JournalBadge {
   return {text: JOURNAL_COMPLETENESS_TEXT[completeness], variant: completeness === 'complete' ? 'secondary' : completeness === 'partial' ? 'destructive' : 'outline'};
@@ -263,10 +281,10 @@ function tripRow(trip: JournalTripListItem, options: JournalTextOptions): Journa
   const plannedDistance = show(trip.job.plannedDistance, distance(units));
   return {
     mode: modeLine(trip.gameMode, trip.gameModeAmbiguous), jobType: jobLine(trip.job.market), specialTransport: specialTransport(trip.job.isSpecialJob), tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
-    companies: `${nameOf(trip.job.sourceCompany)} · ${nameOf(trip.job.destinationCompany)}`,
-    isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), outcomeKind: trip.outcome, completeness: completenessBadge(trip.recordingCompleteness),
-    plannedDistance, plannedOf: t('j.of', {v: plannedDistance}, language), observedDistance: show(trip.observedDistanceM, distance(units)),
-    expectedIncome: show(trip.job.expectedIncome, moneyText),
+    startedLabel: listTime(trip.startedUtcMs, options.timeZone), companies: `${nameOf(trip.job.sourceCompany)} · ${nameOf(trip.job.destinationCompany)}`,
+    isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), outcomeKind: outcomeKind(trip), completeness: completenessBadge(trip.recordingCompleteness),
+    plannedDistance, plannedOf: t('j.of', {v: plannedDistance}, language), observedDistance: trip.observedDistanceM.available ? distance(units)(trip.observedDistanceM.value) : '—',
+    expectedIncome: trip.netIncome ? expectedMoneyText({...trip.netIncome, sdkType: 's64'}) : '—',
     ...(trip.accounting?.distance.status === 'partial' ? {distancePartial: t('j.qty.partial', undefined, language)} : {}),
     ...(trip.membership === 'pending' ? {membership: t('j.membershipPending', undefined, language)} : {})
   };
@@ -347,7 +365,7 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
   const outcomeMoney = delivered ? field('revenue', show(delivered.revenue, moneyText), JOURNAL_NOTE_TEXT.revenue)
     : cancelled ? field('penalty', show(cancelled.penalty, moneyText), JOURNAL_NOTE_TEXT.penalty)
       : field('revenueOrPenalty', trip.outcome === 'open' ? JOURNAL_STRINGS.inProgress : JOURNAL_STRINGS.noOutcome);
-  sections.push(section('money', [field('expectedIncome', show(job.expectedIncome, moneyText), JOURNAL_NOTE_TEXT.expectedIncome), outcomeMoney, ...money.fields],
+  sections.push(section('money', [field('expectedIncome', show(job.expectedIncome, expectedMoneyText), JOURNAL_NOTE_TEXT.expectedIncome), outcomeMoney, ...money.fields],
     [...money.notes, JOURNAL_STRINGS.moneyNote]));
   const jobSource = detail.job.source === 'event' ? fill(JOURNAL_JOB_SOURCE_TEXT.event, {eventSeq: detail.job.eventSeq ?? ''})
     : fill(JOURNAL_JOB_SOURCE_TEXT.checkpoint, {eventSeq: detail.job.checkpointNextEventSeq ?? ''});
@@ -388,7 +406,7 @@ function journalDetailText(detail: JournalTripDetail, options: JournalTextOption
     field('sampleCount', String(samples.count)),
     ...(samples.firstUtcMs !== null && samples.lastUtcMs !== null ? [field('firstSample', localTime(samples.firstUtcMs, zone)), field('lastSample', localTime(samples.lastUtcMs, zone))] : [])
   ]));
-  return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(job.market), specialTransport: specialTransport(job.isSpecialJob), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), completeness: completenessBadge(trip.recordingCompleteness), sections,
+  return {mode: gameModeBadge(trip.gameMode, trip.gameModeAmbiguous), jobType: jobTypeBadge(job.market), specialTransport: specialTransport(job.isSpecialJob), title: `${JOURNAL_GAME_TEXT[trip.game]}: ${routeText(trip.job)}`, outcome: outcomeText(trip), outcomeKind: outcomeKind(trip), completeness: completenessBadge(trip.recordingCompleteness), sections,
     ...(trip.membership === 'pending' ? {membership: t('j.membershipPending', undefined, language)} : {})};
 }
 
@@ -654,10 +672,10 @@ export function journalTotalsText(totals: JournalTripTotals, language: AppLangua
   return `${t(key, {n: totals.trips}, language)} · ${t('j.hours', {h: shown}, language)}`;
 }
 /** `Showing 51–100`: the rows of the current page among the list. Null on an empty page. */
-export function journalRangeText(pageNumber: number, rows: number, language: AppLanguage = 'en'): string | null {
-  if (rows === 0) return null;
+export function journalRangeText(pageNumber: number, rows: number, language: AppLanguage = 'en', total?: number): string | null {
+  if (rows === 0) return total === undefined ? null : t('j.range', {from: 0, to: 0, n: total}, language);
   const from = (pageNumber - 1) * JOURNAL_TRIP_PAGE + 1;
-  return t('j.showing', {from, to: from + rows - 1}, language);
+  return total === undefined ? t('j.showing', {from, to: from + rows - 1}, language) : t('j.range', {from, to: from + rows - 1, n: total}, language);
 }
 
 /** Whether facts read for `owner` may still be shown: sync is configured, the owner is settled and it is the same owner. */

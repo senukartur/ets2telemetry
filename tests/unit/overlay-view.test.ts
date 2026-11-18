@@ -304,7 +304,8 @@ it('sets a sign only on the speed limit item and places it in the driving group,
   for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
     const view = overlayView({...base, layout, sections});
     expect(view.items.filter(item => item.sign).map(item => item.id), layout).toEqual(['speed-limit']);
-    expect(view.groups.map(group => [group.id, group.items.map(item => item.id)]), layout).toEqual([['driving', ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit']], ['fuel', ['fuel']]]);
+    expect(view.groups.map(group => [group.id, group.items.map(item => item.id)]), layout).toEqual([['driving', layout === 'strip'
+      ? ['speed', 'speed-limit', 'gear', 'rpm', 'cruise-control'] : ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit']], ['fuel', ['fuel']]]);
     // The sign never takes a side panel row, and the gauge still shows only speed, gear and RPM.
     expect(view.panel.map(item => item.id), layout).toEqual(['cruise-control', 'fuel']);
     const parts = overlayCardParts(view);

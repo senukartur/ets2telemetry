@@ -90,8 +90,9 @@ export function uploadView(ui: UploadUiState, language: AppLanguage) {
     sync
   };
 }
-export function journalSyncView(row: JournalSyncRow, language: AppLanguage): {text: string; tone: UploadTone; hint: string} {
-  return {text: t(`upload.row.${row.state}`, undefined, language),
-    tone: (row.state === 'sent' ? 'ok' : row.state === 'held' ? 'error' : ['queued', 'sending', 'pending', 'identity-pending'].includes(row.state) ? 'warn' : 'neutral'),
-    hint: t(row.reason ? `upload.rowReason.${row.reason}` : 'upload.assessed', undefined, language)};
+export function journalSyncView(row: JournalSyncRow, language: AppLanguage): {text: string; tone: UploadTone | 'info'; hint: string} {
+  const label = row.state === 'sent' ? 'sync.sent' : ['identity-pending', 'pending', 'queued'].includes(row.state) ? 'sync.queued' : `upload.row.${row.state}` as const;
+  return {text: t(label, undefined, language),
+    tone: row.state === 'sent' ? 'ok' : row.state === 'held' ? 'warn' : row.state === 'sending' ? 'info' : 'neutral',
+    hint: `${t(`upload.row.${row.state}`, undefined, language)}. ${t(row.reason ? `upload.rowReason.${row.reason}` : 'upload.assessed', undefined, language)}`};
 }

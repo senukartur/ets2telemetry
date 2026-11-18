@@ -1,6 +1,11 @@
 import type {OverlaySectionId, OverlaySections} from '../../../packages/contracts/src';
 import {OVERLAY_SECTION_IDS} from './overlay-sections';
 
+/** Strip-only order: keep the road sign immediately after speed, including when other sections are hidden. */
+export const STRIP_SECTION_IDS: readonly OverlaySectionId[] = Object.freeze([
+  'speed', 'speed-limit', ...OVERLAY_SECTION_IDS.filter(id => id !== 'speed' && id !== 'speed-limit')
+]);
+
 // The strip's reserved rows (ET-012c decisions S2-S4). Pure and renderer-safe: main sizes the overlay window from it and
 // the overlay renderer applies the same maximum widths, so every enabled section fits inside the window by construction.
 // All lengths are CSS pixels at zoom 1; renderer.css holds the matching strip rules (overlay-strip.test.ts checks them).
@@ -16,7 +21,8 @@ export const STRIP_COLUMN_GAP_CSS = 14;
 /** Tag slots reserved before the sections: Paused needs current data and No signal needs unavailable data, so at most
  * one of them shows, plus Synthetic or Replay. */
 export const STRIP_TAG_SLOTS = 2;
-export const STRIP_TAG_MAX_WIDTH_CSS = 96;
+/** Conservative width budget for the 20 px labels, including icon, gap, padding and border; not a measured exact width. */
+export const STRIP_TAG_MAX_WIDTH_CSS = 112;
 /**
  * The maximum border-box width of each strip section, including its icon, inner gaps and the 15 px divider padding of a
  * group's first item. A longer value ends in an ellipsis.
@@ -54,13 +60,13 @@ export function stripBorderWidthCss(zoom: number): number {
  * The number of rows the strip reserves for these enabled sections at this CSS width and zoom (the overlay document's
  * zoom factor, overlayZoom of the scale setting since ET-045e), or undefined when one item could not fit a row. The
  * inner width is floor(CSS width − 2 × border − 24), rounded down to stay conservative. It packs the worst case greedily
- * in DOM order, as flex-wrap collects lines: both tag slots, then every enabled section in canonical order and the Hard
+ * in DOM order, as flex-wrap collects lines: both tag slots, then every enabled section in strip order and the Hard
  * Mode indicator (ET-070), each at its maximum width with the column gap between neighbours. Real items are never wider
  * than their maximum and tags may be absent, so the rendered strip never needs more lines.
  */
 export function stripRowCount(sections: OverlaySections, cssWidth: number, zoom = 1): number | undefined {
   const inner = Math.floor(cssWidth - 2 * stripBorderWidthCss(zoom) - 2 * STRIP_PADDING_X_CSS);
-  const widths = [...Array.from({length: STRIP_TAG_SLOTS}, () => STRIP_TAG_MAX_WIDTH_CSS), ...OVERLAY_SECTION_IDS.filter(id => sections[id]).map(id => STRIP_ITEM_MAX_WIDTH_CSS[id]),
+  const widths = [...Array.from({length: STRIP_TAG_SLOTS}, () => STRIP_TAG_MAX_WIDTH_CSS), ...STRIP_SECTION_IDS.filter(id => sections[id]).map(id => STRIP_ITEM_MAX_WIDTH_CSS[id]),
     STRIP_HARD_MODE_MAX_WIDTH_CSS];
   if (!Number.isFinite(inner) || widths.some(width => width > inner)) return undefined;
   let rows = 1, line = 0;

@@ -75,6 +75,15 @@
   --yu-ets2-fg: #7DD3FC; --yu-ets2-bg: rgba(14, 165, 233, 0.12); --yu-ets2-border: rgba(56, 189, 248, 0.4);
   --yu-ats-fg: #C4B5FD;  --yu-ats-bg: rgba(139, 92, 246, 0.12);  --yu-ats-border: rgba(167, 139, 250, 0.4);
 
+  /* Shared badge palette from the labels mockup. */
+  --yu-badge-neutral-fg: #A3B1C6; --yu-badge-neutral-bg: #192335;
+  --yu-badge-ok-fg: #34D399; --yu-badge-ok-bg: #142E2B;
+  --yu-badge-warn-fg: #FBBF24; --yu-badge-warn-bg: #302A1C;
+  --yu-badge-error-fg: #FCA5A5; --yu-badge-error-bg: #33222D;
+  --yu-badge-info-fg: #7DB6FF; --yu-badge-info-bg: #1A2B46;
+  --yu-badge-ets2-fg: #7DD3FC; --yu-badge-ets2-bg: #152E40;
+  --yu-badge-ats-fg: #C4B5FD; --yu-badge-ats-bg: #28253E;
+
   /* Metric tiles; the Live instrument has its own compact gradient */
   --yu-instrument-gradient: linear-gradient(135deg, #13203A, #121A29 60%);
   --yu-tile-gradient: linear-gradient(135deg, rgba(37, 99, 235, 0.32), rgba(31, 41, 55, 0.95) 70%);
@@ -98,8 +107,8 @@
   /* Shape */
   --yu-radius-card: 8px;
   --yu-radius-control: 6px;
-  --yu-radius-chip: 6px;
-  --yu-radius-badge: 6px;
+  --yu-radius-chip: 4px;
+  --yu-radius-badge: 4px;
   --yu-title-bar: 3px solid var(--yu-accent);  /* left bar of every card title, 10px text indent */
 
   /* Type: Huninn, bundled with @fontsource/huninn (the app works offline; never load Google Fonts at runtime) */
@@ -113,7 +122,7 @@
 
   /* Size */
   --yu-control-h: 32px;     /* buttons, inputs, selects */
-  --yu-control-h-xs: 24px;  /* status chips; a pseudo-element keeps their hit area at 32px */
+  --yu-control-h-xs: 20px;  /* shadcn badge height; interactive chips keep a 32 px hit area */
   --yu-nav-item-h: 32px;
   --yu-sidebar-w: 216px;
   --yu-topbar-h: 48px;
@@ -212,6 +221,14 @@
     /* Games */
     --yu-ets2-fg: #0369A1; --yu-ets2-bg: rgba(2, 132, 199, 0.12);  --yu-ets2-border: rgba(2, 132, 199, 0.35);
     --yu-ats-fg: #6D28D9;  --yu-ats-bg: rgba(124, 58, 237, 0.12);  --yu-ats-border: rgba(124, 58, 237, 0.35);
+
+    --yu-badge-neutral-fg: #475B77; --yu-badge-neutral-bg: #EDF1F7;
+    --yu-badge-ok-fg: #006C4F; --yu-badge-ok-bg: #E3F3EC;
+    --yu-badge-warn-fg: #825800; --yu-badge-warn-bg: #FFF3D1;
+    --yu-badge-error-fg: #AE2A38; --yu-badge-error-bg: #FDEBEE;
+    --yu-badge-info-fg: #195CA7; --yu-badge-info-bg: #E8F1FF;
+    --yu-badge-ets2-fg: #036889; --yu-badge-ets2-bg: #E2F2FC;
+    --yu-badge-ats-fg: #6545A1; --yu-badge-ats-bg: #F0EBFB;
 
     /* Metric tiles */
     --yu-instrument-gradient: linear-gradient(135deg, #E6EEFD, #FFFFFF 60%);

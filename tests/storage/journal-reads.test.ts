@@ -7,6 +7,8 @@ import {projectEffects} from '../../packages/storage/src/sqlite/logical-trips';
 // test. Runs under npm run test:storage.
 import {createHash} from 'node:crypto';
 import Database from 'better-sqlite3';
+import {parseJournalReply} from '../../apps/desktop/src/journal-contract';
+import {netIncomeOf} from '../../packages/storage/src/sqlite/journal';
 import {afterAll, beforeAll, describe, expect, it} from 'vitest';
 import {JOURNAL_DETAIL_INTERVALS, JOURNAL_TRIP_PAGE, validateJournalTripDetail, type JournalTripListItem, type JournalTripsQuery} from '../../packages/contracts/src/journal';
 import type {Storage, TripEffect} from '../../packages/storage/src/index';
@@ -87,14 +89,14 @@ describe('the mode and job type filters and the first-page totals (ET-076; REG-0
   const market = (value: string) => ({market: {available: true as const, value}});
   /** The eight hand-written trips, in creation order: every mode (the journal still reads convoy, which the writer's type no longer offers), every market, an unavailable, an empty and an unlisted one. */
   const TRIPS: {n: number; game: 'ets2' | 'ats'; mode: Mode; values: Parameters<typeof job>[0]; outcome: Outcome; samples: number}[] = [
-    {n: 1, game: 'ets2', mode: 'single-player', values: market('freight_market'), outcome: 'delivered', samples: 3},
+    {n: 1, game: 'ets2', mode: 'single-player', values: {...market('freight_market'), expectedIncome: {available: true, value: {raw: '2000', sdkType: 'u64', currency: EUR}}}, outcome: 'delivered', samples: 3},
     {n: 2, game: 'ets2', mode: 'truckersmp', values: market('quick_job'), outcome: 'cancelled', samples: 2},
     {n: 3, game: 'ets2', mode: 'convoy', values: market('cargo_market'), outcome: 'open', samples: 1},
     {n: 4, game: 'ats', mode: 'unknown', values: market('external_contracts'), outcome: 'delivered', samples: 0},
     {n: 5, game: 'ats', mode: 'unknown', values: market('external_market'), outcome: 'cancelled', samples: 4},
     {n: 6, game: 'ats', mode: 'single-player', values: {market: {available: false, reason: 'not-supported'}}, outcome: 'delivered', samples: 0},
     {n: 7, game: 'ats', mode: 'truckersmp', values: market(''), outcome: 'open', samples: 0},
-    {n: 8, game: 'ets2', mode: 'unknown', values: market('foo_market'), outcome: 'delivered', samples: 1}
+    {n: 8, game: 'ets2', mode: 'unknown', values: {...market('foo_market'), cargo: text('Яблоки')}, outcome: 'delivered', samples: 1}
   ];
   /** 55 more World of Trucks trips with two samples each: the matches of that job type span two pages. */
   const PAGED = Array.from({length: 55}, (_, i) => 100 + i);
@@ -128,6 +130,7 @@ describe('the mode and job type filters and the first-page totals (ET-076; REG-0
     for (const trip of TRIPS) {
       openTrip(scripts[trip.game], uuid(trip.n), trip.mode, trip.values);
       addSamples(scripts[trip.game], uuid(trip.n), trip.samples);
+      if (trip.n === 1) ok(filtered.commitEvent({message: scripts.ets2.event({type: 'player.fined', offence: text('crash'), amount: {available: true, value: {raw: '400', sdkType: 's64', currency: EUR}}}), effects: [{kind: 'event.attribute', tripUuid: uuid(1), attribution: 'trip'}]}));
       closeTrip(scripts[trip.game], uuid(trip.n), trip.outcome);
     }
     for (const n of PAGED) {
@@ -159,7 +162,7 @@ describe('the mode and job type filters and the first-page totals (ET-076; REG-0
       const page = ok(filtered.journalTrips({...query, cursor}));
       pages.push(page.trips.length); trips.push(...page.trips.map(trip => trip.tripUuid));
       if (page.nextCursor === null) return {trips, pages};
-      expect(page.nextCursor).toMatch(/^l5:/);
+      expect(page.nextCursor).toMatch(query.sort || query.search ? /^l6:/ : /^l5:/);
       cursor = page.nextCursor;
     }
     throw new Error('Journal paging did not end within 10 pages');
@@ -196,6 +199,37 @@ describe('the mode and job type filters and the first-page totals (ET-076; REG-0
     // 8 trips, 55 paged trips and the continued one; 3 + 2 + 1 + 4 + 1 samples, 55 x 2, and 2 + 3.
     expect(ok(filtered.journalTrips()).totals).toEqual({trips: 64, recordedSeconds: 126});
   });
+  it.each(['asc', 'desc'] as const)('keeps tied dates stable across sorted cursor pages (%s)', direction => {
+    const result = readEvery({sort: 'started', direction, jobType: 'world-of-trucks'});
+    expect(result.pages).toEqual([50, 7]);
+    expect(result.trips).toEqual([...list(PAGED_NEWEST), uuid(5), uuid(4)]);
+  });
+  it('sorts cargo across pages, and searches Unicode case-insensitively', () => {
+    const result = readEvery({sort: 'cargo', direction: 'desc'});
+    expect(result.pages).toEqual([50, 14]);
+    expect(result.trips[0]).toBe(uuid(8));
+    expect(new Set(result.trips).size).toBe(64);
+    const found = ok(filtered.journalTrips({search: 'яБлОкИ', sort: 'cargo'}));
+    expect(found.trips.map(trip => trip.tripUuid)).toEqual([uuid(8)]);
+    expect(found.totals).toEqual({trips: 1, recordedSeconds: 1});
+    const distances = readEvery({sort: 'distance', direction: 'desc'});
+    expect(new Set(distances.trips).size).toBe(64);
+  });
+  it('subtracts attributed charges from the offer at the list snapshot', () => {
+    const result = ok(filtered.journalTrips({game: 'ets2', outcome: 'delivered', mode: 'single-player', includeNetIncome: true}));
+    expect(result.trips.find(trip => trip.tripUuid === uuid(1))?.netIncome).toEqual({raw: '1600', currency: EUR});
+    expect(ok(filtered.journalTrip(uuid(1))).job.values.expectedIncome).toEqual({available: true, value: {raw: '2000', sdkType: 'u64', currency: EUR}});
+  });
+  it('binds sorted cursors to search, filters, direction and database', () => {
+    const query = {sort: 'cargo' as const, direction: 'asc' as const};
+    const first = ok(filtered.journalTrips(query));
+    expect(first.totals).toEqual({trips: 64, recordedSeconds: 126});
+    expect(first.nextCursor).toMatch(/^l6:/);
+    for (const changed of [{search: 'no-match'}, {sort: 'distance' as const}, {direction: 'desc' as const}, {game: 'ats' as const}]) {
+      failed(filtered.journalTrips({...query, ...changed, cursor: first.nextCursor!}), 'INVALID_INPUT');
+    }
+    failed(storage.journalTrips({...query, cursor: first.nextCursor!}), 'INVALID_INPUT');
+  });
   it('pages more than 50 matches with l5 cursors, without loss or duplicates, and states the totals on the first page only', () => {
     const all = readEvery({jobType: 'world-of-trucks'});
     expect(all.pages).toEqual([50, 7]);
@@ -218,6 +252,62 @@ describe('the mode and job type filters and the first-page totals (ET-076; REG-0
 });
 
 describe('journal trip list (J5; REG-014)', () => {
+  it('returns net income only when requested, without altering the stored offer or detail', () => {
+    const query = {sort: 'started' as const, includeNetIncome: true as const};
+    const page = ok(storage.journalTrips(query));
+    expect(page.trips.every(trip => Object.hasOwn(trip, 'netIncome'))).toBe(true);
+    expect(parseJournalReply({kind: 'trips', query}, {ok: true, value: page})).toEqual({ok: true, value: page});
+    const zero = ok(storage.journalTrips({...query, game: 'ats', outcome: 'delivered'})).trips.find(trip => trip.tripUuid === T.zeroValues)!;
+    expect(zero.netIncome).toEqual({raw: '0', currency: USD});
+    expect(ok(storage.journalTrip(T.zeroValues)).trip).not.toHaveProperty('netIncome');
+  });
+  it.each([
+    ['2000', ['400', '35', '677'], '888'],
+    ['2000', ['2000'], '0'],
+    ['2000', ['3000'], '-1000'],
+    ['2000', ['-5'], '2005'],
+    ['9007199254740993', ['1'], '9007199254740992']
+  ])('subtracts recorded costs exactly from expected %s', (raw, costs, expected) => {
+    const totals = costs.map(value => ({category: 'fine' as const, sdkType: 's64' as const, currency: EUR, raw: value, count: 1}));
+    expect(netIncomeOf({available: true, value: {raw, sdkType: 'u64', currency: EUR}}, {incomplete: false, unavailable: [], totals})).toEqual({raw: expected, currency: EUR});
+  });
+  it('uses known costs even when the recording or expense total is incomplete', () => {
+    const income = {available: true as const, value: {raw: '4387', sdkType: 'u64' as const, currency: EUR}};
+    const fine = {category: 'fine' as const, sdkType: 's64' as const, currency: EUR, raw: '700', count: 2};
+    expect(netIncomeOf(income, {incomplete: true, totals: [], unavailable: [], retainedSubtotal: {totals: [fine], unavailable: []}})).toEqual({raw: '3687', currency: EUR});
+    expect(netIncomeOf(income, {incomplete: false, totals: [fine], unavailable: [{category: 'toll', reason: 'not-observed', count: 1}]})).toEqual({raw: '3687', currency: EUR});
+    expect(netIncomeOf(income, {incomplete: true, totals: [], unavailable: []})).toEqual({raw: '4387', currency: EUR});
+    expect(netIncomeOf(income, {incomplete: false, totals: [fine], unavailable: []}, {available: false, reason: 'not-observed'})).toEqual({raw: '3687', currency: EUR});
+  });
+  it('refuses unknown or incompatible currencies', () => {
+    const income = {available: true as const, value: {raw: '2000', sdkType: 'u64' as const, currency: EUR}};
+    const empty = {incomplete: false, totals: [], unavailable: []};
+    for (const currency of [USD, UNKNOWN_CURRENCY]) expect(netIncomeOf(income, {...empty, totals: [{category: 'ferry', sdkType: 's64', currency, raw: '5', count: 1}]})).toBeNull();
+    expect(netIncomeOf({...income, value: {...income.value, currency: UNKNOWN_CURRENCY}}, empty)).toBeNull();
+    expect(netIncomeOf(income, empty, {available: true, value: {raw: '300', sdkType: 's64', currency: EUR}})).toEqual({raw: '1700', currency: EUR});
+  });
+  it('passes full sorted pages through the main reply boundary, including unknown distances', () => {
+    for (const sort of ['started', 'cargo', 'distance'] as const) {
+      for (const direction of ['asc', 'desc'] as const) {
+        const query = {sort, direction}, value = ok(storage.journalTrips(query));
+        expect(parseJournalReply({kind: 'trips', query}, {ok: true, value})).toEqual({ok: true, value});
+      }
+    }
+  });
+  it('searches the entire history before paging and counts only matches', () => {
+    const query = {sort: 'started' as const, search: 'synthetic cancel cargo'};
+    const page = ok(storage.journalTrips(query));
+    expect(page.trips.map(trip => trip.tripUuid)).toEqual([T.cancelled]);
+    expect(page.totals?.trips).toBe(1);
+    expect(page.nextCursor).toBeNull();
+    expect(ok(storage.journalTrips({...query, search: '%_'})).trips).toEqual([]);
+  });
+  it.each(['asc', 'desc'] as const)('sorts distances globally using their displayed values (%s)', direction => {
+    const page = ok(storage.journalTrips({sort: 'distance', direction, outcome: 'delivered', game: 'ets2'}));
+    const ids = page.trips.map(trip => trip.tripUuid);
+    expect(ids[direction === 'desc' ? 0 : ids.length - 1]).toBe(T.delivered);
+    expect(new Set(ids).size).toBe(20);
+  });
   it('lists every trip newest first, 50 per page; a full page has a cursor and the last page has none', () => {
     const {pages, trips} = readAll({});
     expect(fillers).toHaveLength(110);

@@ -4,6 +4,7 @@ import {DEFAULT_OVERLAY_OPACITY, isOverlayOpacity} from './overlay-opacity';
 import {CRUISE_CONTROL_OFF} from '../../../packages/telemetry-core/src/cruise-control';
 import {SPEED_LIMIT_NONE} from '../../../packages/telemetry-core/src/speed-limit';
 import {cardHeroHeightCss} from './overlay-rows';
+import {STRIP_SECTION_IDS} from './overlay-strip';
 import {localizedMeasurement} from './screens/app-copy';
 import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
@@ -227,7 +228,10 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
       ...(available && section.ring !== undefined ? {ring: section.ring} : {})};
   });
   const byId = new Map(items.map(item => [item.id, item]));
-  const groups = OVERLAY_GROUPS.map(group => ({id: group.id, items: group.sections.flatMap(id => byId.get(id) ?? [])})).filter(group => group.items.length > 0);
+  const groups = OVERLAY_GROUPS.map(group => {
+    const order = presentation.layout === 'strip' ? STRIP_SECTION_IDS.filter(id => group.sections.includes(id)) : group.sections;
+    return {id: group.id, items: order.flatMap(id => byId.get(id) ?? [])};
+  }).filter(group => group.items.length > 0);
   const gaugeShown = items.some(item => CLUSTER_GAUGE_SECTIONS.has(item.id));
   const tags: OverlayTag[] = [];
   if (presentation.freshness === 'stale') tags.push({id: 'stale', testId: 'overlay-tag-stale', text: strings.overlayStale});

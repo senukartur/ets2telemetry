@@ -30,18 +30,18 @@ export function cardHeroHeightCss(parts: number, sign: boolean): number {
   return sign ? Math.max((parts + 1) * CARD_ROW_HEIGHT_CSS, CARD_SIGN_SLOT_CSS) : parts * CARD_ROW_HEIGHT_CSS;
 }
 
-/** Cluster side panel: a 1 px surface border, 8 px vertical padding, an 18 px tag row, then 18 px rows, each 3 px apart. */
+/** Cluster side panel: a 1 px surface border, 8 px vertical padding, a 20 px tag row, then 18 px rows, each 3 px apart. */
 export const CLUSTER_PANEL_BORDER_CSS = 1;
 export const CLUSTER_PANEL_PADDING_Y_CSS = 8;
 export const CLUSTER_PANEL_PADDING_X_CSS = 10;
-export const CLUSTER_TAG_ROW_HEIGHT_CSS = 18;
+export const CLUSTER_TAG_ROW_HEIGHT_CSS = 20;
 export const CLUSTER_ROW_GAP_CSS = 3;
 export const CLUSTER_ROW_HEIGHT_CSS = 18;
 /** The round gauge beside the panel; it never exceeds the cluster's 220 px nominal height. */
 export const CLUSTER_GAUGE_SIZE_CSS = 200;
 
-/** HUD: no surface, an 18 px tag row, then 22 px lines, each 2 px apart. */
-export const HUD_TAG_ROW_HEIGHT_CSS = 18;
+/** HUD: no surface, a 20 px tag row, then 22 px lines, each 2 px apart. */
+export const HUD_TAG_ROW_HEIGHT_CSS = 20;
 export const HUD_LINE_GAP_CSS = 2;
 export const HUD_LINE_HEIGHT_CSS = 22;
 
@@ -75,7 +75,7 @@ function cardSignSurplusCss(sections: OverlaySections): number {
  * The CSS height a layout's content needs inside its outer border: the header or tag row is always reserved, because
  * tags can appear at any time, plus one fixed row per counted row (the sections and the Hard Mode indicator). Card
  * 46 + 24 × rows (plus up to 50 px when the speed limit sign needs a taller hero than its rows, ET-084), cluster panel
- * 34 + 21 × rows, HUD 18 + 24 × rows. The cluster's gauge is covered by its nominal height, not by this reserve.
+ * 36 + 21 × rows, HUD 20 + 24 × rows. The cluster's gauge is covered by its nominal height, not by this reserve.
  */
 export function layoutContentCss(layout: RowLayout, sections: OverlaySections): number {
   const rows = layoutRowCount(layout, sections);
@@ -86,7 +86,7 @@ export function layoutContentCss(layout: RowLayout, sections: OverlaySections): 
 
 /**
  * The reserved CSS height at zoom 1, the outer border included, for n enabled sections (m outside the cluster's gauge) and
- * the Hard Mode row: card 48 + 24(n + 1) and the sign's surplus, cluster panel 36 + 21(m + 1), HUD 18 + 24(n + 1).
+ * the Hard Mode row: card 48 + 24(n + 1) and the sign's surplus, cluster panel 38 + 21(m + 1), HUD 20 + 24(n + 1).
  */
 export function layoutReservedCss(layout: RowLayout, sections: OverlaySections): number {
   return layoutContentCss(layout, sections) + 2 * LAYOUT_BORDER_CSS[layout];

@@ -18,11 +18,14 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-unit, .overlay-detail { flex: none; color: var(--yu-ov-muted); font-size: 12px; }
 .overlay-label { display: inline-flex; flex: none; align-items: center; gap: 4px; color: var(--yu-ov-text); font-size: 12px; white-space: nowrap; }
 .overlay-source { font-size: 12px; font-weight: 500; white-space: nowrap; }
-.overlay-tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; white-space: nowrap; background: rgba(255, 255, 255, .16); }
-.overlay-tag-paused { background: rgba(90, 68, 33, .95); }
-.overlay-tag-no-signal { background: rgba(91, 42, 39, .95); }
+.overlay-tag { display: inline-flex; align-items: center; gap: 5px; height: 20px; min-height: 20px; max-height: 20px; padding: 0 7px; border: 1px solid color-mix(in srgb, currentColor 28%, transparent); border-radius: 4px; font-size: 12px; line-height: 16px; font-weight: 500; white-space: nowrap; color: var(--yu-badge-neutral-fg, #A3B1C6); background: var(--yu-badge-neutral-bg, #192335); }
+.overlay-tag svg { width: 13px; height: 13px; stroke-width: 1.8; flex: none; }
+.overlay-tag .overlay-icon { color: inherit; }
+.overlay-tag-paused { color: var(--yu-badge-warn-fg, #FBBF24); background: var(--yu-badge-warn-bg, #302A1C); }
+.overlay-tag-no-signal { color: var(--yu-badge-error-fg, #FCA5A5); background: var(--yu-badge-error-bg, #33222D); }
 /* Not current: placeholders and icons are dimmed; there are no last-known values to dim (N6). */
 .overlay.is-dim .overlay-value, .overlay.is-dim .overlay-unit, .overlay.is-dim .overlay-icon, .overlay.is-dim .overlay-ring, .overlay.is-dim .overlay-sign, .overlay.is-dim .overlay-sign-glyph { opacity: .5; }
+.overlay.is-dim .overlay-tag .overlay-icon { opacity: 1; }
 
 /* Strip (ET-012c): 38 px rows at the top centre of a window main sized for the enabled sections (overlay-strip.ts, whose
    constants these rules must match). Items wrap whole onto as many rows as they need; each is capped by an inline
@@ -39,7 +42,7 @@ html:has(.overlay-body) { background: transparent; }
 }
 .overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
 .overlay-strip-row > * { height: 38px; }
-.overlay-strip-row > .overlay-tag { height: auto; align-self: center; }
+.overlay-strip-row > .overlay-tag { flex: none; align-self: center; }
 .overlay-strip .overlay-item { min-width: 0; overflow: hidden; }
 .overlay-strip .overlay-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .overlay-strip .overlay-tag { overflow: hidden; }
@@ -121,14 +124,14 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-gauge-rpm .overlay-unit { font-size: 11px; line-height: 1.2; }
 /* The panel takes its content height, which the window reserves; ET-012a's 200 px cap clipped its last rows. */
 .overlay-panel { display: flex; flex: 1 1 auto; flex-direction: column; gap: 3px; min-width: 0; max-width: 230px; padding: 8px 10px; overflow: hidden; font-size: 12px; }
-.overlay-panel-tags { display: flex; flex: none; flex-wrap: nowrap; align-items: center; gap: 6px; height: 18px; overflow: hidden; }
+.overlay-panel-tags { display: flex; flex: none; flex-wrap: nowrap; align-items: center; gap: 6px; height: 20px; overflow: hidden; }
 .overlay-panel-row { display: flex; flex: none; align-items: center; gap: 8px; min-width: 0; height: 18px; overflow: hidden; }
 .overlay-panel-row .overlay-value-group { flex: 1 1 auto; min-width: 0; overflow: hidden; }
 
 /* Minimal HUD: top left, shadowed text without a background. */
 .overlay-hud { align-items: flex-start; }
 .overlay-hud-lines { display: flex; flex-direction: column; gap: 2px; max-width: 100%; max-height: 100%; overflow: hidden; text-shadow: 0 1px 2px #000, 0 0 4px #000; }
-.overlay-hud-tags { display: flex; flex: none; align-items: center; gap: 6px; height: 18px; overflow: hidden; }
+.overlay-hud-tags { display: flex; flex: none; align-items: center; gap: 6px; height: 20px; overflow: hidden; }
 .overlay-hud-line { display: flex; flex: none; align-items: center; gap: 6px; min-width: 0; height: 22px; overflow: hidden; }
 .overlay-hud-line .overlay-value-group { min-width: 0; overflow: hidden; }
 .overlay-hud .overlay-icon { filter: drop-shadow(0 1px 1px #000); align-self: center; }

@@ -51,7 +51,7 @@ type PageKind = Extract<JournalQuery, {page: JournalPageQuery}>['kind'];
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const hasExactly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
-const TRIP_FILTERS = ['cursor', 'game', 'outcome', 'completeness', 'mode', 'jobType'] as const;
+const TRIP_FILTERS = ['cursor', 'game', 'outcome', 'completeness', 'mode', 'jobType', 'search', 'sort', 'direction', 'includeNetIncome'] as const;
 const PAGE_LIMITS: Readonly<Record<PageKind, readonly number[]>> = {events: JOURNAL_EVENT_LIMITS, intervals: JOURNAL_INTERVAL_LIMITS, samples: JOURNAL_SAMPLE_LIMITS};
 const pageCursor = (kind: PageKind, value: unknown) => isJournalSnapshotCursor(value) || (kind === 'events' ? isJournalEventCursor(value) : isJournalRowCursor(value));
 
@@ -214,14 +214,31 @@ function checkValue(query: JournalQuery, value: unknown): void {
     const page = validateJournalTripPage(value), {cursor, game, outcome, completeness, mode, jobType} = query.query;
     for (const trip of page.trips) {
       rowTexts(trip);
+      if (Boolean(query.query.includeNetIncome) !== Object.hasOwn(trip, 'netIncome')) bad();
       // The filter applies in SQL before the limit; a row that does not match it answers another request.
       if ((game !== undefined && trip.game !== game) || (outcome !== undefined && trip.outcome !== outcome) || (completeness !== undefined && trip.recordingCompleteness !== completeness)
         || (mode !== undefined && trip.gameMode.mode !== mode) || (jobType !== undefined && journalJobFilterOf(trip.job.market) !== jobType)) bad();
     }
     // Totals count the same filtered list, on the first page only: at least this page, and exactly it when no page follows.
     if (page.totals !== undefined && (cursor !== undefined || page.totals.trips < page.trips.length || (page.nextCursor === null && page.totals.trips !== page.trips.length))) bad();
+    const sorted = query.query.sort !== undefined || query.query.direction !== undefined || query.query.search !== undefined || cursor?.startsWith('l6:');
+    if (sorted) {
+      if (cursor !== undefined && !cursor.startsWith('l6:') || page.nextCursor !== null && !page.nextCursor.startsWith('l6:')) bad();
+      if (cursor?.startsWith('l6:') && page.nextCursor) {
+        const a = cursor.split(':'), b = page.nextCursor.split(':');
+        if (a[1] !== b[1] || a[2] !== b[2] || a[4] !== b[4] || cursor === page.nextCursor) bad();
+      }
+      // SQLite BINARY compares UTF-8 bytes; JavaScript's UTF-16 order differs for supplementary characters.
+      const cargoKey = (value: string) => Array.from(new TextEncoder().encode(value.toLocaleLowerCase('en-US')), byte => byte.toString(16).padStart(2, '0')).join('');
+      const key = (trip: JournalTripListItem) => query.query.sort === 'cargo' ? cargoKey(trip.job.cargo.available ? trip.job.cargo.value : '')
+        : query.query.sort === 'distance' ? (trip.observedDistanceM.available ? trip.observedDistanceM.value : -1) : trip.startedUtcMs;
+      for (let index = 1; index < page.trips.length; index++) {
+        const a = key(page.trips[index - 1]), b = key(page.trips[index]);
+        if (query.query.direction === 'asc' ? a > b : a < b) bad();
+      }
+    }
     // Newest first: the next page starts below this one, which starts below the cursor.
-    if (cursor !== undefined && page.nextCursor !== null && BigInt(isJournalListCursor(page.nextCursor) ? page.nextCursor.split(':')[3] : page.nextCursor) >= BigInt(isJournalListCursor(cursor) ? cursor.split(':')[3] : cursor)) bad();
+    if (cursor !== undefined && page.nextCursor !== null && !cursor.startsWith('l6:') && !page.nextCursor.startsWith('l6:') && BigInt(isJournalListCursor(page.nextCursor) ? page.nextCursor.split(':')[3] : page.nextCursor) >= BigInt(isJournalListCursor(cursor) ? cursor.split(':')[3] : cursor)) bad();
     return;
   }
   case 'trip': {
