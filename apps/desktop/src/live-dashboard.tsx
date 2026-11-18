@@ -1,5 +1,6 @@
 import React, {useMemo, useState} from 'react';
-import {Bed, ChevronRight, Clock, Coffee, Coins, Droplet, Flag, Hourglass, MapPin, Navigation, Package, TriangleAlert, WifiOff} from 'lucide-react';
+import {Bed, ChevronRight, Clock, Coffee, Coins, Droplet, Flag, Hourglass, MapPin, Navigation, Package, Pause, TriangleAlert, WifiOff} from 'lucide-react';
+import {journalJobFilterOf} from '../../../packages/contracts/src/journal';
 import type {AppLanguage, GearDisplayModes, LiveTelemetry, RecordingHealth, UnitProfiles} from '../../../packages/contracts/src';
 import type {LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
@@ -12,6 +13,7 @@ import {displayProfile} from './unit-profiles';
 import {getStrings} from './strings';
 import {t, translateUnit} from './i18n';
 import {InfoHint} from './info-hint';
+import {CompletenessBadge, JobTypeBadge, ModeBadge} from './trip-badges';
 
 /**
  * The next mandatory break's urgency (ET-052 D3): an icon, a word and a tone together, never colour alone. The accessible
@@ -21,8 +23,6 @@ function BreakBadge({badge, testId}: {badge: NonNullable<LiveRowText['badge']>; 
   const Icon = badge.urgency === 'due' ? TriangleAlert : Hourglass;
   return <Badge variant={badge.urgency === 'due' ? 'error' : 'warn'} role="img" aria-label={badge.name} data-testid={testId} data-urgency={badge.urgency}><Icon aria-hidden="true" />{badge.text}</Badge>;
 }
-
-const COMPLETENESS_TONE = {complete: 'ok', partial: 'warn', unknown: 'neutral'} as const;
 
 /**
  * The Live page (ET-074 compact layout): the instrument, the current job, This trip, Truck and Game session, and the
@@ -42,7 +42,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const shown = (id: LiveFieldId) => sources.field(id).state !== 'hidden';
   const speedText = dashboardSpeed(live, profile, language), fuelText = dashboardFuel(live, profile, language);
   const hint = (label: string, text: string) => <InfoHint label={t('ui.moreAbout', {v: label}, language)}>{text}</InfoHint>;
-  const rows = (entries: (readonly [string, string, string?, React.ReactNode?])[]) => <dl>{entries.map(([label, shownValue, testId, icon]) => <div className="yu-kv" key={label}><dt>{icon}{label}</dt><dd data-testid={testId}>{shownValue}</dd></div>)}</dl>;
+  const rows = (entries: (readonly [string, React.ReactNode, string?, React.ReactNode?])[]) => <dl>{entries.map(([label, shownValue, testId, icon]) => <div className="yu-kv" key={label}><dt>{icon}{label}</dt><dd data-testid={testId}>{shownValue}</dd></div>)}</dl>;
   const title = (key: 'live.job' | 'live.trip' | 'live.truck' | 'live.session') => <CardTitle><h2>{t(key, undefined, language)}</h2></CardTitle>;
 
   // The waiting banner: no current game, one current stream of two (partial, in either direction), or an incompatible v1
@@ -65,6 +65,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
   const trip = recording && 'trip' in recording ? recording.trip : null;
   const completeness = trip?.completeness ?? null;
   const mode = liveGameMode(sources);
+  const market = sources.field('market').text, marketKind = journalJobFilterOf({available: true, value: market});
   const protocol = live?.observation ? sources.v1Carried ? 'v0 + v1' : 'v0' : sources.v1Carried ? 'v1' : '—';
 
   return <div className="yu-live" data-testid="live-telemetry" data-live-state={state}>
@@ -93,7 +94,7 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
         <text x={130} y={214} textAnchor="middle" className="yu-gauge-caption">{value('engine-rpm')}</text>
       </svg></div>
       <div className="yu-gear" data-testid="live.instrument.gear"><span className="yu-muted">{t('live.gear', undefined, language)}</span><strong>{value('gear')}</strong>
-        {text.paused ? <Badge variant="warn" data-testid="live-paused">{strings.livePaused}</Badge> : null}
+        {text.paused ? <Badge variant="warn" data-testid="live-paused"><Pause aria-hidden="true" />{strings.livePaused}</Badge> : null}
         {state === 'stale' ? <Badge variant="error" data-testid="live.stale"><WifiOff aria-hidden="true" />{t(`ui.status.${status}`, undefined, language)}</Badge> : null}
       </div>
       <div className="yu-fuel" data-testid="live.instrument.fuel">
@@ -112,9 +113,9 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
 
     <Card className="yu-live-card" data-testid="live.job"><CardHeader>{title('live.job')}
       {cargo !== null || has('market') || has('deadline') ? <div className="yu-tags" data-testid="live.job.tags">
-        {cargo !== null ? <Badge variant="neutral" className="yu-tag" data-testid="live.job.cargo"><Package aria-hidden="true" />{cargo}</Badge> : null}
-        {has('market') ? <Badge variant="neutral" className="yu-tag" data-testid="live.job.market">{value('market')}</Badge> : null}
-        {has('deadline') ? <Badge variant="neutral" className="yu-tag" data-testid="live.job.deadline"><Clock aria-hidden="true" />{t('live.deadline', undefined, language)} {value('deadline')}</Badge> : null}
+        {cargo !== null ? <Badge variant="neutral" data-testid="live.job.cargo" title={cargo}><Package aria-hidden="true" /><span className="yu-badge-text">{cargo}</span></Badge> : null}
+        {has('market') ? <JobTypeBadge job={{kind: marketKind, text: marketKind === 'world-of-trucks' ? t('j.worldOfTrucks', undefined, language) : value('market'), sub: marketKind === 'world-of-trucks' ? value('market') : null}} language={language} testId="live.job.market" /> : null}
+        {has('deadline') ? <Badge variant="neutral" data-testid="live.job.deadline"><Clock aria-hidden="true" />{t('live.deadline', undefined, language)} {value('deadline')}</Badge> : null}
       </div> : null}</CardHeader>
       {hasJob ? <CardContent className="yu-job-body">
         <div className="yu-route" data-testid="live.job.route">
@@ -136,14 +137,14 @@ export function LiveDashboard({live, units, gearDisplay, recording, language = '
     <div className="yu-live-cards">
       {/* ET-057: This trip shows only what the recording health carries, the open trip's completeness; no placeholder rows. */}
       <Card className="yu-live-card" data-testid="live.trip"><CardHeader>{title('live.trip')}</CardHeader><CardContent><dl>
-        <div className="yu-kv"><dt>{t('live.recording', undefined, language)}</dt><dd data-testid="live.trip.recording">{completeness ? <Badge variant={COMPLETENESS_TONE[completeness]}>{t(`complete.${completeness}`, undefined, language)}</Badge> : '—'}</dd></div>
+        <div className="yu-kv"><dt>{t('live.recording', undefined, language)}</dt><dd data-testid="live.trip.recording">{completeness ? <CompletenessBadge badge={{text: t(`complete.${completeness}`, undefined, language), variant: completeness === 'complete' ? 'secondary' : completeness === 'partial' ? 'destructive' : 'outline'}} /> : '—'}</dd></div>
       </dl></CardContent></Card>
       <Card className="yu-live-card" data-testid="live.truck"><CardHeader>{title('live.truck')}</CardHeader><CardContent>{rows([[t('live.truck', undefined, language), value('truck')],
         [t('live.plate', undefined, language), value('truck-plate')], [t('live.trailer', undefined, language), value('trailers')], [t('live.odometer', undefined, language), value('odometer')]])}</CardContent></Card>
       <Card className="yu-live-card" data-testid="live.session"><CardHeader>{title('live.session')}</CardHeader><CardContent>{rows([
         [t('live.clock', undefined, language), value('game-time')],
         ...(restRow ? [[restRow.label, value('rest-state'), 'live.session.restState', <Bed className="inline size-3 mr-1" aria-hidden="true" />] as const] : []),
-        ...shown('game-mode') ? [[t('live.mode', undefined, language), mode ? t(mode === 'haulmp' ? 'mode.haulmp' : mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language) : '—', 'live.session.mode'] as [string, string, string]] : [],
+        ...shown('game-mode') ? [[t('live.mode', undefined, language), mode ? <ModeBadge mode={{kind: mode, tone: mode === 'single-player' ? 'neutral' : 'ok', text: t(mode === 'haulmp' ? 'mode.haulmp' : mode === 'truckersmp' ? 'mode.tmp' : 'mode.sp', undefined, language)}} /> : '—', 'live.session.mode'] as [string, React.ReactNode, string]] : [],
         [t('live.protocol', undefined, language), protocol, 'live.session.protocol'],
         ...shown('event-loss') ? [[t('live.lostEvents', undefined, language), value('event-loss'), 'live.session.lostEvents'] as [string, string, string]] : []])}</CardContent></Card>
     </div>

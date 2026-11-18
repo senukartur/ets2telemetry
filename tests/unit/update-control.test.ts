@@ -202,7 +202,7 @@ describe('the version line (UP11)', () => {
     expect(versionLineText(staging, language)).toEqual({text: COPY[language].staging, badge: 'Staging', accessibleName: COPY[language].stagingName});
     const html = line(staging, language);
     expect(html).toContain('data-channel="staging"');
-    expect(html).toContain('<span aria-hidden="true" class="yu-version-badge" data-testid="shell.sidebar.version.badge">Staging</span>');
+    expect(html).toMatch(/<span[^>]*data-slot="badge"[^>]*data-variant="warn"[^>]*aria-hidden="true"[^>]*data-testid="shell.sidebar.version.badge">Staging<\/span>/);
     expect(html).toContain(`<span class="sr-only" data-testid="shell.sidebar.version.name">${escape(COPY[language].stagingName)}</span>`);
   });
   it.each(LANGUAGES)('says Development build for an unpackaged run, and never names the fallback version (%s)', language => {

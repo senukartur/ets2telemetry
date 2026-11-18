@@ -109,7 +109,8 @@ function detailState(expected) {
     const id = node.getAttribute('data-testid').slice('journal-section-'.length, -'-note'.length);
     (notes[id] ??= []).push(node.textContent);
   }
-  return {error, title: text('journal-detail-title'), outcome: text('journal-detail-outcome'), completeness: text('journal-detail-completeness'),
+  const outcome = root.querySelector('[data-testid="journal-detail-outcome"]');
+  return {error, title: text('journal-detail-title'), outcome: outcome?.closest('.yu-badge-label')?.textContent ?? outcome?.textContent ?? null, completeness: text('journal-detail-completeness'),
     jobType: text('journal-detail-job-type'), special: text('journal-detail-special'), fields, notes,
     banner: d.querySelector('[data-testid="journal-banner"]')?.textContent ?? null};
 }
@@ -307,9 +308,9 @@ export async function runJournalSeeded({dashboard, record}) {
     await clickTestId(dashboard, 'journal-list-previous');
     await until(dashboard, listState, {page, count: 50, first: page === 1 ? T.paging : filler(60)});
   }
-  assert.equal(await dashboard.getByTestId('journal-row-mode').first().innerText(), 'TruckersMP · ambiguous evidence');
+  assert.equal(await dashboard.getByTestId('journal-row-mode').first().evaluate(node => (node.closest('.yu-badge-label') ?? node).textContent), 'TruckersMP · ambiguous evidence');
   const paging = await openDetail(dashboard, T.paging);
-  assert.equal(await dashboard.getByTestId('journal-detail-mode').innerText(), 'TruckersMP · ambiguous evidence');
+  assert.equal(await dashboard.getByTestId('journal-detail-mode').evaluate(node => (node.closest('.yu-badge-label') ?? node).textContent), 'TruckersMP · ambiguous evidence');
   record.pagingSummary = {toll: paging.fields['money-toll'] ?? null, samples: paging.fields['samples-sampleCount'] ?? null};
   assert.deepEqual(record.pagingSummary, {toll: '104 EUR (SDK-documented), 104 amounts', samples: '3600'});
   const timeline = await openTable(dashboard, 'timeline', 100);

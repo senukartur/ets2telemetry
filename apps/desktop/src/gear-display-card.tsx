@@ -2,6 +2,7 @@ import React, {useState} from 'react';
 import {Info} from 'lucide-react';
 import type {AppLanguage, GearDisplayMode, SettingsView, UnitGame} from '../../../packages/contracts/src';
 import {Label} from '@/components/ui/label';
+import {Badge} from './components/ui/badge';
 import {RadioGroup, RadioGroupItem} from '@/components/ui/radio-group';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/components/ui/tooltip';
 import {chooseGearDisplay, type GearDisplayRequest} from './gear-display-choice';
@@ -63,7 +64,7 @@ export function GearDisplayCard({settings, onSaved, onRequest, showSaveError}: G
             </div></TooltipTrigger><TooltipContent side="bottom" align="end" data-testid={`${id}-tooltip`}><div className="space-y-1.5">
               <p className="font-medium">{t(`s.gear.name.${mode}`, undefined, language)}</p>
               <p>{hint[0]}</p>
-              <p className="yu-gear-examples" aria-hidden="true">{GEAR_EXAMPLES[game][mode].map((label, index) => <span key={index} className="yu-gear-chip">{label}</span>)}</p>
+              <p className="yu-gear-examples" aria-hidden="true">{GEAR_EXAMPLES[game][mode].map((label, index) => <Badge variant="neutral" key={index} className="yu-gear-chip">{label}</Badge>)}</p>
               {hint[1] ? <p className="text-xs text-muted-foreground">{hint[1]}</p> : null}
               <p className="text-xs text-muted-foreground">{hint[2]}</p>
             </div></TooltipContent></Tooltip>;

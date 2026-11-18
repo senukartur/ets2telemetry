@@ -61,7 +61,8 @@ it('shows the site sync chip last and only when synchronization is configured', 
   expect(unconfigured).not.toContain('shell.status.sync');
   const configured = unavailableUploadUi(); configured.status = initialDashboardUploadStatus('https://dashboard.example');
   const html = bar('live', 'en', React.createElement(SyncChip, {state: configured, language: 'en', onOpen: () => undefined}));
-  expect(html).toMatch(/<button type="button" class="yu-sync-chip"[^>]*data-testid="shell.status.sync"[^>]*aria-label="Account &amp; sync: [^"]+"/);
+  expect(html).toMatch(/<button[^>]*class="[^"]*yu-sync-chip[^"]*"[^>]*data-testid="shell.status.sync"[^>]*aria-label="Account &amp; sync: [^"]+"/);
+  expect(html).toMatch(/<button[^>]*data-slot="badge"[^>]*data-variant="neutral"/);
   expect([...html.matchAll(/data-testid="(shell\.status\.[a-zA-Z]+)"/g)].map(match => match[1]).at(-1)).toBe('shell.status.sync');
 });
 

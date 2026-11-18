@@ -721,6 +721,8 @@ export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'j.anyOutcome': 'Любой итог',
   'j.anyRecording': 'Любая запись',
   'j.search': 'Поиск по грузу или городу',
+  'j.otherJobType': 'Другой тип заказа',
+  'j.unknownJobType': 'Тип заказа неизвестен',
   'j.clearFilter': 'Снять фильтр: {v}',
   'j.reset': 'Сбросить фильтры',
   'j.found': 'Найдено: {n}',

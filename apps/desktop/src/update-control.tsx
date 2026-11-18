@@ -1,6 +1,7 @@
 import React, {useEffect, useState} from 'react';
 import {ArrowUpCircle, RefreshCw} from 'lucide-react';
 import {Button} from '@/components/ui/button';
+import {Badge} from './components/ui/badge';
 import {Tooltip, TooltipContent, TooltipProvider, TooltipTrigger} from '@/components/ui/tooltip';
 import type {AppLanguage, ApplicationInfo, UpdateView} from '../../../packages/contracts/src';
 import {t} from './i18n';
@@ -70,7 +71,7 @@ export function VersionLine({info, language, testId}: {info: ApplicationInfo | u
   if (!line || !info) return null;
   return <p className="yu-version" data-testid={testId} data-channel={info.channel}>
     <span aria-hidden="true" data-testid={`${testId}.text`}>{line.text}</span>
-    {line.badge ? <span aria-hidden="true" className="yu-version-badge" data-testid={`${testId}.badge`}>{line.badge}</span> : null}
+    {line.badge ? <Badge variant="warn" aria-hidden="true" data-testid={`${testId}.badge`}>{line.badge}</Badge> : null}
     <span className="sr-only" data-testid={`${testId}.name`}>{line.accessibleName}</span>
   </p>;
 }
