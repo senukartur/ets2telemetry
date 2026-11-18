@@ -47,6 +47,11 @@ const TINT_SURFACES = ['--yu-bg-app', '--yu-bg-chrome', '--yu-bg-card', '--yu-bg
 const HOVER_MIN_CONTRAST = 1.05;
 
 describe('the light theme palette', () => {
+  it.each(['neutral', 'ok', 'warn', 'error', 'info', 'ets2', 'ats'])('keeps the shared %s badge readable in both themes', tone => {
+    for (const palette of [dark, light]) {
+      expect(contrast(parseColor(palette.get(`--yu-badge-${tone}-fg`)!), parseColor(palette.get(`--yu-badge-${tone}-bg`)!))).toBeGreaterThanOrEqual(4.5);
+    }
+  });
   it.each(TEXT.flatMap(text => SURFACES.map(surface => [text, surface] as const)))('keeps %s readable on %s', (text, surface) => {
     expect(contrast(parseColor(token(text)), parseColor(token(surface)))).toBeGreaterThanOrEqual(4.5);
   });
@@ -121,10 +126,12 @@ describe('the shared files and the dark scope', () => {
     const globals = [...css.matchAll(/^button:not\(\[role="radio"\]\)[^{]*\{[^}]*\}/gm)].map(match => match[0]);
     expect(globals).toHaveLength(2);
     for (const rule of globals) expect(rule.slice(0, rule.indexOf(','))).toMatch(/:not\(\.yu-sync-chip\)$/);
-    const chip = /\.yu-topbar button\.yu-sync-chip \{([^}]+)\}/.exec(css);
-    if (!chip) throw new Error('Missing the top-bar sync chip rule in shell.css');
-    const decls = new Map([...chip[1].matchAll(/([a-z-]+)\s*:\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
-    expect(Object.fromEntries(['height', 'min-height', 'box-sizing', 'line-height'].map(name => [name, decls.get(name)]))).toEqual({height: 'var(--yu-control-h-xs)', 'min-height': 'var(--yu-control-h-xs)', 'box-sizing': 'border-box', 'line-height': '1'});
+    const badge = /^\[data-slot="badge"\] \{([^}]+)\}/m.exec(css);
+    if (!badge) throw new Error('Missing the shared badge rule in shell.css');
+    const decls = new Map([...badge[1].matchAll(/([a-z-]+)\s*:\s*([^;]+);/g)].map(m => [m[1], m[2].trim()]));
+    expect(Object.fromEntries(['height', 'min-height', 'box-sizing', 'line-height', 'font-size', 'gap', 'padding'].map(name => [name, decls.get(name)])))
+      .toEqual({height: 'var(--yu-control-h-xs)', 'min-height': 'var(--yu-control-h-xs)', 'box-sizing': 'border-box', 'line-height': '16px', 'font-size': '12px', gap: '5px', padding: '0 7px'});
+    expect(css).toContain('.yu-sync-chip::after { content: ""; position: absolute; inset: -6px 0; }');
   });
   // ET-110: compact page content fills the window; only individual controls such as the token field keep a cap.
   it('sets no maximum width on the content column or a compact page root', () => {

@@ -228,7 +228,7 @@ it.each(['en', 'ru'] as const)('REG-012 keeps replacement verification cancellat
 it.each(['en', 'ru'] as const)('REG-014 maps only authoritative row states to localized badges in %s', language => {
   for (const state of ['unavailable', 'unbound', 'identity-pending', 'pending', 'queued', 'sending', 'held', 'sent'] as const) {
     const view = journalSyncView({tripUuid: '', state, materialVersion: null, latestRevision: null, lastDurableUploadUtcMs: null, reason: state === 'held' ? 'validation' : null}, language);
-    expect(view.text).not.toMatch(/⟦|accepted|принят/); expect(view.tone).toBe(state === 'sent' ? 'ok' : state === 'held' ? 'error' : ['unavailable', 'unbound'].includes(state) ? 'neutral' : 'warn');
+    expect(view.text).not.toMatch(/⟦|accepted|принят/); expect(view.tone).toBe(state === 'sent' ? 'ok' : state === 'held' ? 'warn' : state === 'sending' ? 'info' : 'neutral');
   }
 });
 it.each(['en', 'ru'] as const)('uses short journal upload labels and keeps detailed states in hints (%s)', language => {

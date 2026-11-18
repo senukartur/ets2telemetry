@@ -721,6 +721,8 @@ export const EN_DICTIONARY: TranslationDictionary = channelCopyTable(Object.free
   'j.anyOutcome': 'Any outcome',
   'j.anyRecording': 'Any recording',
   'j.search': 'Search cargo or city',
+  'j.otherJobType': 'Other job type',
+  'j.unknownJobType': 'Job type unknown',
   'j.clearFilter': 'Clear filter: {v}',
   'j.reset': 'Reset filters',
   'j.found': 'Found: {n}',

@@ -6,7 +6,7 @@ import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage, isolateDashboardPointer} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
 import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, waitForPartialLive, zeroLiveObservation} from './renderer-observation.mjs';
-import {SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
+import {overlayTagObservation, SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
 import {smokeDataRoot} from './smoke-build.mjs';
@@ -272,7 +272,12 @@ function waitOverlayVisibility(page, {enabled, writable = true, saveError = null
     observed.interactable === writable && observed.editEnabled === (writable && enabled) &&
     (errorVisible === undefined || observed.errorShown === errorVisible), message, timeoutMs);
 }
-async function settled(page) {await page.evaluate(async () => {await globalThis.document.fonts.ready;});}
+async function settled(page) {await page.evaluate(async () => {
+  await globalThis.document.fonts.ready;
+  // A semantic status can change just before capture. Observe its final colours after finite badge transitions.
+  const animations = Array.from(globalThis.document.querySelectorAll('[data-slot="badge"]')).flatMap(node => node.getAnimations());
+  await Promise.all(animations.filter(animation => animation.effect?.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)));
+});}
 // Isolated CSS display probe only: it does not exercise committed y, native drag or game authority.
 function cssDisplayGeometry() {
   const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
@@ -647,10 +652,33 @@ async function capture({page, application, config, record, name, language, size,
   const file = `ui-${config.uiCase}-${name}-${language}-${size.width}x${size.height}.png`;
   await settled(page);
   if (!overlay) {
-    const badges = await page.locator('[data-slot="badge"],.yu-recording-badge,.yu-version-badge,.yu-gear-chip,.yu-overlay-cruise-badge,.yu-topbar .yu-sync-chip').evaluateAll(nodes => nodes
-      .filter(node => node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0)
-      .map(node => ({id: node.getAttribute('data-testid') ?? node.className, height: node.getBoundingClientRect().height})));
+    const badges = await page.locator('[data-slot="badge"]').evaluateAll(nodes => {
+      // Compare with a literal 1 CSS px reference in the same renderer: Chromium snaps borders at fractional zoom.
+      const reference = globalThis.document.createElement('span');
+      reference.style.cssText = 'position:fixed;visibility:hidden;border:1px solid transparent';
+      globalThis.document.body.append(reference);
+      const referenceBorder = Number.parseFloat(globalThis.getComputedStyle(reference).borderTopWidth);
+      reference.remove();
+      return nodes.filter(node => node.getBoundingClientRect().width > 0 && node.getBoundingClientRect().height > 0)
+      .map(node => {
+        const style = globalThis.getComputedStyle(node), icon = node.querySelector(':scope > svg'), iconStyle = icon ? globalThis.getComputedStyle(icon) : null;
+        const variant = node.getAttribute('data-variant'), tone = ['ok', 'warn', 'error', 'neutral', 'info', 'ets2', 'ats'].includes(variant) ? variant : variant === 'destructive' ? 'error' : variant === 'link' ? 'info' : 'neutral';
+        const rgb = token => `rgb(${[1, 3, 5].map(index => Number.parseInt(style.getPropertyValue(token).trim().slice(index, index + 2), 16)).join(', ')})`;
+        return {id: node.getAttribute('data-testid') ?? node.className, height: node.getBoundingClientRect().height,
+          geometry: [style.fontSize, style.fontWeight, style.lineHeight, style.borderRadius, style.paddingLeft, style.paddingRight, style.columnGap],
+          border: Number.parseFloat(style.borderTopWidth), referenceBorder,
+          colors: [style.color, style.backgroundColor], expectedColors: [rgb(`--yu-badge-${tone}-fg`), rgb(`--yu-badge-${tone}-bg`)],
+          icon: iconStyle ? [iconStyle.width, iconStyle.height, Number.parseFloat(iconStyle.strokeWidth), iconStyle.marginRight] : null};
+      });
+    });
+    assert.ok(badges.length > 0, `UI_BADGES_PRESENT_${config.uiCase}_${name}_${language}`);
     assert.deepEqual(badges.filter(badge => Math.abs(badge.height - 20) > .1), [], `UI_BADGE_HEIGHT_${config.uiCase}_${name}_${language}`);
+    for (const badge of badges) {
+      assert.deepEqual(badge.geometry, ['12px', '500', '16px', '4px', '7px', '7px', '5px'], `UI_BADGE_STYLE_${badge.id}`);
+      assert.ok(Math.abs(badge.border - badge.referenceBorder) < .01, `UI_BADGE_BORDER_${badge.id}: ${badge.border} / ${badge.referenceBorder}`);
+      assert.deepEqual(badge.colors, badge.expectedColors, `UI_BADGE_COLORS_${badge.id}`);
+      if (badge.icon) assert.deepEqual(badge.icon, ['13px', '13px', 1.8, '0px'], `UI_BADGE_ICON_${badge.id}`);
+    }
   }
   if (overlay) {
     const png = await application.evaluate(async ({BrowserWindow}) => {
@@ -1168,7 +1196,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         assert.equal(await dashboard.getByTestId('journal-row-game-name').first().evaluate(node => globalThis.getComputedStyle(node).whiteSpace), 'nowrap');
         const modeLabel = language === 'en' ? 'TruckersMP · ambiguous evidence' : 'TruckersMP · неоднозначные данные';
         const modeRow = dashboard.getByTestId('journal-row').first();
-        assert.equal(await modeRow.getByTestId('journal-row-mode').innerText(), modeLabel);
+        assert.equal(await modeRow.getByTestId('journal-row-mode').evaluate(node => (node.closest('.yu-badge-label') ?? node).textContent), modeLabel);
         const singlePlayerBadge = dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').getByTestId('journal-row-mode');
         assert.equal(await singlePlayerBadge.innerText(), language === 'en' ? 'Single-player' : 'Одиночная игра');
         assert.equal(await singlePlayerBadge.getAttribute('data-variant'), 'neutral');
@@ -1183,7 +1211,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-detail-title').waitFor({state: 'visible'});
         assert.equal(await dashboard.getByTestId('journal-list-refresh').count(), 0, 'UI_JOURNAL_REFRESH_ONLY_ON_LIST');
         assert.equal(await dashboard.getByTestId('journal.count').count(), 0, 'UI_JOURNAL_TOTALS_ONLY_ON_LIST');
-        assert.equal(await dashboard.getByTestId('journal-detail-mode').innerText(), modeLabel);
+        assert.equal(await dashboard.getByTestId('journal-detail-mode').evaluate(node => (node.closest('.yu-badge-label') ?? node).textContent), modeLabel);
         await save('mode-trip', language, size);
         await dashboard.getByTestId('journal-back').click();
         await dashboard.locator('[data-trip="7f000000-0000-4000-8000-00000000006d"]').getByTestId('journal-row-open').click();
@@ -1442,7 +1470,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
               assert.equal(await overlay.getByTestId('overlay-root').evaluate(node => node.classList.contains('is-dim')), true);
               assert.equal(await overlay.getByTestId('overlay-speed').evaluate(node => globalThis.getComputedStyle(node).opacity), '0.5');
               assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
-              assert.equal(await overlay.locator('.overlay-tag').evaluateAll(nodes => nodes.length <= 2 && nodes.every(node => node.scrollWidth <= node.clientWidth)), true);
+              const tagBoxes = await overlay.evaluate(overlayTagObservation);
+              assert.ok(tagBoxes.length > 0 && tagBoxes.length <= 2 && tagBoxes.every(node => !node.clipped), `UI_OVERLAY_TAG_CONTAINMENT_${language}_${size.width}: ${JSON.stringify(tagBoxes)}`);
               assert.equal(await overlay.getByTestId('overlay-rpm-arc').count(), 0);
               assert.equal(await overlay.getByTestId('overlay-speed-arc').count(), 0);
               if (numberWidths) {
@@ -1483,7 +1512,8 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'stale', undefined, {timeout: 5000});
         assert.equal(await overlay.getByTestId('overlay-tag-stale').innerText(), 'Устарело');
         assert.deepEqual(await overlay.locator('[data-testid^="overlay-section-"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid').replace('overlay-section-', ''))), [...selected, 'fuel']);
-        assert.equal(await overlay.locator('.overlay-tag').evaluateAll(nodes => nodes.length <= 2 && nodes.every(node => node.scrollWidth <= node.clientWidth)), true);
+        const unavailableTags = await overlay.evaluate(overlayTagObservation);
+        assert.ok(unavailableTags.length > 0 && unavailableTags.length <= 2 && unavailableTags.every(node => !node.clipped), `UI_OVERLAY_UNAVAILABLE_TAGS: ${JSON.stringify(unavailableTags)}`);
         assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
       } finally {source.resume();}
       await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'current', undefined, {timeout: 5000});

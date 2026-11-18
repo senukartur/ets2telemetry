@@ -44,7 +44,8 @@ describe('connected', () => {
     // Tags: cargo with its mass, the market label and the deadline; game names stay as the game sent them.
     const tags = between(html, 'live.job.tags', 'live.job.route');
     expect(tags).toContain(`Synthetic Cargo · ${expected.mass}</span>`);
-    expect(tags).toContain(`data-testid="live.job.market" data-variant="neutral">${expected.market}</span>`);
+    expect(tags).toMatch(/data-testid="live.job.market"[^>]*data-kind="freight-market"[^>]*>.*?lucide-truck/);
+    expect(tags).toContain(`<span>${expected.market}</span>`);
     expect(tags).toContain(`${expected.deadline} `);
     // This fixture has different v0 and v1 plans, so the two endpoints and their companies frame an empty track.
     const route = between(html, 'live.job.route', 'live.job.break');
@@ -61,7 +62,7 @@ describe('connected', () => {
     // This trip: only the recording completeness, no placeholder rows.
     const trip = between(html, 'live.trip', 'live.truck');
     for (const text of expected.trip) expect(trip).toContain(text);
-    expect(trip).toContain('data-variant="ok">');
+    expect(trip).toMatch(/data-variant="ok"[^>]*>.*?lucide-check/);
     for (const text of expected.noTrip) expect(trip).not.toContain(text);
     expect(between(html, 'live.truck', 'live.session')).toContain(expected.truck);
     const session = between(html, 'live.session', 'live.details');
@@ -70,8 +71,8 @@ describe('connected', () => {
     expect(session).toContain('<dd data-testid="live.session.lostEvents">2</dd>');
   });
   it('shows a partial or unknown recording as its word with the warn or neutral tone, and a dash without an open trip', () => {
-    expect(between(render(smokePair(), 'en', recording('partial')), 'live.trip', 'live.truck')).toContain('<span data-variant="warn">Partial</span>');
-    expect(between(render(smokePair(), 'ru', recording('unknown')), 'live.trip', 'live.truck')).toContain('<span data-variant="neutral">Неизвестно</span>');
+    expect(between(render(smokePair(), 'en', recording('partial')), 'live.trip', 'live.truck')).toMatch(/data-variant="warn"[^>]*>.*?lucide-triangle-alert.*?<span>Partial<\/span>/);
+    expect(between(render(smokePair(), 'ru', recording('unknown')), 'live.trip', 'live.truck')).toMatch(/data-variant="neutral"[^>]*>.*?lucide-circle-help.*?<span>Неизвестно<\/span>/);
     for (const health of [recording(null), {state: 'unknown'} as const, undefined]) expect(between(render(smokePair(), 'en', health), 'live.trip', 'live.truck')).toContain('<dd data-testid="live.trip.recording">—</dd>');
   });
 });
@@ -117,7 +118,7 @@ it('without v1 shows no break, no Mode and no Lost events row, and the v0 protoc
 it.each(['en', 'ru'] as const)('paused keeps current values with the paused badge and no stale badge in %s', language => {
   const html = render(smokePair({}, {status: 'paused'}), language);
   expect(state(html)).toBe('paused');
-  expect(html).toContain(`data-testid="live-paused" data-variant="warn">${language === 'en' ? 'Game paused' : 'Игра на паузе'}</span>`);
+  expect(html).toMatch(new RegExp(`data-testid="live-paused" data-variant="warn">.*?lucide-pause.*?${language === 'en' ? 'Game paused' : 'Игра на паузе'}</span>`));
   expect(html).not.toContain('data-testid="live.stale"');
   expect(html).toContain('data-testid="live-speed-number">90</text>');
 });
@@ -150,7 +151,7 @@ describe('partial', () => {
     const job = between(html, 'live.job.break', 'live.trip');
     expect(job).toContain(`<strong>${language === 'en' ? '1 h 35 min' : '1 ч 35 мин'}</strong>`);
     expect(job).toContain('data-testid="live.job.break.badge"');
-    expect(between(html, 'live.session', 'live.details')).toContain(`<dd data-testid="live.session.mode">${language === 'en' ? 'Single-player' : 'Одиночная игра'}</dd>`);
+    expect(between(html, 'live.session', 'live.details')).toMatch(new RegExp(`<dd data-testid="live.session.mode"><span[^>]*data-variant="neutral"[^>]*>.*?lucide-user-round.*?<span>${language === 'en' ? 'Single-player' : 'Одиночная игра'}</span>`));
   });
   it.each(['en', 'ru'] as const)('v0 current while v1 is stale shows the banner and the current v0 values in %s', language => {
     const html = render(smokePair({status: 'stale', fresh: false, reason: 'Main has no recent v1 SDK capture'}), language);

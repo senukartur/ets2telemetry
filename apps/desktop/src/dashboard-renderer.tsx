@@ -1,4 +1,5 @@
 import {AccountScreen} from './dashboard-upload/account-screen';
+import {Badge} from './components/ui/badge';
 import {SyncChip} from './dashboard-upload/sync-chip';
 import {useDashboardUpload} from './dashboard-upload/use-dashboard-upload';
 import {connectionChip, desktopLiveView, hardModeChip, liveGameMode, liveScreenState, liveSourcesPartial, liveSubline, pluginChip, recordingMotion, recordingTone, type ShellRoute} from './screens/desktop-ui-view';
@@ -85,7 +86,7 @@ export default function App() {
         <button type="button" className="yu-recording" data-testid="shell.sidebar.recording" aria-label={recording.testBadge ? `${recording.label}, ${recording.testBadge}` : recording.label}>
           <span className="yu-dot" aria-hidden="true" data-tone={recordingTone(health?.recording.state)} data-motion={recordingMotion(health?.recording.state)} data-window-focused={windowFocused} data-testid="shell.recording.indicator" />
           <span className="yu-recording-label" data-testid="shell.recording.label">{recording.label}</span>
-          {recording.testBadge ? <span className="yu-recording-badge" data-testid="shell.recording.badge">{recording.testBadge}</span> : null}
+          {recording.testBadge ? <Badge variant="neutral" data-testid="shell.recording.badge">{recording.testBadge}</Badge> : null}
           <Info className="yu-recording-info" aria-hidden="true" />
         </button></TooltipTrigger><TooltipContent side="right" align="end" data-testid="shell.recording.hint"><div className="space-y-1">
           <p className="font-medium">{recording.headline}</p>

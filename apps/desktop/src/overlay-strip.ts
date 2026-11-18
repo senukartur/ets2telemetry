@@ -21,7 +21,7 @@ export const STRIP_COLUMN_GAP_CSS = 14;
 /** Tag slots reserved before the sections: Paused needs current data and No signal needs unavailable data, so at most
  * one of them shows, plus Synthetic or Replay. */
 export const STRIP_TAG_SLOTS = 2;
-export const STRIP_TAG_MAX_WIDTH_CSS = 96;
+export const STRIP_TAG_MAX_WIDTH_CSS = 112;
 /**
  * The maximum border-box width of each strip section, including its icon, inner gaps and the 15 px divider padding of a
  * group's first item. A longer value ends in an ellipsis.
