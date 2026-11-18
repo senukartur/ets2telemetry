@@ -127,18 +127,18 @@ it('models the surface border as at least one device pixel below zoom 1', () => 
   // Chromium snaps a nonzero border thinner than one device pixel up to one device pixel, so below zoom 1 the 1 px
   // border takes 1 / scale CSS px: the inner width is floor(CSS width − 2 × max(1, 1 / scale) − 24).
   // The reviewer's case, re-derived for ET-070: two 112 px tags, cargo 300, origin 300, distance driven 150 and the Hard
-  // Mode indicator 100 with five 14 px gaps take 998 + 114 = 1112. At CSS width 1138 and zoom 1 the inner width is
-  // 1138 − 2 − 24 = 1112: one row. At 0.75 it is floor(1138 − 2 × 1.3333 − 24) = floor(1111.33) = 1111: two rows.
+  // Mode indicator 100 with five 14 px gaps take 224 + 750 + 100 + 70 = 1144. At CSS width 1170 and zoom 1 the inner
+  // width is 1170 − 2 − 24 = 1144: one row. At 0.75 it is floor(1170 − 2 × 1.3333 − 24) = 1143: two rows.
   const sections = only('cargo', 'origin', 'distance-driven');
   expect(stripRowCount(sections, 1170)).toBe(1);
   expect(stripRowCount(sections, 1170, 0.75)).toBe(2);
   // At 0.5 the border is 2 CSS px: every section at 1280 has an inner width of 1280 − 4 − 24 = 1252, four rows as at 1254
-  // since ET-071 (1166 with ET-084's sign, 1172, the break's row ends at 1240, then the indicator); at 480 it is 452, twelve
+  // (1198 through range, 1172 through destination, 1240 through mandatory break, then rest state/Hard Mode); at 480 it is 452, twelve
   // rows as at 454.
   expect(stripRowCount(ALL, 1280, 0.5)).toBe(4);
   expect(stripRowCount(ALL, 480, 0.5)).toBe(12);
-  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 1306 (ET-084) holds at scale 2, and at
-  // 0.99 the snapped border leaves floor(1306 − 2 × 1.0101 − 24) = 1279 of the 1280 it needs.
+  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 1338 holds at scale 2, and at
+  // 0.99 the snapped border leaves floor(1338 − 2 × 1.0101 − 24) = 1311 of the 1312 it needs.
   expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1338, 2)).toBe(1);
   expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1338, 0.99)).toBe(2);
 });

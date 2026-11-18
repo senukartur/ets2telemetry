@@ -226,7 +226,7 @@ it.each(['en', 'ru'] as const)('REG-012 keeps replacement verification cancellat
   }
 });
 it.each(['en', 'ru'] as const)('REG-014 maps only authoritative row states to localized badges in %s', language => {
-  // Presentation follows the labels mockup: awaiting work is neutral, a recoverable hold amber, active upload blue.
+  // Presentation follows the labels mockup: awaiting work is neutral, held work amber, active upload blue.
   const expectedTones = {unavailable: 'neutral', unbound: 'neutral', 'identity-pending': 'neutral', pending: 'neutral', queued: 'neutral', sending: 'info', held: 'warn', sent: 'ok'} as const;
   for (const state of Object.keys(expectedTones) as (keyof typeof expectedTones)[]) {
     const view = journalSyncView({tripUuid: '', state, materialVersion: null, latestRevision: null, lastDurableUploadUtcMs: null, reason: state === 'held' ? 'validation' : null}, language);
