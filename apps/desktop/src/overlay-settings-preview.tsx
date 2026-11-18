@@ -1,6 +1,7 @@
 import React, {useEffect, useId, useRef, useState} from 'react';
 import type {AppLanguage, OverlaySettings} from '../../../packages/contracts/src';
 import {Card, CardContent, CardHeader, CardTitle} from '@/components/ui/card';
+import {Badge} from './components/ui/badge';
 import {OverlayContent} from './overlay-content';
 import {overlayExample, overlayPreviewSize, type ExampleCruiseState} from './overlay-settings-preview-model';
 import {overlayView} from './overlay-view';
@@ -26,7 +27,7 @@ export function OverlaySettingsPreview({settings, language, scale, cruise = 'act
     .items.find(item => item.id === 'cruise-control');
   return <Card size="sm" className="yu-overlay-preview-card" data-testid="overlay-preview-card" role="img" aria-labelledby={`${exampleId} ${headingId} ${cruiseId}`}>
     <CardHeader className="yu-overlay-card-heading"><CardTitle><h3 id={headingId}>{strings.overlayPreviewTitle} · {getOverlayLayoutText(settings.layout, language)}</h3></CardTitle>
-      <span id={cruiseId} className="yu-overlay-cruise-badge" data-state={cruise} data-testid="overlay-preview-cruise">{strings.overlayPreviewCruise}: {[cruiseItem?.value, cruiseItem?.unit].filter(Boolean).join(' ')}</span>
+      <Badge variant={cruise === 'active' ? 'ok' : 'neutral'} id={cruiseId} data-state={cruise} data-testid="overlay-preview-cruise">{strings.overlayPreviewCruise}: {[cruiseItem?.value, cruiseItem?.unit].filter(Boolean).join(' ')}</Badge>
     </CardHeader>
     <CardContent><div className="yu-overlay-scene yu-theme-dark" data-testid="overlay-preview-scene">
       <div ref={frame} className="yu-overlay-preview-space" data-layout={settings.layout} aria-hidden="true">

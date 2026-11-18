@@ -1451,7 +1451,7 @@ it('creates the overlay window at the size the saved layout reserves for its sec
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
   // ET-070: the Hard Mode row makes the panel's content 34 + 21 × 13 = 307 CSS px, ceil(307 × 0.7 + 2) = ceil(216.9) = 217 (203 before).
   // ET-071: cruise control is a panel row, 34 + 21 × 14 = 328, ceil(328 × 0.7 + 2) = ceil(231.6) = 232.
-  expect(configurations[1]).toMatchObject({width: 308, height: 247, webPreferences: {zoomFactor: 0.7}});
+  expect(configurations[1]).toMatchObject({width: 308, height: 248, webPreferences: {zoomFactor: 0.7}});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
@@ -1723,7 +1723,7 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   settingsChanged!();
   // ET-070: the HUD with every section and the Hard Mode row is ceil(402 × 0.7) = ceil(281.4) = 282 high (265 before).
   // ET-071: with cruise control ceil(426 × 0.7) = ceil(298.2) = 299.
-  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 224, height: 332});
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 224, height: 334});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'hud', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
@@ -1813,7 +1813,7 @@ it.each([false, true])('keeps the real pending settings defaults hidden until a 
     expect(await readFile(path.join(directory, 'settings.json'), 'utf8')).toBe(bytes);
     if (enabled) {
       // ET-070: 282 with the Hard Mode row, ceil(402 × 0.7); ET-071: 299 with cruise control, ceil(426 × 0.7).
-      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 224, height: 332}]]);
+      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 224, height: 334}]]);
       expect(windows[1].showInactive).toHaveBeenCalledOnce();
       expect(windows[1].setBounds.mock.invocationCallOrder[0]).toBeLessThan(windows[1].showInactive.mock.invocationCallOrder[0]);
     } else expect(windows[1].showInactive).not.toHaveBeenCalled();
@@ -1849,7 +1849,7 @@ it('creates the overlay window at the saved scale of its layout and applies that
   // ceil(286 × 1.05 + 2.1) = 303 high (ET-052; 281 with fourteen sections; ET-012d's 660 × 401 at zoom 1.5). ET-070: the
   // Hard Mode row makes it ceil(307 × 1.05 + 2.1) = ceil(324.45) = 325. ET-071: cruise control makes it ceil(328 × 1.05 + 2.1)
   // = ceil(346.5) = 347; adding the Rest State row gives ceil(349 × 1.05 + 2.1) = 369.
-  expect(configurations[1]).toMatchObject({width: 462, height: 369, webPreferences: {zoomFactor: 1.05, partition: 'ets2telemetry-overlay'}});
+  expect(configurations[1]).toMatchObject({width: 462, height: 371, webPreferences: {zoomFactor: 1.05, partition: 'ets2telemetry-overlay'}});
   expect(configurations[0].webPreferences).not.toHaveProperty('zoomFactor');
   overlayContents.emit('did-finish-load'); expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.05);
   expect(contents.setZoomFactor).not.toHaveBeenCalled();

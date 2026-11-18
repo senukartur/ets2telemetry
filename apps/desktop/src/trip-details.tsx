@@ -1,5 +1,5 @@
 import React from 'react';
-import {Check, ChevronRight, Circle, CircleHelp, Construction, Globe, Package, TriangleAlert, Truck, UserRound, UsersRound, X, Zap} from 'lucide-react';
+import {ChevronRight} from 'lucide-react';
 import type {AppLanguage, JournalGame, JournalOutcome, JournalTripDetail} from '../../../packages/contracts/src';
 import type {JournalSyncRow} from '../../../packages/contracts/src/journal';
 // Relative imports, so that renderer tests load the page without the '@' alias (like journal-table.tsx).
@@ -10,48 +10,32 @@ import {journalSyncView} from './dashboard-upload/view';
 import {HardModeBadge, HardModeTrip} from './hard-mode/card';
 import {t} from './i18n';
 import {InfoHint} from './info-hint';
-import {journalSiteSaved, type JournalBadge, type JournalCompletenessText, type JournalDetailText, type JournalJobBadge, type JournalModeBadge, type JournalSection, type JournalTextOptions, type JournalTimelineItem, type JournalTripSideText} from './journal-view';
+import {journalSiteSaved, type JournalCompletenessText, type JournalDetailText, type JournalSection, type JournalTextOptions, type JournalTimelineItem, type JournalTripSideText} from './journal-view';
 import type {journalTileValues} from './screens/journal-tiles';
+import {CompletenessBadge, JobTypeBadge, ModeBadge, OutcomeBadge, ProfileBadge, SpecialTransportBadge} from './trip-badges';
 
 /**
  * The compact trip page (ET-077, mockup T4). These components only present text that journal-view.ts and journal-tiles.ts
  * built: the planned, game-reported and observed values each keep their own label, an unavailable value keeps its reason,
  * and every status has an icon and a word. journal.tsx owns the reads and the actions.
  */
-type Tiles = ReturnType<typeof journalTileValues>;
 
-function ModeBadge({mode, testId}: {mode: JournalModeBadge; testId: string}) {
-  const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' || mode.kind === 'haulmp' ? UsersRound : CircleHelp;
-  return <Badge variant={mode.tone} className="yu-trip-chip" data-testid={testId}><Icon aria-hidden="true" strokeWidth={1.8} /><span>{mode.text}</span></Badge>;
-}
-/** The job market badge (ET-072): one neutral badge whose icon names the market kind, never a good or bad tone. */
-function JobTypeBadge({job, testId}: {job: JournalJobBadge; testId: string}) {
-  const Icon = job.kind === 'world-of-trucks' ? Globe : job.kind === 'quick-job' ? Zap : job.kind === 'cargo-market' ? Package : job.kind === 'freight-market' ? Truck : CircleHelp;
-  return <Badge variant="neutral" className="yu-trip-chip" data-testid={testId} data-kind={job.kind}><Icon aria-hidden="true" strokeWidth={1.8} /><span>{job.text}</span></Badge>;
-}
-function CompletenessChip({badge, testId}: {badge: JournalBadge; testId: string}) {
-  const Icon = badge.variant === 'secondary' ? Check : badge.variant === 'destructive' ? TriangleAlert : CircleHelp;
-  return <Badge variant={badge.variant === 'secondary' ? 'ok' : badge.variant === 'destructive' ? 'warn' : 'neutral'} className="yu-trip-chip" data-testid={testId}><Icon aria-hidden="true" strokeWidth={1.8} /><span>{badge.text}</span></Badge>;
-}
-function OutcomeChip({outcome, text}: {outcome: JournalOutcome; text: string}) {
-  const Icon = outcome === 'delivered' ? Check : outcome === 'cancelled' ? X : Circle;
-  return <Badge variant={outcome === 'delivered' ? 'ok' : outcome === 'cancelled' ? 'error' : 'neutral'} className="yu-trip-chip" data-testid="journal-detail-outcome"><Icon aria-hidden="true" strokeWidth={1.8} /><span>{text}</span></Badge>;
-}
+type Tiles = ReturnType<typeof journalTileValues>;
 
 /** The cargo, the chips and the route line. The accessible trip title stays for readers that name the trip by its cities. */
 export function TripHeading({game, isHardMode, cargo, text, side, language}: {game: JournalGame; outcome: JournalOutcome; isHardMode: boolean; cargo: string; text: JournalDetailText; side: JournalTripSideText; language: AppLanguage}) {
   return <div className="yu-trip-heading">
     <div className="yu-trip-titleline">
       <h1 data-testid="trip.header.cargo">{cargo}</h1>
-      <Badge variant={game} className="yu-trip-chip">{game.toUpperCase()}</Badge>
+      <Badge variant={game}>{game.toUpperCase()}</Badge>
       <ModeBadge mode={text.mode} testId="journal-detail-mode" />
-      <JobTypeBadge job={text.jobType} testId="journal-detail-job-type" />
-      {text.specialTransport ? <Badge variant="neutral" className="yu-trip-chip" data-testid="journal-detail-special"><Construction aria-hidden="true" strokeWidth={1.8} /><span>{text.specialTransport}</span></Badge> : null}
-      <OutcomeChip outcome={text.outcomeKind} text={text.outcome} />
-      <CompletenessChip badge={text.completeness} testId="journal-detail-completeness" />
+      <JobTypeBadge job={text.jobType} language={language} testId="journal-detail-job-type" />
+      {text.specialTransport ? <SpecialTransportBadge text={text.specialTransport} testId="journal-detail-special" /> : null}
+      <OutcomeBadge outcome={text.outcomeKind} text={text.outcome} testId="journal-detail-outcome" />
+      <CompletenessBadge badge={text.completeness} testId="journal-detail-completeness" />
       {isHardMode ? <HardModeBadge language={language} /> : null}
       {text.membership ? <>
-        <Badge variant="neutral" className="yu-trip-chip" data-testid="journal-detail-membership"><CircleHelp aria-hidden="true" strokeWidth={1.8} /><span>{text.membership}</span></Badge>
+        <ProfileBadge text={text.membership} testId="journal-detail-membership" />
         <InfoHint testId="journal-detail-membership-hint" label={t('ui.moreAbout', {v: text.membership}, language)}>{t('j.membershipPendingHint', undefined, language)}</InfoHint>
       </> : null}
     </div>

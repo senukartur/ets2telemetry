@@ -12,11 +12,11 @@ import {
 // REG-016 partial: the reserved rows of the card, the cluster's side panel and the HUD (ET-012d decisions K2, K3 and K7).
 // Every expected count and height below is the plan's hand-written table, worked out by hand from the CSS constants
 // (CSS px at zoom 1, border-box, borders included): card 1 + 10 + 20 + 6 + 24 × n + 10 + 1 = 48 + 24n; cluster panel
-// 1 + 8 + 18 + (3 + 18) × m + 8 + 1 = 36 + 21m; HUD 18 + (2 + 22) × n = 18 + 24n. n counts the enabled sections, m those
+// 1 + 8 + 20 + (3 + 18) × m + 8 + 1 = 38 + 21m; HUD 20 + (2 + 22) × n = 20 + 24n. n counts the enabled sections, m those
 // outside the cluster's gauge (speed, gear and RPM). They are not produced by the implementation.
 // ET-070 (owner decision D3; the requirement changed): the fixed Hard Mode indicator is one more row in every layout,
-// whatever the sections, so the reserves are card 48 + 24(n + 1) = 72 + 24n, cluster panel 36 + 21(m + 1) = 57 + 21m and
-// HUD 18 + 24(n + 1) = 42 + 24n, and each layout counts n + 1 (cluster m + 1) rows. n and m below still count sections.
+// whatever the sections, so the reserves are card 48 + 24(n + 1) = 72 + 24n, cluster panel 38 + 21(m + 1) = 59 + 21m and
+// HUD 20 + 24(n + 1) = 44 + 24n, and each layout counts n + 1 (cluster m + 1) rows. n and m below still count sections.
 const only = (...ids: OverlaySectionId[]): OverlaySections =>
   Object.freeze(Object.fromEntries(OVERLAY_SECTION_IDS.map(id => [id, ids.includes(id)])) as Record<OverlaySectionId, boolean>);
 const ALL = DEFAULT_OVERLAY_SECTIONS;
@@ -36,8 +36,8 @@ it('fixes the hand-written row constants of each layout', () => {
     row: CARD_ROW_HEIGHT_CSS}).toEqual({border: 1, paddingY: 10, paddingX: 14, header: 20, headerGap: 6, row: 24});
   expect({border: CLUSTER_PANEL_BORDER_CSS, paddingY: CLUSTER_PANEL_PADDING_Y_CSS, paddingX: CLUSTER_PANEL_PADDING_X_CSS, tags: CLUSTER_TAG_ROW_HEIGHT_CSS,
     gap: CLUSTER_ROW_GAP_CSS, row: CLUSTER_ROW_HEIGHT_CSS, gauge: CLUSTER_GAUGE_SIZE_CSS})
-    .toEqual({border: 1, paddingY: 8, paddingX: 10, tags: 18, gap: 3, row: 18, gauge: 200});
-  expect({tags: HUD_TAG_ROW_HEIGHT_CSS, gap: HUD_LINE_GAP_CSS, line: HUD_LINE_HEIGHT_CSS}).toEqual({tags: 18, gap: 2, line: 22});
+    .toEqual({border: 1, paddingY: 8, paddingX: 10, tags: 20, gap: 3, row: 18, gauge: 200});
+  expect({tags: HUD_TAG_ROW_HEIGHT_CSS, gap: HUD_LINE_GAP_CSS, line: HUD_LINE_HEIGHT_CSS}).toEqual({tags: 20, gap: 2, line: 22});
   expect(LAYOUT_BORDER_CSS).toEqual({card: 1, cluster: 1, hud: 0});
   expect(ROW_LAYOUTS).toEqual(['card', 'cluster', 'hud']);
   expect(HARD_MODE_ROWS).toBe(1);
@@ -45,27 +45,19 @@ it('fixes the hand-written row constants of each layout', () => {
 });
 
 it.each([
-  // ET-084: 72 + 24 × 17 = 480, 57 + 21 × 13 = 330 (the sign takes no panel row) and 42 + 24 × 17 = 450. With speed, gear and RPM
-  // on the sign's hero needs no surplus.
-  {name: 'every section', sections: ALL, n: 18, m: 14, card: 504, cluster: 351, hud: 474},
-  // ET-071: 72 + 24 × 16 = 456, 57 + 21 × 13 = 330 (speed, gear and RPM are in the gauge; cruise control is a panel row) and
-  // 42 + 24 × 16 = 426.
-  {name: 'every section but the speed limit', sections: WITHOUT_LIMIT, n: 16, m: 13, card: 456, cluster: 330, hud: 426},
-  // ET-070: 72 + 24 × 15 = 432, 57 + 21 × 12 = 309 and 42 + 24 × 15 = 402 (ET-052's 408, 288 and 378 without the Hard Mode row).
-  {name: 'every section but the speed limit and cruise control', sections: WITHOUT_CRUISE, n: 15, m: 12, card: 432, cluster: 309, hud: 402},
-  {name: 'every section but the speed limit, cruise control and the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 408, cluster: 288, hud: 378},
-  {name: 'the break alone', sections: only('mandatory-break'), n: 1, m: 1, card: 96, cluster: 78, hud: 66},
-  {name: 'cruise control alone', sections: only('cruise-control'), n: 1, m: 1, card: 96, cluster: 78, hud: 66},
-  // ET-084: the sign alone: card 48 + 24 × 2 + a surplus of 74 − 24 = 50, so 146; cluster 57 (no panel row); HUD 42 + 24 = 66.
-  {name: 'the speed limit alone', sections: only('speed-limit'), n: 1, m: 0, card: 146, cluster: 57, hud: 66},
-  {name: 'every section without distance driven', sections: WITHOUT_DRIVEN, n: 13, m: 10, card: 384, cluster: 267, hud: 354},
-  {name: 'every section without range and distance driven', sections: WITHOUT_RANGE_AND_DRIVEN, n: 12, m: 9, card: 360, cluster: 246, hud: 330},
-  {name: 'also without game time', sections: ALSO_WITHOUT_GAME_TIME, n: 11, m: 8, card: 336, cluster: 225, hud: 306},
-  {name: 'job-focus', sections: OVERLAY_PRESETS['job-focus'], n: 7, m: 5, card: 240, cluster: 162, hud: 210},
-  // ET-084: driving-only includes cruise control and the speed limit: 72 + 24 × 7 = 240, 57 + 21 × 3 = 120 and 42 + 24 × 7 = 210.
-  {name: 'driving-only', sections: OVERLAY_PRESETS['driving-only'], n: 7, m: 3, card: 240, cluster: 120, hud: 210},
-  // Speed alone is in the cluster's gauge: its panel holds only the Hard Mode row, 57.
-  {name: 'speed only', sections: only('speed'), n: 1, m: 0, card: 96, cluster: 57, hud: 66}
+  {name: 'every section', sections: ALL, n: 18, m: 14, card: 504, cluster: 353, hud: 476},
+  {name: 'every section but the speed limit', sections: WITHOUT_LIMIT, n: 16, m: 13, card: 456, cluster: 332, hud: 428},
+  {name: 'every section but the speed limit and cruise control', sections: WITHOUT_CRUISE, n: 15, m: 12, card: 432, cluster: 311, hud: 404},
+  {name: 'every section but the speed limit, cruise control and the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 408, cluster: 290, hud: 380},
+  {name: 'the break alone', sections: only('mandatory-break'), n: 1, m: 1, card: 96, cluster: 80, hud: 68},
+  {name: 'cruise control alone', sections: only('cruise-control'), n: 1, m: 1, card: 96, cluster: 80, hud: 68},
+  {name: 'the speed limit alone', sections: only('speed-limit'), n: 1, m: 0, card: 146, cluster: 59, hud: 68},
+  {name: 'every section without distance driven', sections: WITHOUT_DRIVEN, n: 13, m: 10, card: 384, cluster: 269, hud: 356},
+  {name: 'every section without range and distance driven', sections: WITHOUT_RANGE_AND_DRIVEN, n: 12, m: 9, card: 360, cluster: 248, hud: 332},
+  {name: 'also without game time', sections: ALSO_WITHOUT_GAME_TIME, n: 11, m: 8, card: 336, cluster: 227, hud: 308},
+  {name: 'job-focus', sections: OVERLAY_PRESETS['job-focus'], n: 7, m: 5, card: 240, cluster: 164, hud: 212},
+  {name: 'driving-only', sections: OVERLAY_PRESETS['driving-only'], n: 7, m: 3, card: 240, cluster: 122, hud: 212},
+  {name: 'speed only', sections: only('speed'), n: 1, m: 0, card: 96, cluster: 59, hud: 68}
 ])('reserves $card / $cluster / $hud CSS px for $name', ({sections, n, m, card, cluster, hud}) => {
   expect({card: layoutRowCount('card', sections), cluster: layoutRowCount('cluster', sections), hud: layoutRowCount('hud', sections)})
     .toEqual({card: n + 1, cluster: m + 1, hud: n + 1});
@@ -77,14 +69,11 @@ it.each([
 });
 
 it('counts every enabled section in the cluster panel when no gauge section is enabled', () => {
-  // Cruise control to the break are thirteen panel sections and the Hard Mode row: 36 + 21 × 14 = 330, as with every section
-  // (ET-070, ET-071). The speed limit sign (ET-084) stands in the gauge's place, not in a panel row.
   const panelOnly = {...ALL, speed: false, gear: false, rpm: false};
   expect(layoutRowCount('cluster', panelOnly)).toBe(15);
-  expect(layoutReservedCss('cluster', panelOnly)).toBe(351);
-  // Gear alone shows only the gauge: the panel keeps only the Hard Mode row, 36 + 21 = 57; fuel adds a second, 78.
-  expect(layoutReservedCss('cluster', only('gear'))).toBe(57);
-  expect(layoutReservedCss('cluster', only('fuel'))).toBe(78);
+  expect(layoutReservedCss('cluster', panelOnly)).toBe(353);
+  expect(layoutReservedCss('cluster', only('gear'))).toBe(59);
+  expect(layoutReservedCss('cluster', only('fuel'))).toBe(80);
 });
 
 // ET-084: the card's hero height for each of the eight subsets of speed (S), gear (G) and RPM (R) with the sign (L): one

@@ -12,28 +12,14 @@ import {OVERLAY_PRESETS} from '../../apps/desktop/src/overlay-sections';
 // session had a 2560 × 1440 physical game client at 150% on a 5120 × 2160 display; the fake screen divides by 1.5, so the
 // client {2560, 360, 2560, 1440} is {1706.67, 240, 1706.67, 960} DIP with its bottom at 1200, on a 3413.33 × 1440 display.
 //
-// ET-045e (decisions Z2 and Z3) re-derived these rectangles because the requirement for the scale changed: a setting's
-// zoom is setting × 0.7 and the strip is floor(min(1280 × max(1, setting), client width − 32)) wide (overlay-geometry.ts).
-// At the owner's saved setting 0.5 (zoom 0.35) the strip is now 1280 wide at CSS width 3657 and every preset needs one row,
-// ceil(13.3 + 2) = 16 DIP, so a preset change no longer changes its rectangle there. Each ET-045c scenario keeps its
-// discriminating relation (a request below the window's height or Windows' minimum, a rectangle that changes or not on a
-// preset change) at the same fractions at the setting 1 (zoom 0.7): the strip is 1280 wide, free width
-// 1706.67 − 32 − 1280 = 394.67, so x = round(1706.67 + 16 + 0.8485 × 394.67) = round(2057.54) = 2058. At CSS width 1828
-// (inner 1801) Everything needs two rows, ceil(76 × 0.7 + 2) = 56, and Driving only one, ceil(26.6 + 2) = 29. The bottom
-// anchor puts the top at 240 + 8 + (960 − 16 − height): 1136 and 1163; the owner's 50% strip is at 1176.
-// ET-052 re-derived (the requirement changed: a fifteenth section, the next mandatory break): Everything now needs three rows
-// at CSS width 1828 (the second row ends at game time, 1704, and the break would reach 1868 of the inner 1801),
-// ceil(114 × 0.7 + 2) = 82, so its top is 248 + 944 − 82 = 1110. Driving only is unchanged (29, top 1163), so the scenarios'
-// discriminating relation holds: the two presets differ in height at the setting 1.
-// ET-071 re-derived (the requirement changed: a sixteenth section, cruise control, a fixed 140 CSS px strip item that Driving
-// only includes): at the setting 1 Everything is still three rows (82; the first row now ends at cargo, 1678) and Driving
-// only one (its line is 1234 of 1801, 29). At 50% (CSS 3657, inner 3627) Everything's 3674 CSS px line needs two rows,
-// ceil(26.6 + 2) = 29 at top 1163, while Driving only and Job focus stay one 16 DIP row at 1176. At 200% (inner 1169)
-// Driving only needs two rows, ceil(106.4 + 2.8) = 110.
-// ET-084 re-derived (the speed limit, a fixed 32 CSS px strip item that Driving only includes): every height above stands. At 100%
-// Everything stays three rows (82; the first row now ends at cargo, 1724) and Driving only one (1280 of 1801, 29). At 50% Everything's
-// 3720 CSS px line still needs two rows (29) and the other selections stay one row of 16. At 200% (inner 1169) Driving only's first
-// row ends at range (1166), so the indicator takes a second (110). At 300% (inner 771) it stays two rows (164).
+// Current geometry at setting 1 (zoom 0.7): strip 1280 DIP wide, CSS 1828, inner 1801.
+// Everything reserves three rows (82 DIP); Driving only has a 1352 CSS px line and one row (29 DIP).
+// Free width is 1706.67 - 32 - 1280 = 394.67: x = round(1722.67 + 0.8485 x 394.67) = 2058.
+// The bottom anchor is 248 + 944 - height: y 1110 for Everything and 1163 for Driving only.
+// At setting 0.5 (zoom 0.35), inner width 3627 is below Everything's 3956 CSS px total: two rows, 29 DIP.
+// Driving only and Job focus stay one row, 16 DIP, at y 1176. At setting 2, inner width 1169 makes
+// Driving only wrap after fuel (1044); range and the paired indicators fill row two (294), for 110 DIP height.
+// At setting 3, inner 771 wraps after RPM (686), leaving cruise through the paired indicators (652): two rows, 164 DIP.
 const SCALE = 1.5;
 const OWNER: OverlayPlacement = {x: 0.8485, y: 1, scale: 0.5};
 /** The owner's fractions at the setting 1, where Everything and Driving only differ. */
@@ -196,9 +182,9 @@ it('fits a window Windows keeps at least 40 DIP high at the same fractions, insi
 
 // ET-045e: the owner's saved 50% strip now requests 1280 × 16 at {2058, 1176}, below the 38 DIP minimum height the ET-045c
 // probe measured at 150%. It is fitted at the same fractions to {2058, 248 + 944 − 38 = 1154, 1280, 38}, inside the
-// client with its content at the window's bottom, and every preset of one row keeps that rectangle without another setBounds.
-// ET-071: Everything is two rows at 50% (29 DIP at 1163, see above), so the scenario starts from Driving only and cycles
-// through the one-row selections: Job focus, and Everything without cruise control (ET-070's fifteen sections).
+// client with its content at the window's bottom. Every tested request stays below the same minimum and fits that rectangle.
+// The combined 112 px tags and 140 px fixed indicator make Everything without cruise/rest 3638 CSS px wide, just above
+// the 3627 px inner width at 50%, so it requests two rows (29 DIP); Job focus and Driving only still request one (16 DIP).
 it('fits the owner 50% strip, which now requests 16 DIP, to a 38 DIP minimum at the bottom of the client', () => {
   const t = setup(OVERLAY_PRESETS['driving-only'], OWNER); t.setMode('min-height-40'); t.state.minHeight = 38;
   t.overlay.loaded(true); t.overlay.update(t.current);
@@ -207,11 +193,13 @@ it('fits the owner 50% strip, which now requests 16 DIP, to a 38 DIP minimum at 
   expect(t.mismatches().map(report => report.facts)).toEqual([expect.objectContaining({mode: 'driving', outcome: 'fitted', reqX: 2058, reqY: 1176, reqW: 1280,
     reqH: 16, actH: 38})]);
   expect(overlayBounds('strip', CLIENT, OWNER, OVERLAY_PRESETS.everything)).toEqual({x: 2058, y: 1163, width: 1280, height: 29});
-  for (const sections of [OVERLAY_PRESETS['job-focus'], {...OVERLAY_PRESETS.everything, 'cruise-control': false, 'rest-state': false}, OVERLAY_PRESETS['driving-only']]) {
+  // A changed requested height retires the previous fit cache and takes the normal four bounded placement attempts;
+  // changing sections without changing the requested rectangle still makes no setBounds call.
+  for (const {sections,height,y,attempts} of [{sections:OVERLAY_PRESETS['job-focus'],height:16,y:1176,attempts:0},{sections:{...OVERLAY_PRESETS.everything,'cruise-control':false,'rest-state':false},height:29,y:1163,attempts:4},{sections:OVERLAY_PRESETS['driving-only'],height:16,y:1176,attempts:4}]) {
     const from = t.calls.length;
     t.overlay.setLayout('strip', OWNER, sections);
-    expect(overlayBounds('strip', CLIENT, OWNER, sections)).toEqual({x: 2058, y: 1176, width: 1280, height: 16});
-    expect(setBoundsSince(t.calls, from)).toBe(0); expect(t.state.bounds).toEqual({x: 2058, y: 1154, width: 1280, height: 38});
+    expect(overlayBounds('strip', CLIENT, OWNER, sections)).toEqual({x: 2058, y, width: 1280, height});
+    expect(setBoundsSince(t.calls, from)).toBe(attempts); expect(t.state.bounds).toEqual({x: 2058, y: 1154, width: 1280, height: 38});
   }
   t.metadata.foreground = false; t.overlay.update(t.current);
   expect(t.overlay.beginEdit(true)).toEqual({active: true, layout: 'strip', scale: 0.5, placement: 'visible'});
@@ -360,8 +348,8 @@ it('keeps the fractions of a fitted window dropped where it stands, and repeated
 
 // Review round 1, re-derived for ET-045e. A width-limited strip in a 750 × 1440 physical client (500 × 960 DIP at
 // (1706.67, 240)) at the owner's 50% is floor(min(1280, 500 − 32)) = 468 wide with no free width, so
-// x = 1706.67 + 16 = 1723 whatever the fraction. Speed and gear need one row at zoom 0.35 (tags 96 + 96, speed 140 and gear
-// 90 with three 14 px gaps, 464 of the 1307 inner CSS px of floor(468 / 0.35) = 1337): 16 high at y 1176. Windows adds
+// x = 1706.67 + 16 = 1723 whatever the fraction. The selected tags, speed, limit, gear, cruise and Hard Mode
+// need 224 + 140 + 32 + 90 + 140 + 140 + six 14 px gaps = 850 of the 1307 inner CSS px: one row, 16 DIP, at y 1176. Windows adds
 // 1 DIP of width and keeps 38 high. Fitting the inflated width (469) would leave −1 DIP of free width and refuse the
 // strip; only the height is fitted: {1723, 248 + 944 − 38 = 1154, 468, 38}.
 it('fits only the axis Windows changed, so a width-limited strip with a rounded width stays visible', () => {

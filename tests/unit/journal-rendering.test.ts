@@ -3,6 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it, vi} from 'vitest';
 import type {AppLanguage, JournalTripListItem, JournalTripPage} from '../../packages/contracts/src';
 import {TripTable} from '../../apps/desktop/src/journal-table';
+import {JobTypeBadge, ModeBadge} from '../../apps/desktop/src/trip-badges';
 import {journalListText} from '../../apps/desktop/src/journal-view';
 import {LIST_ITEM, TRIP} from '../shared/journal-replies';
 
@@ -24,6 +25,24 @@ function render(trips: JournalTripListItem[], language: AppLanguage, withSync = 
 const headers = (html: string) => [...html.matchAll(/<th[^>]*>(.*?)<\/th>/g)].map(match => match[1].replace(/<span id="[^"]*" class="sr-only"[^>]*>.*?<\/span>/, '').replace(/<span class="sr-only">.*?<\/span>/, '[open]').replace(/<[^>]+>/g, ''));
 
 describe('TripTable (ET-076)', () => {
+  it.each([
+    ['single-player', 'Single-player', 'neutral', 'user-round'], ['truckersmp', 'TruckersMP', 'ok', 'users-round'],
+    ['haulmp', 'HaulMP', 'ok', 'users-round'], ['convoy', 'Convoy', 'neutral', 'users-round'], ['unknown', 'Mode unknown', 'neutral', 'circle-help'],
+    ['truckersmp', 'TruckersMP · unconfirmed', 'warn', 'triangle-alert']
+  ] as const)('uses a shared semantic badge for %s (%s)', (kind, text, tone, icon) => {
+    const html = renderToStaticMarkup(React.createElement(ModeBadge, {mode: {kind, text, tone}}));
+    expect(html).toContain(`data-variant="${tone}"`);
+    expect(html).toContain(`lucide-${icon}`);
+    expect(html).not.toContain('<button'); expect(html).not.toContain('title=');
+    if (tone === 'warn') expect(html).toContain('<small class="yu-badge-note"> · unconfirmed</small>');
+  });
+  it('keeps unsupported job values and missing reasons visible outside their compact badges', () => {
+    for (const [kind, text, label] of [['other', 'A long game-provided market value', 'Other job type'], ['unavailable', 'unavailable (not observed)', 'Job type unknown']] as const) {
+      const html = renderToStaticMarkup(React.createElement(JobTypeBadge, {job: {kind, text}, language: 'en'}));
+      expect(html).toContain(`<span>${label}</span></span><small class="yu-badge-note">${text}</small>`);
+      expect(html).toContain('lucide-circle-help');
+    }
+  });
   it.each([['en', 'Cancelled'], ['ru', 'Отменён']] as const)('presents a superseded job as a red cancellation badge (%s)', (language, label) => {
     const trip = {...ITEM, outcome: 'none' as const, closeReason: 'different-job' as const};
     const html = render([trip], language);
@@ -68,9 +87,9 @@ describe('TripTable (ET-076)', () => {
     // The fixture trip has an unknown mode: it shows as unknown, never as single-player.
     expect(html).toMatch(/data-testid="journal-row-mode"[^>]*data-kind="unknown"[^>]*>.*?Mode unknown/);
     expect(html).not.toContain('Single-player');
-    expect(html).toMatch(/data-testid="journal-row-job-type"[^>]*data-kind="quick-job"[^>]*>Quick job</);
-    expect(html).toMatch(/data-testid="journal-row-job-type"[^>]*data-kind="world-of-trucks"[^>]*>World of Trucks</);
-    expect(html).toContain('<small data-testid="journal-row-job-sub">External market</small>');
+    expect(html).toMatch(/data-testid="journal-row-job-type"[^>]*data-kind="quick-job"[^>]*>.*?lucide-zap.*?<span>Quick job<\/span>/);
+    expect(html).toMatch(/data-testid="journal-row-job-type"[^>]*data-kind="world-of-trucks"[^>]*>.*?lucide-globe.*?<span>World of Trucks<\/span>/);
+    expect(html).toMatch(/<small[^>]*data-testid="journal-row-job-sub">External market<\/small>/);
   });
 
   it('marks special transport with a line of its own only when the game flagged the job', () => {
@@ -96,9 +115,9 @@ describe('TripTable (ET-076)', () => {
     expect(marked).toContain('data-testid="journal-row-observed">0.0 km</div>');
     expect(marked).not.toContain('journal-row-planned');
     expect(marked).not.toContain('journal-row-distance-partial');
-    expect(marked).toMatch(/data-testid="journal-row-membership"[^>]*>Profile check pending<\/span>/);
+    expect(marked).toMatch(/data-testid="journal-row-membership"[^>]*>.*?lucide-circle-help.*?<span>Profile check pending<\/span>/);
     expect(marked).toContain('This recording may still join an earlier trip of the same job if the profile is confirmed in this game session; otherwise it stays separate.');
-    expect(render([{...ITEM, accounting, membership: 'pending'}], 'ru')).toMatch(/data-testid="journal-row-membership"[^>]*>Ожидает проверки профиля<\/span>/);
+    expect(render([{...ITEM, accounting, membership: 'pending'}], 'ru')).toMatch(/data-testid="journal-row-membership"[^>]*>.*?<span>Ожидает проверки профиля<\/span>/);
     const plain = render([{...ITEM, accounting: {...accounting, distance: {status: 'complete' as const, breaks: [], quality: []}}}], 'en');
     expect(plain).not.toContain('journal-row-distance-partial'); expect(plain).not.toContain('journal-row-membership');
     expect(render([ITEM], 'en')).not.toContain('journal-row-distance-partial');

@@ -1,5 +1,5 @@
 import React from 'react';
-import {ArrowDown, ArrowUp, ArrowUpDown, Check, ChevronRight, Circle, CircleHelp, Construction, TriangleAlert, UserRound, UsersRound, X} from 'lucide-react';
+import {ArrowDown, ArrowUp, ArrowUpDown, ChevronRight} from 'lucide-react';
 import type {AppLanguage, JournalGame, JournalTripsQuery, JournalTripSync} from '../../../packages/contracts/src';
 // Relative imports, so that renderer tests load the table without the '@' alias (like shell/settings-layout.tsx).
 import {Badge} from './components/ui/badge';
@@ -10,7 +10,8 @@ import {JournalQualificationBadge} from './qualification/journal-result';
 import {HardModeBadge} from './hard-mode/card';
 import {t} from './i18n';
 import {InfoHint} from './info-hint';
-import type {JournalBadge, JournalModeBadge, JournalTripRow} from './journal-view';
+import type {JournalTripRow} from './journal-view';
+import {CompletenessBadge, JobTypeBadge, ModeBadge, OutcomeBadge, ProfileBadge, SpecialTransportBadge} from './trip-badges';
 
 /**
  * The compact trip table (ET-076, mockup T3). It only presents the rows of one journal page: the row texts come from
@@ -18,13 +19,6 @@ import type {JournalBadge, JournalModeBadge, JournalTripRow} from './journal-vie
  * the horizontal scroller; the shell's content never scrolls sideways.
  */
 export interface JournalOpenTrip {tripUuid: string; game: JournalGame}
-
-const completenessVariant = (badge: JournalBadge) => badge.variant === 'secondary' ? 'ok' : badge.variant === 'destructive' ? 'warn' : 'neutral';
-
-function ModeLine({mode}: {mode: JournalModeBadge}) {
-  const Icon = mode.tone === 'warn' ? TriangleAlert : mode.kind === 'single-player' ? UserRound : mode.kind === 'truckersmp' || mode.kind === 'haulmp' ? UsersRound : CircleHelp;
-  return <span className="yu-journal-mode" data-testid="journal-row-mode" data-kind={mode.kind} data-variant={mode.tone}><Icon aria-hidden="true" strokeWidth={1.8} /><span>{mode.text}</span></span>;
-}
 
 type Sort = {sort: NonNullable<JournalTripsQuery['sort']>; direction: NonNullable<JournalTripsQuery['direction']>};
 export function TripTable({rows, sync, language, onOpen, sort, onSort, busy}: {
@@ -49,22 +43,19 @@ export function TripTable({rows, sync, language, onOpen, sort, onSort, busy}: {
   </TableRow></TableHeader><TableBody>
     {busy && rows.length === 0 ? Array.from({length: 8}, (_, index) => <TableRow key={index} aria-hidden="true">{Array.from({length: sync ? 11 : 10}, (_, column) => <TableCell key={column}><span className="yu-journal-skeleton" /></TableCell>)}</TableRow>) : null}
     {rows.map(row => {
-      const OutcomeIcon = row.outcomeKind === 'delivered' ? Check : row.outcomeKind === 'cancelled' ? X : Circle;
-      const RecordingIcon = row.completeness.variant === 'secondary' ? Check : row.completeness.variant === 'destructive' ? TriangleAlert : Circle;
       return <TableRow key={row.tripUuid} data-testid="journal-row" data-trip={row.tripUuid}>
         <TableCell data-testid="journal-row-started"><time title={row.started}>{row.startedLabel}</time></TableCell>
         <TableCell data-testid="journal-row-game"><Badge variant={row.gameId} data-testid="journal-row-game-name">{row.game}</Badge>
-          <div className="yu-journal-mode-line"><ModeLine mode={row.mode} /></div></TableCell>
+          <div className="yu-journal-mode-line"><ModeBadge mode={row.mode} testId="journal-row-mode" /></div></TableCell>
         <TableCell><div data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={language} /></> : null}</div></TableCell>
-        <TableCell><div className={row.jobType.kind === 'world-of-trucks' ? 'yu-journal-job-world' : undefined}><Badge variant="neutral" className="yu-tag" data-testid="journal-row-job-type" data-kind={row.jobType.kind}>{row.jobType.text}</Badge></div>
-          {row.jobType.sub ? <small data-testid="journal-row-job-sub">{row.jobType.sub}</small> : null}
-          {row.specialTransport ? <div className="yu-journal-special" data-testid="journal-row-special"><Construction aria-hidden="true" strokeWidth={1.8} />{row.specialTransport}</div> : null}</TableCell>
+        <TableCell><JobTypeBadge job={row.jobType} language={language} testId="journal-row-job-type" noteTestId="journal-row-job-sub" />
+          {row.specialTransport ? <div className="yu-journal-mode-line"><SpecialTransportBadge text={row.specialTransport} testId="journal-row-special" /></div> : null}</TableCell>
         <TableCell><div data-testid="journal-row-route">{row.route}</div><small data-testid="journal-row-companies">{row.companies}</small></TableCell>
         <TableCell className="yu-journal-num"><div data-testid="journal-row-observed">{row.observedDistance}</div></TableCell>
         <TableCell className="yu-journal-num" data-testid="journal-row-expected">{row.expectedIncome}</TableCell>
-        <TableCell data-testid="journal-row-outcome"><Badge variant={row.outcomeKind === 'delivered' ? 'ok' : row.outcomeKind === 'cancelled' ? 'error' : 'neutral'}><OutcomeIcon aria-hidden="true" className="size-3" />{row.outcome}</Badge></TableCell>
-        <TableCell><Badge variant={completenessVariant(row.completeness)} data-testid="journal-row-completeness"><RecordingIcon aria-hidden="true" className="size-3" />{row.completeness.text}</Badge>
-          {row.membership ? <div className="yu-journal-mode-line"><Badge variant="neutral" data-testid="journal-row-membership">{row.membership}</Badge><InfoHint label={t('ui.moreAbout', {v: row.membership}, language)}>{text('j.membershipPendingHint')}</InfoHint></div> : null}</TableCell>
+        <TableCell data-testid="journal-row-outcome"><OutcomeBadge outcome={row.outcomeKind} text={row.outcome} /></TableCell>
+        <TableCell><CompletenessBadge badge={row.completeness} testId="journal-row-completeness" />
+          {row.membership ? <div className="yu-journal-mode-line"><ProfileBadge text={row.membership} testId="journal-row-membership" /><InfoHint label={t('ui.moreAbout', {v: row.membership}, language)}>{text('j.membershipPendingHint')}</InfoHint></div> : null}</TableCell>
         {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={language} /><JournalQualificationBadge row={sync.rows.find(item=>item.tripUuid===row.tripUuid)!} language={language}/></TableCell> : null}
         <TableCell><Button size="icon-sm" variant="ghost" className="yu-journal-open" aria-label={t('j.openTrip', {v: row.cargo}, language)} data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}><ChevronRight aria-hidden="true" /></Button></TableCell>
       </TableRow>;
