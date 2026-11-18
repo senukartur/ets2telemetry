@@ -62,6 +62,7 @@ export class UploadMainController {
     if(c.registration.origin!==this.origin||!c.credentialGeneration)throw Error('RECONCILIATION');
     authority.committed=true;this.#controlError=null;this.#status.owner={origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch};
     const context:CredentialContext={generation:c.credentialGeneration,channel:this.channel,owner:{origin:c.registration.origin,accountId:c.registration.accountId,companyId:c.registration.companyId,identityEpoch:c.registration.identityEpoch},registration:c.registration};const token=await store.load(context);this.#current(epoch,rpc);
+    this.#connectionVersion=c.version;
     const activated=await this.#call({action:'activate',token,generation:context.generation,version:c.version});if(activated.kind!=='settled')throw Error('RECONCILIATION');this.#current(epoch,rpc);await store.activate(context);this.#current(epoch,rpc);this.#activated(activated.status,context.owner);this.#connectionVersion=c.version;
   }
   async #removeCredentials(store:UploadCredentialStore){for(let turns=0;turns<128;turns++){const result=await store.cleanup([],8);if(!result.more){await store.removeActivation();return;}}throw Error('CREDENTIAL_UNAVAILABLE');}

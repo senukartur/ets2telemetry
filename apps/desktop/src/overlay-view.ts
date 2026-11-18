@@ -86,6 +86,7 @@ export type OverlayTagId = 'paused' | 'no-signal' | 'stale' | 'origin';
 export interface OverlayTag {id: OverlayTagId; testId: `overlay-tag-${OverlayTagId}`; text: string}
 export interface OverlayItemGroup {id: OverlayGroupId; items: OverlayItem[]}
 export interface OverlayView {
+  qualification?:{cue:import('../../../packages/contracts/src/qualification').QualificationCue;name:string};
   layout: OverlayLayout;
   source: OverlayPresentation['source'];
   origin: OverlayPresentation['origin'];
@@ -246,6 +247,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     // ET-084: the speed limit sign sits on the gauge or in its place, never in the side panel.
     panel: items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id) && !item.sign),
     hardMode: overlayHardModeItem(presentation.hardMode, language),
+    ...(presentation.qualification!==undefined?{qualification:{cue:presentation.qualification==='pass'||presentation.qualification==='fail'?presentation.qualification:'neutral',name:language==='ru'?`Предварительная квалификация: ${presentation.qualification==='pass'?'соответствует':presentation.qualification==='fail'?'не соответствует':'неизвестно'}`:`Provisional qualification: ${presentation.qualification==='pass'?'pass':presentation.qualification==='fail'?'fail':'unknown'}`}}:{}),
     backgroundOpacity: isOverlayOpacity(presentation.backgroundOpacity) ? presentation.backgroundOpacity : DEFAULT_OVERLAY_OPACITY,
     editing: presentation.editing === true, contentAnchorY: contentAnchorY(presentation)
   };

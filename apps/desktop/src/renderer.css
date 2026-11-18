@@ -203,3 +203,10 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-card-hero[data-speed="false"] .overlay-card-gear,.overlay-card-hero[data-speed="false"] .overlay-card-rpm {grid-column:1}
 .overlay-card-gear .overlay-value {line-height:1.05}
 .overlay-card-hero[data-count="1"] .overlay-card-gear .overlay-value {font-size:16px}
+
+.qualification-medal { display:inline-flex;align-items:center;position:relative;width:28px;height:22px;flex:none;color:var(--yu-ov-muted); }
+.qualification-medal>svg { width:18px;height:22px; }
+.qualification-medal[data-state=pass] { color:var(--yu-ov-hm-active); }
+.qualification-medal[data-state=fail] { color:var(--yu-ov-hm-lost); }
+.qualification-medal-mark { display:flex;position:absolute;right:0;bottom:0;width:10px; }
+.qualification-medal-mark>svg { width:10px;height:10px; }

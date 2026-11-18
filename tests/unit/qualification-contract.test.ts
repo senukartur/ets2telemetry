@@ -9,6 +9,10 @@ describe('reviewed companion contract (REG-010)',()=>{
   for(const fixture of fixtures) it(fixture.name,()=>{
     expect(isQualificationWire(fixture.schema,fixture.value)).toBe(true);
     expect(isQualificationWire(fixture.schema,{...fixture.value as object,privateNotes:'forbidden'})).toBe(false);
+    if(fixture.schema==='ResultBatch')for(const result of (fixture.value as QualificationWire['ResultBatch']).items){
+      // This pinned fictional review claims receipt without its required exact message identity; fail closed.
+      expect(qualificationResultMatches(result,{source:result.source,eventId:result.requestedEventId,revision:result.requestedRevision,...(result.unchanged?{ifVersion:result.version}:{})})).toBe(fixture.name!=='fictional-ResultBatch-11');
+    }
   });
   it('cannot turn a decision on another canonical source into a current local assessment',()=>{
     const result=structuredClone(results.find(result=>result.assessmentBasis==='current')!);

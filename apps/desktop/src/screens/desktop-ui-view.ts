@@ -131,12 +131,12 @@ export function pluginStatusText(targets: readonly Pick<PluginTargetView, 'state
 
 export type StatusTone = 'ok' | 'warn' | 'error' | 'neutral';
 export interface StatusChip {text: string; tone: StatusTone}
-export type ShellRoute = 'live' | 'hardMode' | 'journal' | 'settings' | 'account';
+export type ShellRoute = 'live' | 'hardMode' | 'journal' | 'settings' | 'account' | 'qualification';
 /** The sidebar groups in order (ET-074); the top bar's breadcrumb names the group of the current route. */
 export const NAV_GROUPS = [
   {id: 'drive', routes: ['live', 'hardMode', 'journal']},
   {id: 'app', routes: ['settings']},
-  {id: 'company', routes: ['account']}
+  {id: 'company', routes: ['account','qualification']}
 ] as const satisfies readonly {id: string; routes: readonly ShellRoute[]}[];
 export type NavGroupId = typeof NAV_GROUPS[number]['id'];
 export function routeGroup(route: ShellRoute): NavGroupId {

@@ -3,6 +3,8 @@ import type {AppLanguage} from '../../../../packages/contracts/src';
 export type {AppLanguage};
 
 export type I18nKey =
+ | 'nav.qualification'
+ | 'upload.companionScope'
  | 'upload.intro'
  | 'upload.connection'
  | 'upload.unconfigured'

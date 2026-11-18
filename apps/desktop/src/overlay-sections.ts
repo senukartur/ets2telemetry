@@ -151,6 +151,7 @@ export function overlayUrgency(presentation: OverlayPresentation): OverlayPresen
  */
 export function staleOverlay(presentation: OverlayPresentation): OverlayPresentation {
   const hardMode = staleOverlayHardMode(presentation.hardMode);
+  presentation={...presentation,...(presentation.qualification!==undefined?{qualification:'neutral' as const}:{})};
   return {...presentation, status: 'stale', freshness: 'stale', paused: false, speed: '—', fuel: '—',
     sections: presentation.sections.map(section => ({id: section.id, state: 'unavailable'})), ...(hardMode ? {hardMode} : {})};
 }

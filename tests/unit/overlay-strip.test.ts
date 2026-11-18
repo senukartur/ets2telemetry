@@ -34,7 +34,7 @@ it('fixes the hand-written maximum widths of every strip item', () => {
     'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150});
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
     gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 96, row: 38, border: 1, padding: 12, gap: 14});
-  expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(100);
+  expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(140);
   // ET-084: only the speed limit sign is always exactly its cap, so a limit, no limit and no reading take the same width.
   expect([...STRIP_FIXED_WIDTH_SECTIONS]).toEqual(['speed-limit']);
 });
@@ -79,12 +79,12 @@ it.each([
   // indicator (458); at 1248 (inner 1222) the first ends at range (1120) and the indicator (1234) takes a second.
   // ET-084: driving-only also includes the speed limit. At 768 (inner 742) the second row holds cruise control to the indicator
   // (658); at 928 (inner 902) the first ends at the sign (808) and the second at the indicator (458); at 1248 and 1260 (inner 1222
-  // and 1234) the first ends at range (1166) and the indicator (1280) takes a second, so one row needs a CSS width of 1306.
+  // and 1234) the first ends at range (1166) and the indicator (1280) takes a second, so one row needs a CSS width of 1346.
   {name: 'driving-only at 768', sections: OVERLAY_PRESETS['driving-only'], width: 768, rows: 2, height: 78},
   {name: 'driving-only at 928', sections: OVERLAY_PRESETS['driving-only'], width: 928, rows: 2, height: 78},
   {name: 'driving-only at 1248', sections: OVERLAY_PRESETS['driving-only'], width: 1248, rows: 2, height: 78},
   {name: 'driving-only at 1260', sections: OVERLAY_PRESETS['driving-only'], width: 1260, rows: 2, height: 78},
-  {name: 'driving-only at 1306', sections: OVERLAY_PRESETS['driving-only'], width: 1306, rows: 1, height: 40},
+  {name: 'driving-only at 1346', sections: OVERLAY_PRESETS['driving-only'], width: 1346, rows: 1, height: 40},
   {name: 'job-focus at 1280', sections: OVERLAY_PRESETS['job-focus'], width: 1280, rows: 2, height: 78},
   {name: 'all but RPM and cargo at 1280', sections: {...ALL, rpm: false, cargo: false}, width: 1280, rows: 3, height: 116}
 ])('reserves $rows rows for $name', ({sections, width, rows, height}) => {
@@ -92,30 +92,31 @@ it.each([
   expect(stripCssHeight(rows)).toBe(height);
 });
 
+// ET-119 reserves 40 additional pixels in the fixed indicator for the optional qualification medal.
 it('fills a row exactly to the inner width and wraps one pixel below it', () => {
   // Driving-only: tags 96 + 96, speed 140, gear 90, rpm 130, fuel 190 and range 140 with six 14 px gaps = 966; ET-070 adds
   // the Hard Mode indicator's 14 + 100 = 1080, ET-071 cruise control's 14 + 140 = 1234 and ET-084 the speed limit's 14 + 32 =
-  // 1280, an inner width of CSS width 1306.
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1306)).toBe(1);
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1305)).toBe(2);
-  // Without the speed limit and cruise control it is ET-070's 1080 at CSS width 1106.
+  // 1280, an inner width of CSS width 1346.
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1346)).toBe(1);
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1345)).toBe(2);
+  // Without the speed limit and cruise control it is ET-070's 1080 at CSS width 1146.
   const withoutCruise = {...OVERLAY_PRESETS['driving-only'], 'cruise-control': false, 'speed-limit': false};
-  expect(stripRowCount(withoutCruise, 1106)).toBe(1);
-  expect(stripRowCount(withoutCruise, 1105)).toBe(2);
+  expect(stripRowCount(withoutCruise, 1146)).toBe(1);
+  expect(stripRowCount(withoutCruise, 1145)).toBe(2);
 });
 
 it('reserves cruise control its own 140 px slot (ET-071)', () => {
-  // Cruise control alone with the tags and the indicator: 96 + 96 + 140 + 100 with three gaps = 474, CSS width 500.
-  expect(stripRowCount(only('cruise-control'), 500)).toBe(1);
-  expect(stripRowCount(only('cruise-control'), 499)).toBe(2);
+  // Cruise control alone with the tags and the indicator: 96 + 96 + 140 + 100 with three gaps = 474, CSS width 540.
+  expect(stripRowCount(only('cruise-control'), 540)).toBe(1);
+  expect(stripRowCount(only('cruise-control'), 539)).toBe(2);
   // Removing it and ET-084's speed limit from every section at 1280 gives ET-070's three rows back (1210, 1092, then the indicator at 1190).
   expect(stripRowCount({...ALL, 'cruise-control': false, 'speed-limit': false, 'rest-state': false}, 1280)).toBe(3);
 });
 
 it('reserves the speed limit sign its own 32 px slot (ET-084)', () => {
-  // The sign alone with the tags and the indicator: 96 + 96 + 32 + 100 with three gaps = 366, CSS width 392.
-  expect(stripRowCount(only('speed-limit'), 392)).toBe(1);
-  expect(stripRowCount(only('speed-limit'), 391)).toBe(2);
+  // The sign alone with the tags and the indicator: 96 + 96 + 32 + 100 with three gaps = 366, CSS width 432.
+  expect(stripRowCount(only('speed-limit'), 432)).toBe(1);
+  expect(stripRowCount(only('speed-limit'), 431)).toBe(2);
   // At 1280 it costs no row: the first row ends at range, 1166 of the inner 1254, where SDK consumption did not fit before either.
   expect(stripRowCount(ALL, 1280)).toBe(stripRowCount({...ALL, 'speed-limit': false}, 1280));
   // At 768 (inner 742), placing the sign after speed keeps consumption on the second row and the total at six rows.
@@ -125,14 +126,14 @@ it('reserves the speed limit sign its own 32 px slot (ET-084)', () => {
 
 it('reserves the next mandatory break its own 150 px slot (ET-052)', () => {
   // Game time 200 and the break 150 with the two 96 px tags and three 14 px gaps take 584, with the Hard Mode indicator
-  // (ET-070) 698: inner 698 is CSS width 724.
+  // (ET-070) 698: inner 698 is CSS width 764.
   const pair = only('game-time', 'mandatory-break');
-  expect(stripRowCount(pair, 724)).toBe(1);
-  expect(stripRowCount(pair, 723)).toBe(2);
-  // The break alone with the tags: 96 + 96 + 150 + two gaps = 370, 484 with the indicator, so a CSS width of 510 fits one
-  // row and 509 two.
-  expect(stripRowCount(only('mandatory-break'), 510)).toBe(1);
-  expect(stripRowCount(only('mandatory-break'), 509)).toBe(2);
+  expect(stripRowCount(pair, 764)).toBe(1);
+  expect(stripRowCount(pair, 763)).toBe(2);
+  // The break alone with the tags: 96 + 96 + 150 + two gaps = 370, 484 with the indicator, so a CSS width of 550 fits one
+  // row and 549 two.
+  expect(stripRowCount(only('mandatory-break'), 550)).toBe(1);
+  expect(stripRowCount(only('mandatory-break'), 549)).toBe(2);
   // Removing the break from every section at 944 (inner 918) ends the fourth row at game time (912), so the indicator
   // (912 + 114 = 1026) takes a fifth row of its own, as the break did: five rows.
   expect(stripRowCount({...ALL, 'mandatory-break': false}, 944)).toBe(5);
@@ -150,20 +151,20 @@ it('models the surface border as at least one device pixel below zoom 1', () => 
   // Chromium snaps a nonzero border thinner than one device pixel up to one device pixel, so below zoom 1 the 1 px
   // border takes 1 / scale CSS px: the inner width is floor(CSS width − 2 × max(1, 1 / scale) − 24).
   // The reviewer's case, re-derived for ET-070: two 96 px tags, cargo 300, origin 300, distance driven 150 and the Hard
-  // Mode indicator 100 with five 14 px gaps take 998 + 114 = 1112. At CSS width 1138 and zoom 1 the inner width is
-  // 1138 − 2 − 24 = 1112: one row. At 0.75 it is floor(1138 − 2 × 1.3333 − 24) = floor(1111.33) = 1111: two rows.
+  // Mode indicator 100 with five 14 px gaps take 998 + 114 = 1112. At CSS width 1178 and zoom 1 the inner width is
+  // 1178 − 2 − 24 = 1112: one row. At 0.75 it is floor(1178 − 2 × 1.3333 − 24) = floor(1111.33) = 1111: two rows.
   const sections = only('cargo', 'origin', 'distance-driven');
-  expect(stripRowCount(sections, 1138)).toBe(1);
-  expect(stripRowCount(sections, 1138, 0.75)).toBe(2);
+  expect(stripRowCount(sections, 1178)).toBe(1);
+  expect(stripRowCount(sections, 1178, 0.75)).toBe(2);
   // At 0.5 the border is 2 CSS px: every section at 1280 has an inner width of 1280 − 4 − 24 = 1252, four rows as at 1254
   // since ET-071 (1166 with ET-084's sign, 1172, the break's row ends at 1240, then the indicator); at 480 it is 452, twelve
   // rows as at 454.
   expect(stripRowCount(ALL, 1280, 0.5)).toBe(4);
   expect(stripRowCount(ALL, 480, 0.5)).toBe(12);
-  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 1306 (ET-084) holds at scale 2, and at
-  // 0.99 the snapped border leaves floor(1306 − 2 × 1.0101 − 24) = 1279 of the 1280 it needs.
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1306, 2)).toBe(1);
-  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1306, 0.99)).toBe(2);
+  // At zoom 1 and above the border stays 1 CSS px: the exact fit of driving-only at 1346 (ET-084) holds at scale 2, and at
+  // 0.99 the snapped border leaves floor(1346 − 2 × 1.0101 − 24) = 1279 of the 1280 it needs.
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1346, 2)).toBe(1);
+  expect(stripRowCount(OVERLAY_PRESETS['driving-only'], 1346, 0.99)).toBe(2);
 });
 
 it.each([0, 1, 2, 3])('never reserves more rows for a subset of sections than for all of them (partition %i)', partition => {
@@ -202,7 +203,7 @@ function flexLines(widths: number[], inner: number): number {
 
 it('reserves at least as many rows as any rendered strip with values up to their maximum widths needs', () => {
   const next = random(0x012c);
-  for (let run = 0; run < 5000; run++) {
+  for (let run = 0; run < 5400; run++) {
     const width = 480 + Math.floor(next() * 801), inner = width - 26;
     let enabled = STRIP_ORDER.filter(() => next() < 0.5);
     if (!enabled.length) enabled = [OVERLAY_SECTION_IDS[Math.floor(next() * OVERLAY_SECTION_IDS.length)]];
@@ -216,7 +217,7 @@ it('reserves at least as many rows as any rendered strip with values up to their
 
 it('reserves at least as many rows as any rendered strip needs at every scale, with the snapped border', () => {
   const next = random(0x0750);
-  for (let run = 0; run < 5000; run++) {
+  for (let run = 0; run < 5400; run++) {
     // A DIP width and a scale with two decimals; the real CSS inner width is width / scale minus the snapped borders.
     const scale = Math.round((0.5 + next() * 1.5) * 100) / 100, width = Math.round(480 * scale) + Math.floor(next() * 801 * scale);
     const inner = width / scale - 2 * Math.max(1, 1 / scale) - 24;

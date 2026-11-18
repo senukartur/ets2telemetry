@@ -1,4 +1,5 @@
 import React, {Fragment} from 'react';
+import {QualificationMedal} from './qualification/medal';
 import {HardModeCue, HardModeIcon, SectionIcon, TagIcon} from './overlay-icons';
 import {STRIP_FIXED_WIDTH_SECTIONS, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_TAG_MAX_WIDTH_CSS} from './overlay-strip';
 import {overlayCardParts, type OverlayHardModeItem, type OverlayItem, type OverlayTag, type OverlayView} from './overlay-view';
@@ -17,8 +18,8 @@ function Value({item}: {item: OverlayItem}) {
   </span>;
 }
 /** The card and cluster row value of the Hard Mode indicator ("12/12", "N/12", empty or "lost") and its cue slot (ET-070). */
-function HardModeValue({item}: {item: OverlayHardModeItem}) {
-  return <span className="overlay-value-group"><strong className="overlay-value">{item.rowValue}</strong><HardModeCue cue={item.cue} /></span>;
+function HardModeValue({item,qualification}: {item: OverlayHardModeItem;qualification?:OverlayView['qualification']}) {
+  return <span className="overlay-value-group"><strong className="overlay-value">{item.rowValue}</strong><HardModeCue cue={item.cue} />{qualification?<QualificationMedal cue={qualification.cue} label={qualification.name}/>:null}</span>;
 }
 /**
  * The next mandatory break's urgency marks (ET-052 MB10): `data-urgency` (the stylesheet colours soon orange and due red
@@ -83,6 +84,7 @@ function Strip({view}: {view: OverlayView}) {
     <span className={view.groups.length ? 'overlay-item overlay-group-start overlay-hard-mode' : 'overlay-item overlay-hard-mode'} {...hardModeMarks(view.hardMode)}
       style={{maxWidth: STRIP_HARD_MODE_MAX_WIDTH_CSS}}>
       <HardModeIcon /><HardModeShort item={view.hardMode} className="overlay-value" /><HardModeCue cue={view.hardMode.cue} />
+      {view.qualification?<QualificationMedal cue={view.qualification.cue} label={view.qualification.name}/>:null}
     </span>
   </div>;
 }
@@ -105,7 +107,7 @@ function CardLayout({view}: {view: OverlayView}) {
         <dt><SectionIcon id={item.id} size={14} />{item.label}</dt><dd><Value item={item} /></dd>
       </div>)}
       <div className="overlay-row overlay-hard-mode" {...hardModeMarks(view.hardMode)}>
-        <dt><HardModeIcon size={14} />{view.hardMode.label}</dt><dd><HardModeValue item={view.hardMode} /></dd>
+        <dt><HardModeIcon size={14} />{view.hardMode.label}</dt><dd><HardModeValue item={view.hardMode} qualification={view.qualification}/></dd>
       </div>
     </dl>
   </div>;
@@ -150,7 +152,7 @@ function Cluster({view}: {view: OverlayView}) {
         <span className="overlay-label"><SectionIcon id={item.id} size={14} />{item.short}</span><Value item={item} />
       </div>)}
       <div className="overlay-panel-row overlay-hard-mode" {...hardModeMarks(view.hardMode)}>
-        <span className="overlay-label"><HardModeIcon size={14} />{view.hardMode.label}</span><HardModeValue item={view.hardMode} />
+        <span className="overlay-label"><HardModeIcon size={14} />{view.hardMode.label}</span><HardModeValue item={view.hardMode} qualification={view.qualification}/>
       </div>
     </div>
   </div>;
@@ -171,6 +173,7 @@ function Hud({view}: {view: OverlayView}) {
       <HardModeIcon size={14} /><HardModeShort item={view.hardMode} className="overlay-label" />
       {view.hardMode.hudValue ? <span className="overlay-value-group"><strong className="overlay-value">{view.hardMode.hudValue}</strong></span> : null}
       <HardModeCue cue={view.hardMode.cue} />
+      {view.qualification?<QualificationMedal cue={view.qualification.cue} label={view.qualification.name}/>:null}
     </div>
   </div>;
 }

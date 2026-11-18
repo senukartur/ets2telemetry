@@ -392,7 +392,7 @@ function Test-RecordingReceipt {
     # Files and rows: the closed synthetic database without sidecars, no history database, and the expected rows.
     $files = $recording.files
     if ($null -eq $files -or @($files.sidecars).Count -ne 0 -or $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or
-        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 10 -Maximum 10)) { return $false }
+        $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 11 -Maximum 11)) { return $false }
     $database = $recording.database
     if ($null -eq $database -or (@($database.integrity) -join ',') -cne 'ok' -or !(Test-ReceiptInteger -Value $database.foreignKeyViolations -Minimum 0 -Maximum 0) -or
         $database.purpose -cne 'synthetic' -or @($database.sessions).Count -ne 1 -or $database.sessions[0].origin -cne 'synthetic' -or
@@ -499,7 +499,7 @@ function Test-JournalReceipt {
     if (!(Test-ReceiptInteger -Value $journal.restartLauncherExit -Minimum 0 -Maximum 0) -or $Driver.launcherExit -ne 0 -or
         $null -eq $Driver.probesAfterExit -or @($Driver.probesAfterExit).Count -ne 0) { return $false }
     $files = $journal.files
-    if ($null -eq $files -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 10 -Maximum 10) -or @($files.sidecars).Count -ne 0 -or
+    if ($null -eq $files -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 11 -Maximum 11) -or @($files.sidecars).Count -ne 0 -or
         $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
     # Run 1 opened the new history database; run 2 only the existing synthetic one.
     $serviceEvents = @($Driver.serviceEvents); $restartService = @($journal.restartServiceEvents)
@@ -512,7 +512,7 @@ function Test-JournalReceipt {
     foreach ($run in @(@{rows=$serviceEvents; created=$true}, @{rows=$restartService; created=$false})) {
         $opened = @($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_OPENED' })
         if ($opened.Count -ne 1 -or $opened[0].facts.created -isnot [bool] -or $opened[0].facts.created -ne $run.created -or
-            !(Test-ReceiptInteger -Value $opened[0].facts.schemaVersion -Minimum 10 -Maximum 10)) { return $false }
+            !(Test-ReceiptInteger -Value $opened[0].facts.schemaVersion -Minimum 11 -Maximum 11)) { return $false }
         if (@($run.rows | Where-Object { $_.event -ceq 'HISTORY_STORAGE_CLOSED' }).Count -ne 1) { return $false }
     }
     $targets = @($restartService | Where-Object { $_.event -ceq 'RECORDING_TARGET' })
@@ -637,7 +637,7 @@ function Test-SoakReceipt {
     # (packages/contracts/src/journal.ts), so M trips give floor(M / 50) full pages and a last page of M % 50, empty when
     # M is a multiple of 50.
     $pages = @($soak.journal.pages)
-    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 10 -Maximum 10)) { return $false }
+    if ($soak.journal.database.purpose -cne 'synthetic' -or !(Test-ReceiptInteger -Value $soak.journal.database.schemaVersion -Minimum 11 -Maximum 11)) { return $false }
     foreach ($page in $pages) { if (!(Test-ReceiptInteger -Value $page -Minimum 0 -Maximum 50)) { return $false } }
     $expectedPages = @(@(50) * [int][math]::Floor($m / 50)) + @($m % 50)
     if ((@($pages | ForEach-Object { [string]$_ }) -join ',') -cne ($expectedPages -join ',')) { return $false } # rule: journal pages
@@ -656,7 +656,7 @@ function Test-SoakReceipt {
     $stopMs = [double]$source.scenarioMs
     if (!(Test-ReceiptInteger -Value $tail.lastSecond -Minimum (1000 + [math]::Floor(($stopMs - 100) / 1000)) -Maximum (1000 + [math]::Floor($stopMs / 1000)))) { return $false } # rule: tail stop
     $files = $soak.files
-    if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 10 -Maximum 10) -or @($files.sidecars).Count -ne 0 -or
+    if ($null -eq $files -or $files.magic -cne 'SQLite format 3' -or !(Test-ReceiptInteger -Value $files.userVersion -Minimum 11 -Maximum 11) -or @($files.sidecars).Count -ne 0 -or
         $files.historyDatabase -isnot [bool] -or $files.historyDatabase -or $files.syntheticBackups -isnot [bool] -or $files.syntheticBackups) { return $false }
     # H11: at most one exit flush row, which wrote what was pending without a loss.
     foreach ($exit in @($soak.sampleExits)) {
@@ -819,7 +819,7 @@ function Test-UploadUiReceipt {
     if ($null -eq $Value -or $Value.passed -isnot [bool] -or !$Value.passed -or $Value.origin -cne 'synthetic' -or
         $Value.productionAuthority -isnot [bool] -or $Value.productionAuthority -or
         $Value.tokenPresentInScreenshots -isnot [bool] -or $Value.tokenPresentInScreenshots) { return $false }
-    foreach ($flag in @('paste','password','visibility','enter','tokenCleared','cancelNavigation','cancelConfirmation','confirmNavigation','fixedRefusals','progress','chipNavigation','rowStates','headingFocus','contained','sharedStyles','bridgeIsolation')) {
+    foreach ($flag in @('paste','password','visibility','enter','tokenCleared','cancelNavigation','cancelConfirmation','confirmNavigation','fixedRefusals','progress','chipNavigation','rowStates','headingFocus','contained','sharedStyles','bridgeIsolation','qualification')) {
         if ($Value.flags.$flag -isnot [bool] -or !$Value.flags.$flag) { return $false }
     }
     foreach ($flag in @('sandbox','contextIsolation','localDocument','remoteFetchDenied','navigationDenied','newWindowDenied','permissionsDenied')) {
@@ -833,6 +833,28 @@ function Test-UploadUiReceipt {
     $expectedPhases = @('upload-ui-fixture-started','upload-ui-fixture-completed','telemetry-source-started','launch-requested')
     if ((@($Phases | Where-Object { $_.phase -cin $expectedPhases } | ForEach-Object { $_.phase }) -join ',') -cne ($expectedPhases -join ',')) { return $false }
     if (@($Value.screenshots).Count -ne 20) { return $false }
+    $qualificationFiles = @()
+    foreach ($language in @('en','ru')) {
+        foreach ($state in @('ready','offline','dark')) { $qualificationFiles += "qualification-$language-$state.png" }
+        foreach ($layout in @('strip','card','cluster','hud')) {
+            foreach ($cue in @('pass','fail','neutral')) { $qualificationFiles += "qualification-overlay-$language-$layout-$cue.png" }
+        }
+    }
+    if (@($Value.qualificationShots).Count -ne 30 -or @($Value.qualificationShots | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
+        @((Compare-Object -ReferenceObject @($qualificationFiles | Sort-Object) -DifferenceObject @($Value.qualificationShots | Sort-Object))).Count -ne 0) { return $false }
+    foreach ($name in $qualificationFiles) {
+        $file = Join-Path $Directory $name
+        if (!(Test-Path -LiteralPath $file -PathType Leaf)) { return $false }
+        $item = Get-Item -LiteralPath $file
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint -or $item.Length -le 500 -or $item.Length -gt 5242880) { return $false }
+        $header = New-Object byte[] 24
+        $stream = [IO.File]::OpenRead($file)
+        try { if ($stream.Read($header, 0, 24) -ne 24) { return $false } } finally { $stream.Dispose() }
+        if (($header[0..7] -join ',') -cne '137,80,78,71,13,10,26,10') { return $false }
+        $width = [double]$header[16] * 16777216 + [double]$header[17] * 65536 + [double]$header[18] * 256 + $header[19]
+        $height = [double]$header[20] * 16777216 + [double]$header[21] * 65536 + [double]$header[22] * 256 + $header[23]
+        if ($width -ne 1280 -or $height -ne 800) { return $false }
+    }
     foreach ($language in @('en','ru')) {
         foreach ($size in @(@{width=1280;height=800},@{width=1100;height=720})) {
             foreach ($screen in @('no-token','confirmation','first-upload','offline','journal')) {
@@ -1171,7 +1193,7 @@ function Test-RuntimeReceipt {
         foreach ($field in @('unknown','fail','pass','hints','hover','inlineDetails','bilingual','languageHotChange','keyboard','refresh','belowThreshold','unknownExcluded','knownRatio','badge','export','overlayExcluded','persisted','osPointerIsolated')) {
             if ($hardMode.$field -isnot [bool] -or !$hardMode.$field) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
         }
-        if ($hardMode.schemaVersion -ne 10 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
+        if ($hardMode.schemaVersion -ne 11 -or @($hardMode.flags).Count -ne 2 -or $hardMode.flags[0] -isnot [bool] -or $hardMode.flags[0] -or
             $hardMode.flags[1] -isnot [bool] -or !$hardMode.flags[1] -or @($hardMode.errors).Count -ne 0) { $validation.reason = 'HARD_MODE_RESULT_INVALID'; return $validation }
     }
     # Lifecycle is additive as well; earlier scenario rules are unchanged.

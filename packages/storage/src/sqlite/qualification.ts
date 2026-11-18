@@ -7,6 +7,8 @@ import {canonicalUpload} from '../upload-envelope';
 import {get, type Row} from './upload-discovery';
 import {syncTransaction} from './upload-sync';
 import type {StorageConnection} from './connection';
+import {journalTrip} from './journal';
+import {beginUploadProjection,advanceUploadProjection,releaseUploadProjection} from './upload-projection';
 type Input<K extends QualificationCommandName> = QualificationCommands[K]['args']['input'];
 function check<K extends QualificationCommandName>(name: K, input: Input<K>): void {if (!isQualificationCommand({name,input})) fail('INVALID_INPUT');}
 export function qualificationActive(db: Database.Database, input: QualificationAuthority, scope?: string): boolean {
@@ -14,6 +16,50 @@ export function qualificationActive(db: Database.Database, input: QualificationA
   return config?.active_registration === input.registrationId && String(config.version) === input.connectionVersion && !!get(db, "SELECT 1 FROM database_info WHERE id=1 AND purpose='history'") && (scope === undefined || get(db, 'SELECT security_scope FROM qualification_refresh_state WHERE registration_ref=?', input.registrationId)?.security_scope === scope);
 }
 const emptyRefresh = () => ({afterEvent: null, retryAtMs: 0, failureStreak: 0, suspended: false});
+export function readQualificationPreviewPins(conn:StorageConnection,input:Input<'readQualificationPreviewPins'>):QualificationCommands['readQualificationPreviewPins']['value'] {
+  check('readQualificationPreviewPins',input);const rows=conn.reader().prepare('SELECT registration_ref,connection_version,preview_pin FROM qualification_refresh_state WHERE preview_pin IS NOT NULL ORDER BY registration_ref LIMIT 8').all() as Row[];
+  return {items:rows.map(row=>({registrationId:String(row.registration_ref),connectionVersion:String(row.connection_version),pinId:String(row.preview_pin)}))};
+}
+export function beginQualificationPreview(conn:StorageConnection,input:Input<'beginQualificationPreview'>,options?:CommitOptions):QualificationCommands['beginQualificationPreview']['value'] {
+  check('beginQualificationPreview',input);return syncTransaction(conn,db=>{
+    if(!qualificationActive(db,input))fail('INVALID_INPUT');
+    const state=get(db,'SELECT preview_pin FROM qualification_refresh_state WHERE registration_ref=?',input.registrationId);
+    if(!state||state.preview_pin!==null&&state.preview_pin!==input.pinId)fail('STORAGE_BUSY');
+    if(!get(db,'SELECT 1 FROM upload_source_bindings WHERE registration_ref=? AND trip_uuid=?',input.registrationId,input.tripUuid))fail('INVALID_INPUT');
+    if(state.preview_pin!==input.pinId&&get(db,'SELECT 1 FROM upload_projection_pins WHERE pin_id=?',input.pinId))fail('INVALID_INPUT');
+    const value=beginUploadProjection(conn,{pinId:input.pinId,tripUuid:input.tripUuid});
+    db.prepare('UPDATE qualification_refresh_state SET preview_pin=? WHERE registration_ref=?').run(input.pinId,input.registrationId);return value;
+  },options);
+}
+export function advanceQualificationPreview(conn:StorageConnection,input:Input<'advanceQualificationPreview'>,options?:CommitOptions):QualificationCommands['advanceQualificationPreview']['value'] {
+  check('advanceQualificationPreview',input);return syncTransaction(conn,db=>{
+    if(!qualificationActive(db,input)||get(db,'SELECT preview_pin FROM qualification_refresh_state WHERE registration_ref=?',input.registrationId)?.preview_pin!==input.pinId)fail('INVALID_INPUT');
+    return advanceUploadProjection(conn,input.pinId);
+  },options);
+}
+export function releaseQualificationPreview(conn:StorageConnection,input:Input<'releaseQualificationPreview'>,options?:CommitOptions):QualificationCommands['releaseQualificationPreview']['value'] {
+  check('releaseQualificationPreview',input);return syncTransaction(conn,db=>{
+    const state=get(db,'SELECT preview_pin FROM qualification_refresh_state WHERE registration_ref=?',input.registrationId);
+    if(!state||state.preview_pin!==input.pinId)fail('INVALID_INPUT');
+    db.prepare('UPDATE qualification_refresh_state SET preview_pin=NULL WHERE registration_ref=?').run(input.registrationId);
+    const value=releaseUploadProjection(conn,input.pinId);
+    if(value.state!=='released')db.prepare('UPDATE qualification_refresh_state SET preview_pin=? WHERE registration_ref=?').run(input.pinId,input.registrationId);return value;
+  },options);
+}
+export function readQualificationPreview(conn:StorageConnection,input:Input<'readQualificationPreview'>):QualificationCommands['readQualificationPreview']['value'] {
+  check('readQualificationPreview',input);const db=conn.reader();return db.transaction(():QualificationCommands['readQualificationPreview']['value']=>{
+    if(!qualificationActive(db,input))return {current:null};
+    const row=get(db,`SELECT t.trip_uuid AS raw_uuid,root.trip_uuid,h.material_version FROM trips t JOIN plugin_sessions s ON s.id=t.plugin_session_ref
+      JOIN logical_memberships m ON m.trip_ref=t.id JOIN trips root ON root.id=m.logical_ref JOIN upload_source_bindings b ON b.root_ref=root.id AND b.registration_ref=? LEFT JOIN upload_change_heads h ON h.root_ref=root.id
+      WHERE t.outcome='open' AND t.game=? AND s.plugin_session_uuid=? AND s.origin='game' LIMIT 1`,input.registrationId,input.game,input.pluginSessionId);
+    if(!row)return {current:null};
+    const detail=journalTrip(conn,String(row.trip_uuid));
+    const distance=detail.trip.observedDistanceM;
+    const text=distance.available?String(distance.value):null;
+    const known=text!==null&&isQualificationWire('Decimal',text);
+    return {current:{tripUuid:String(row.trip_uuid),rawTripUuid:String(row.raw_uuid),materialVersion:typeof row.material_version==='bigint'?row.material_version.toString():'0',actualDistance:{availability:known?'known':'unknown',metres:known?text:null,final:false,support:detail.trip.accounting?.distance.status==='complete'?'whole-trip':detail.trip.accounting?.distance.status==='partial'?'partial':'unknown'}}};
+  })();
+}
 export function readQualificationCache(conn: StorageConnection, input: Input<'readQualificationCache'>): QualificationStoredState {
   check('readQualificationCache', input);const db = conn.reader();
   return db.transaction(() => {
@@ -22,7 +68,8 @@ export function readQualificationCache(conn: StorageConnection, input: Input<'re
     if (!state) return {active:true,securityScope:null,caches:[],refresh:emptyRefresh()};
     const rows = db.prepare('SELECT snapshot_json,fetched_at FROM qualification_cache WHERE registration_ref=? AND security_scope=? ORDER BY game').all(input.registrationId,state.security_scope) as Row[];
     const caches = rows.map(row => ({snapshot: JSON.parse(String(row.snapshot_json)) as QualificationSnapshot, fetchedUtcMs: Number(row.fetched_at)}));
-    if (caches.some(cache => !isQualificationWire('Qualification',cache.snapshot))) fail('DATABASE_CORRUPT');
+    const owner=get(db,'SELECT account_id FROM upload_registrations WHERE registration_id=?',input.registrationId);
+    if (caches.some(cache => !isQualificationWire('Qualification',cache.snapshot)||cache.snapshot.ownerId!==owner?.account_id)) fail('DATABASE_CORRUPT');
     return {active:true,securityScope:String(state.security_scope),caches,refresh:{afterEvent:state.after_event as string|null,retryAtMs:Number(state.retry_at),failureStreak:Number(state.failure_streak),suspended:state.suspended===1n}};
   })();
 }
@@ -40,6 +87,7 @@ export function saveQualificationCache(conn: StorageConnection, input: Input<'sa
   check('saveQualificationCache',input);return syncTransaction(conn, db => {
     const snapshot = input.snapshot;
     if (!qualificationActive(db,input,snapshot.securityScope)) return {saved:false};
+    if(get(db,'SELECT account_id FROM upload_registrations WHERE registration_id=?',input.registrationId)?.account_id!==snapshot.ownerId)fail('INVALID_INPUT');
     const old = get(db,'SELECT progress_revision FROM qualification_cache WHERE registration_ref=? AND game=?',input.registrationId,snapshot.game);
     if (old && compareQualificationCounter(snapshot.progressRevision,String(old.progress_revision)) < 0) return {saved:false};
     db.prepare(`INSERT INTO qualification_cache(registration_ref,game,security_scope,progress_revision,snapshot_json,fetched_at) VALUES(?,?,?,?,?,?)
@@ -81,7 +129,11 @@ export function commitQualificationResults(conn: StorageConnection, input: Input
       const local=sourceOf(db,input.registrationId,request.eventId);
       if (!local || local.game!==request.source.game || local.plugin_session_uuid!==request.source.pluginSessionId || local.trip_uuid!==request.source.tripId || Number(local.revision)!==request.revision) fail('INVALID_INPUT');
       const old=savedResult(db,input.registrationId,input.securityScope,request.eventId);
-      if (result.unchanged) {if (!old || old.version!==result.version || old.resultRevision!==result.resultRevision) missingBase.push(request.eventId);continue;}
+      if (result.unchanged) {
+        if (!old || old.version!==result.version || old.resultRevision!==result.resultRevision) missingBase.push(request.eventId);
+        else if(qualificationDecisionJson({...result,unchanged:false,assessment:old.assessment,credit:old.credit})!==qualificationDecisionJson(old))fail('INVALID_INPUT');
+        continue;
+      }
       if (old && compareQualificationCounter(result.resultRevision,old.resultRevision)<0) continue;
       if (old && result.resultRevision===old.resultRevision) {if (qualificationDecisionJson(result)!==qualificationDecisionJson(old)) fail('INVALID_INPUT');continue;}
       const retained=get(db,'SELECT snapshot_json FROM qualification_result_versions WHERE registration_ref=? AND event_ref=? AND security_scope=? AND version=?',input.registrationId,request.eventId,input.securityScope,result.version);

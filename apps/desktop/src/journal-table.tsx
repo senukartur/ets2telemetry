@@ -6,6 +6,7 @@ import {Badge} from './components/ui/badge';
 import {Button} from './components/ui/button';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from './components/ui/table';
 import {JournalSyncBadge} from './dashboard-upload/journal-sync';
+import {JournalQualificationBadge} from './qualification/journal-result';
 import {HardModeBadge} from './hard-mode/card';
 import {t} from './i18n';
 import {InfoHint} from './info-hint';
@@ -64,7 +65,7 @@ export function TripTable({rows, sync, language, onOpen, sort, onSort, busy}: {
         <TableCell data-testid="journal-row-outcome"><Badge variant={row.outcomeKind === 'delivered' ? 'ok' : row.outcomeKind === 'cancelled' ? 'error' : 'neutral'}><OutcomeIcon aria-hidden="true" className="size-3" />{row.outcome}</Badge></TableCell>
         <TableCell><Badge variant={completenessVariant(row.completeness)} data-testid="journal-row-completeness"><RecordingIcon aria-hidden="true" className="size-3" />{row.completeness.text}</Badge>
           {row.membership ? <div className="yu-journal-mode-line"><Badge variant="neutral" data-testid="journal-row-membership">{row.membership}</Badge><InfoHint label={t('ui.moreAbout', {v: row.membership}, language)}>{text('j.membershipPendingHint')}</InfoHint></div> : null}</TableCell>
-        {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={language} /></TableCell> : null}
+        {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={language} /><JournalQualificationBadge row={sync.rows.find(item=>item.tripUuid===row.tripUuid)!} language={language}/></TableCell> : null}
         <TableCell><Button size="icon-sm" variant="ghost" className="yu-journal-open" aria-label={t('j.openTrip', {v: row.cargo}, language)} data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}><ChevronRight aria-hidden="true" /></Button></TableCell>
       </TableRow>;
     })}

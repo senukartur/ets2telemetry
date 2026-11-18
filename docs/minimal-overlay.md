@@ -248,6 +248,10 @@ ET-070 shows on the overlay whether the current settings meet Hard Mode ([Hard M
 
 Readability of the three colours above a real game at 40–100% background opacity, in the four layouts in English and Russian, remains an owner check.
 
+### Qualification indicator
+
+A confirmed companion-enabled account adds the owner's selected Lucide Medal beside the independent Hard Mode indicator in Strip, Card, Cluster and HUD. Only an applicable provisional server preview supplies check/pass or cross/fail; pending, stale, retired and expired previews use a grey medal without a mark. There is no visible qualification text or control; RU/EN accessible names identify the provisional state. The preload's existing quiet expiry also neutralizes this cue. Strip reserves 40 additional CSS pixels in the fixed indicator; no focus, input, topmost or native-window authority changes.
+
 ### Speed limit sign
 
 ET-084 shows the speed limit that the game reports (`truck.navigation.speed.limit`, protocol v1 minor 4) as the section `speed-limit`, in the Driving group after cruise control, on by default, also after an update, and in the Everything and Driving only presets. The strip places its sign immediately after speed, using the same order for rendering and row reservation.

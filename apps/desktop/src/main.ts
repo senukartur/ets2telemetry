@@ -1,4 +1,9 @@
 import {UploadMainController} from './dashboard-upload/main-controller';
+import {QualificationMainController} from './qualification/main-controller';
+import {QualificationServiceBridge} from './qualification/service-bridge';
+import {QUALIFICATION_CHANNELS,type QualificationAction} from './qualification/contract';
+import {sameDashboardOwner} from '../../../packages/contracts/src/dashboard-upload';
+import type {QualificationGame,QualificationState,QualificationCue} from '../../../packages/contracts/src/qualification';
 import {readJournalWithSync} from './dashboard-upload/journal-sync-guard';
 import {UploadServiceBridge} from './dashboard-upload/service-bridge';
 import {UploadCredentialStore,CredentialFiles} from './dashboard-upload/credential-store';
@@ -154,7 +159,9 @@ function runApplication(profileError: unknown): void {
   let window: BrowserWindow | undefined, service: UtilityProcess | undefined, status: ScaffoldStatus | undefined;
   let subscribed = false, serviceReady = false;
   let uploadBridge:UploadServiceBridge|undefined;
-  const upload=new UploadMainController(configuredDashboardOrigin(ACTIVE_CHANNEL),ACTIVE_CHANNEL,()=>{if(!process.env.LOCALAPPDATA)throw Error('CREDENTIAL_UNAVAILABLE');return new UploadCredentialStore(new CredentialFiles(dataPaths(process.env.LOCALAPPDATA).credentials),electronUploadCrypto(safeStorage));},value=>{if(window&&!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send(UPLOAD_CHANNELS.status,value);});
+  const qualificationStates:Partial<Record<QualificationGame,QualificationState>>={};
+  const upload=new UploadMainController(configuredDashboardOrigin(ACTIVE_CHANNEL),ACTIVE_CHANNEL,()=>{if(!process.env.LOCALAPPDATA)throw Error('CREDENTIAL_UNAVAILABLE');return new UploadCredentialStore(new CredentialFiles(dataPaths(process.env.LOCALAPPDATA).credentials),electronUploadCrypto(safeStorage));},value=>{if(window&&!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send(UPLOAD_CHANNELS.status,value);if(!value.owner||!['connected','paused'].includes(value.state)||value.candidateId)qualification.retireVisible();publishOverlayQualification();});
+  const qualification=new QualificationMainController(()=>upload.journalReadScope,value=>{qualificationStates[value.game]=value;if(window&&!window.isDestroyed()&&!window.webContents.isDestroyed())window.webContents.send(QUALIFICATION_CHANNELS.status,value);publishOverlayQualification();});
   // First readiness creates the dashboard and overlay once; later service restarts never recreate them.
   let started = false;
   let startHiddenOnLaunch = process.argv.includes('--hidden');
@@ -525,6 +532,7 @@ function runApplication(profileError: unknown): void {
     gearDisplay: GearDisplayModes = settingsStore.view().gearDisplay): void {
     lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language, gearDisplay),
       contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y, hardMode: overlayHardModeNow()};
+    lastOverlay.qualification=overlayQualificationNow(live);
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
   }
@@ -535,6 +543,16 @@ function runApplication(profileError: unknown): void {
   }
   /** ET-070: the overlay's Hard Mode indicator from main's lease-checked status, the same source as the dashboard's chip. */
   function overlayHardModeNow() {return overlayHardMode(hardMode.status(serviceReady && !supervisor.stopping));}
+  function overlayQualificationNow(live:LiveTelemetry=lastLive):QualificationCue|undefined {
+    const status=upload.status,game=live.v1?.observation?.source.game??live.observation?.source.game,state=game?qualificationStates[game]:undefined;
+    if(!status.owner||!status.origin||!['connected','paused'].includes(status.state)||status.candidateId||!state?.owner||!sameDashboardOwner(status.owner,state.owner)||['disabled','unsupported','permission-required','unavailable','disconnected'].includes(state.availability))return;
+    if(!serviceReady||supervisor.stopping||!live.fresh||state.stale||!state.preview)return 'neutral';
+    return state.preview.outcome==='unknown'?'neutral':state.preview.outcome;
+  }
+  function publishOverlayQualification():void {
+    if(lifecycle.exiting)return;const next=overlayQualificationNow();if(lastOverlay.qualification===next)return;
+    lastOverlay={...lastOverlay,qualification:next};overlaySubscriptions.publish(lastOverlay);
+  }
   /**
    * Republishes only the Hard Mode indicator when it changed, like the content anchor: it renews no telemetry, freshness
    * or window authority, and a non-current projection keeps its shape (root dimming applies to the indicator too).
@@ -599,7 +617,7 @@ function runApplication(profileError: unknown): void {
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
     // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
-    begin: () => {upload.stop(); latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    begin: () => {qualification.detach();upload.stop(); latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
     // An in-flight settings save, the removal of an interrupted trip or diagnostics export's partial file and the plugin setup run in flight
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
@@ -622,7 +640,7 @@ function runApplication(profileError: unknown): void {
   });
   const supervisor: ServiceSupervisor = new ServiceSupervisor(log, code => lifecycle.finish(code), {
     restart: () => startService(),
-    state: state => {upload.detach(); uploadBridge=undefined; heartbeatMonitor.stop(); serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
+    state: state => {qualification.detach();upload.detach(); uploadBridge=undefined; heartbeatMonitor.stop(); serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; closeUpstream(); retireRecording(); journal.retire();
       if (state === 'service-failed') {updateHealth({type: 'service-exited', afterFailure: failureReported}); failureReported = false;}
       else updateHealth({type: 'service-restarting'});
       const update: LiveTelemetry = {...initialLive(selection), status: state, reason: 'Telemetry service exited; current interval is unknown'};
@@ -643,7 +661,7 @@ function runApplication(profileError: unknown): void {
     // its exit arrives (up to 3000 ms later). The later state callback finds them already retired.
     // A new selection generation also retires a readiness still awaiting its broker or settings, so the failing service
     // never becomes ready, selected or the journal's service afterwards (ET-016 PR-3 review).
-    failure: code => {upload.detach(); uploadBridge=undefined; heartbeatMonitor.stop(); failureReported = true; serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
+    failure: code => {qualification.detach();upload.detach(); uploadBridge=undefined; heartbeatMonitor.stop(); failureReported = true; serviceReady = false; retireHardMode(); selectionPending = false; status = undefined; selectionGeneration++; closeUpstream(); retireRecording(); journal.retire();
       updateHealth({type: 'service-failure', code: failureCode(code, reportedFailureCode)}); reportedFailureCode = undefined;
       const update: LiveTelemetry = {...initialLive(selection), status: 'restarting', reason: 'Telemetry service failed; current interval is unknown'};
       freshness.invalidate(update); dashboardSubscriptions.close(); dashboardPort = undefined; window?.webContents.send('telemetry:service-state', update);}
@@ -876,7 +894,7 @@ function runApplication(profileError: unknown): void {
   // Retires only dashboard document state. Upstream, freshness, the overlay and the service are unaffected; an overlay
   // edit started from the retired document is cancelled without writing.
   function retireDashboard(): void {
-    try{upload.documentChanged();}finally{
+    try{qualification.retireVisible();upload.documentChanged();}finally{
       nowDashboardReady = false; nowFocus.stop(); nowController?.end();cancelOverlayEdit('dashboard-retired');
       rendererEpoch++; subscribed = false; appStateSubscribed = false; dashboardSubscriptions.close(); dashboardPort = undefined;
     }
@@ -981,11 +999,14 @@ function runApplication(profileError: unknown): void {
     child.once('spawn', () => log('SERVICE_SPAWN', {pid: child.pid}));
     child.once('exit', code => {heartbeatMonitor.stop(); if (service === child) {service = undefined; supervisor.serviceExited(code);}});
     const childUpload=new UploadServiceBridge(value=>child.postMessage(value),value=>upload.acceptStatus(value));
+    const childQualification=new QualificationServiceBridge(childUpload.generation,value=>child.postMessage(value),(value,connectionVersion)=>qualification.accept(value,connectionVersion));
+    qualification.attach(childQualification);
     uploadBridge=childUpload;
     child.on('message', (message: unknown) => {
       if (supervisor.stopping || service !== child) return;
       heartbeatMonitor.touch();
       if(childUpload.receive(message))return;
+      if(childQualification.receive(message))return;
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
       if (type === 'heartbeat') return;
       if (type === 'hard-mode') {
@@ -1130,6 +1151,7 @@ function runApplication(profileError: unknown): void {
     return finishNowPlayingEdit(args[0]);
   });
   for(const action of ['context','verify','confirm','cancel','disconnect'] as UploadAction[])ipcMain.handle(UPLOAD_CHANNELS[action],(event,...args:unknown[])=>{if(!trusted(event)||lifecycle.exiting)throw Error('Untrusted upload request');return upload.handle(action,args);});
+  for(const action of ['get','refresh'] as QualificationAction[])ipcMain.handle(QUALIFICATION_CHANNELS[action],(event,...args:unknown[])=>{if(!trusted(event)||lifecycle.exiting)throw Error('Untrusted qualification request');return qualification.handle(action,args);});
   ipcMain.handle('scaffold:status', event => {if (!trusted(event)) throw new Error('Untrusted status request'); return status ?? null;});
   for (const channel of ['hard-mode:status', 'hard-mode:refresh']) ipcMain.handle(channel, (event, ...request: unknown[]) => {
     if (!trusted(event) || request.length !== 0) throw new Error('Untrusted Hard Mode request');

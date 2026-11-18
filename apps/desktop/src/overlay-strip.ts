@@ -44,7 +44,7 @@ export const STRIP_FIXED_WIDTH_SECTIONS: ReadonlySet<OverlaySectionId> = new Set
  * cap holds the group divider's 15 px padding, the icon, "HM" and a fixed 14 px cue slot, so a state change never resizes
  * it or moves a section.
  */
-export const STRIP_HARD_MODE_MAX_WIDTH_CSS = 100;
+export const STRIP_HARD_MODE_MAX_WIDTH_CSS = 140;
 
 /**
  * The surface border's width in CSS px at this zoom. Chromium snaps a nonzero border thinner than one device pixel up to

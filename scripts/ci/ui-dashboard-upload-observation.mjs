@@ -5,7 +5,7 @@ import {createRequire} from 'node:module';
 import {OWNER_PRODUCTION_BUILD_VARIABLE, resolveBuildChannel} from '../build-channel.mjs';
 
 export const UPLOAD_UI_SCREENS = ['no-token', 'confirmation', 'first-upload', 'offline', 'journal'];
-export const UPLOAD_UI_FLAGS = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation'];
+export const UPLOAD_UI_FLAGS = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation','qualification'];
 export function validateUploadUiConfiguration(config, environment = process.env) {
   assert.equal(config.scenario, 'ui'); assert.equal(config.uiCase, 'shell');
   assert.ok(['development', 'packaged'].includes(config.mode));
@@ -28,6 +28,8 @@ export function uploadUiBuildInputs(config, environment = process.env) {
 /** Checks resolved modules, including imports hidden behind aliases or re-exports, before any fixture is launched. */
 export function uploadUiIsolationPlugin(config, checked = () => {}) {
   const uploadModules = new Set(['contract.ts', 'view.ts', 'ui-controller.ts', 'use-dashboard-upload.ts', 'account-screen.tsx', 'sync-chip.tsx', 'journal-sync.tsx']);
+  const qualificationModules=new Set(['contract.ts','view.ts','screen.tsx','use-qualification.ts','journal-result.tsx','medal.tsx']);
+  const overlayModules=new Set(['overlay-content.tsx','overlay-icons.tsx','overlay-view.ts','overlay-strip.ts','overlay-rows.ts','overlay-sections.ts','overlay-hard-mode.ts','overlay-qualification.ts','overlay-placement.ts','overlay-opacity.ts','strings.ts','renderer.css','screens/app-copy.ts']);
   return {name: 'ets2telemetry-upload-ui-isolation', generateBundle() {
     let modules = 0;
     for (const id of this.getModuleIds()) {
@@ -36,8 +38,8 @@ export function uploadUiIsolationPlugin(config, checked = () => {}) {
       assert.ok(path.isAbsolute(id), 'UPLOAD_UI_FORBIDDEN_MODULE');
       const relative = path.relative(config.checkout, id.split('?')[0]).replaceAll('\\', '/');
       const app = relative.startsWith('apps/desktop/src/') ? relative.slice('apps/desktop/src/'.length) : null;
-      const allowedApp = app !== null && (['channel.ts', 'index.css', 'fonts.css'].includes(app) || ['components/ui/', 'i18n/', 'shell/', 'assets/'].some(prefix => app.startsWith(prefix)) || app.startsWith('dashboard-upload/') && uploadModules.has(app.slice('dashboard-upload/'.length)));
-      assert.ok(allowedApp || relative.startsWith('packages/contracts/src/') || relative.startsWith('node_modules/') || ['tests/runtime/dashboard-upload-ui-main.ts', 'tests/runtime/dashboard-upload-ui-preload.ts', 'tests/runtime/dashboard-upload-ui-renderer.tsx', 'tests/runtime/dashboard-upload-ui.html'].includes(relative), 'UPLOAD_UI_FORBIDDEN_MODULE');
+      const allowedApp = app !== null && (overlayModules.has(app)||app.startsWith('qualification/')&&qualificationModules.has(app.slice('qualification/'.length))||['channel.ts', 'index.css', 'fonts.css'].includes(app) || ['components/ui/', 'i18n/', 'shell/', 'assets/'].some(prefix => app.startsWith(prefix)) || app.startsWith('dashboard-upload/') && uploadModules.has(app.slice('dashboard-upload/'.length)));
+      assert.ok(allowedApp || relative.startsWith('packages/contracts/src/') || relative.startsWith('packages/telemetry-core/src/') || relative.startsWith('node_modules/') || ['tests/runtime/dashboard-upload-ui-main.ts', 'tests/runtime/dashboard-upload-ui-preload.ts', 'tests/runtime/dashboard-upload-ui-renderer.tsx', 'tests/runtime/dashboard-upload-ui.html'].includes(relative), `UPLOAD_UI_FORBIDDEN_MODULE:${relative}`);
       modules++;
     }
     assert.ok(modules > 0, 'UPLOAD_UI_EMPTY_MODULE_GRAPH'); checked(modules);
@@ -48,6 +50,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
   const inputs = uploadUiBuildInputs(config), {build} = await import('vite'), {default: tailwindcss} = await import('@tailwindcss/vite');
   const moduleGraphs = [], isolation = () => uploadUiIsolationPlugin(config, modules => moduleGraphs.push(modules));
   await mkdir(inputs.root); await writeFile(path.join(inputs.root, '.upload-ui-root'), 'ets2telemetry.dashboard-upload.ui.v1\n', {flag: 'wx'});
+  await writeFile(path.join(inputs.root,'companion-v1.json'),await readFile(path.join(config.checkout,'tests/fixtures/qualification/companion-v1.json')),{flag:'wx'});
   for (const name of ['main', 'preload']) await build({configFile: false, root: config.checkout, logLevel: 'silent', define: inputs.define, plugins: [isolation()],
     build: {outDir: inputs.root, emptyOutDir: false, minify: false, lib: {entry: path.join(config.checkout, `tests/runtime/dashboard-upload-ui-${name}.ts`), formats: ['cjs'], fileName: () => `${name}.cjs`}, rollupOptions: {external: ['electron', /^node:/]}}});
   await build({configFile: false, root: config.checkout, base: './', logLevel: 'silent', define: inputs.define, plugins: [tailwindcss(), isolation()], resolve: {alias: inputs.alias},
@@ -179,7 +182,7 @@ export async function runDashboardUploadUiFixture(config, progress) {
     record.security = await application.evaluate(({BrowserWindow}) => {const window = BrowserWindow.getAllWindows()[0], p = window.webContents.getLastWebPreferences(); return {sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration, persistentSession: window.webContents.session.isPersistent(), localDocument: window.webContents.getURL().startsWith('file:')};});
     assert.deepEqual(record.security, {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true});
     assert.equal(await page.evaluate(() => typeof globalThis.require === 'undefined' && typeof globalThis.process === 'undefined'), true);
-    assert.deepEqual(await page.evaluate(() => Object.keys(globalThis.uploadUi).sort()), ['cancelDashboardUpload', 'confirmDashboardUpload', 'disconnectDashboardUpload', 'getDashboardUploadContext', 'listJournalTrips', 'subscribeDashboardUpload', 'verifyDashboardUploadToken']);
+    assert.deepEqual(await page.evaluate(() => Object.keys(globalThis.uploadUi).sort()), ['cancelDashboardUpload', 'confirmDashboardUpload', 'disconnectDashboardUpload', 'getDashboardUploadContext','getQualification', 'listJournalTrips','refreshQualification', 'subscribeDashboardUpload','subscribeQualification', 'verifyDashboardUploadToken']);
     assert.equal(await page.evaluate(() => typeof globalThis.desktop === 'undefined'), true); record.flags.bridgeIsolation = true;
     assert.equal(await application.evaluate(async ({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.executeJavaScript('Notification.requestPermission()', true)), 'denied');
     assert.ok(await application.evaluate(() => globalThis.uploadUiFixture.denied.permissions > 0)); record.security.permissionsDenied = true;
@@ -323,6 +326,32 @@ export async function runDashboardUploadUiFixture(config, progress) {
     assert.equal(replacementCounts.verify, previousCounts.verify + 1); assert.equal(replacementCounts.confirm, previousCounts.confirm);
     await page.getByTestId('account.cancel').click(); await page.getByTestId('account.form').waitFor();
     await page.getByTestId('fixture.journal').click(); await page.waitForFunction(() => globalThis.document.activeElement?.getAttribute('data-testid') === 'screen-title'); record.flags.headingFocus = true;
+    stage='qualification';record.qualificationShots=[];await publish(connected);
+    for(const language of ['en','ru']){
+      if(await page.getByTestId('fixture.language').innerText()!==language)await page.getByTestId('fixture.language').click();
+      await page.setViewportSize({width:1280,height:800});await page.getByTestId('fixture.qualification').click();
+      await expect(page.locator('.qualification-rule')).toHaveCount(5);await expect(page.locator('.qualification-progress progress')).toHaveCount(2);
+      for(const availability of ['ready','offline']){
+        await application.evaluate((_electron,{availability})=>globalThis.uploadUiFixture.qualification('ets2',{availability,stale:availability==='offline'}),{availability});
+        await expect(page.getByTestId('qualification-screen')).toBeVisible();
+        const file=`qualification-${language}-${availability}.png`;await page.screenshot({path:path.join(config.output,file)});record.qualificationShots.push(file);
+      }
+      await application.evaluate(()=>globalThis.uploadUiFixture.qualification('ets2',{availability:'ready',stale:false}));
+      const light=await page.locator('.qualification-screen [data-slot="card"]').first().evaluate(node=>globalThis.getComputedStyle(node).backgroundColor);await page.emulateMedia({colorScheme:'dark'});
+      assert.notEqual(await page.locator('.qualification-screen [data-slot="card"]').first().evaluate(node=>globalThis.getComputedStyle(node).backgroundColor),light);
+      const darkFile=`qualification-${language}-dark.png`;await page.screenshot({path:path.join(config.output,darkFile)});record.qualificationShots.push(darkFile);await page.emulateMedia({colorScheme:'light'});
+      await page.getByRole('button',{name:'ATS',exact:true}).click();await expect(page.getByRole('button',{name:'ATS',exact:true})).toHaveAttribute('aria-pressed','true');
+      await page.getByTestId('fixture.journal').click();await expect(page.getByTestId('trip-qualification')).toBeVisible();await expect(page.getByTestId('qualification-assessment')).toBeVisible();
+      await page.getByTestId('fixture.overlay').click();
+      for(const layout of ['strip','card','cluster','hud']){
+        await page.getByTestId(`fixture.layout.${layout}`).click();
+        for(const cue of ['pass','fail','neutral']){
+          await page.getByTestId(`fixture.cue.${cue}`).click();await expect(page.locator('.overlay .qualification-medal')).toHaveAttribute('data-state',cue);
+          const file=`qualification-overlay-${language}-${layout}-${cue}.png`;await page.screenshot({path:path.join(config.output,file)});record.qualificationShots.push(file);
+        }
+      }
+    }
+    await publish(base);await expect(page.getByTestId('fixture.qualification')).toHaveCount(0);record.flags.qualification=true;
     stage = 'navigation-security';
     const beforeUrl = page.url(); await page.evaluate(() => {const a = globalThis.document.createElement('a'); a.href = 'https://example.invalid'; globalThis.document.body.append(a); a.click(); a.remove();});
     await expect.poll(() => application.evaluate(() => globalThis.uploadUiFixture.denied.navigation), {timeout: 5000}).toBe(1);

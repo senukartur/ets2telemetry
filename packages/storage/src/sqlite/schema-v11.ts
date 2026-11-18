@@ -20,9 +20,11 @@ export const SCHEMA_V11: readonly string[] = [
   `CREATE TABLE qualification_refresh_state(
     registration_ref TEXT PRIMARY KEY REFERENCES upload_registrations(registration_id),security_scope TEXT NOT NULL,
     connection_version TEXT NOT NULL,after_event TEXT, retry_at INTEGER NOT NULL DEFAULT 0 CHECK(retry_at BETWEEN 0 AND 9007199254740991),
+    preview_pin TEXT UNIQUE REFERENCES upload_projection_pins(pin_id),
     failure_streak INTEGER NOT NULL DEFAULT 0 CHECK(failure_streak BETWEEN 0 AND 9),
     suspended INTEGER NOT NULL DEFAULT 0 CHECK(suspended IN (0,1))) STRICT`,
   'CREATE INDEX qualification_result_event ON qualification_result_versions(event_ref,registration_ref,security_scope)',
+  `CREATE INDEX qualification_result_explanation ON qualification_result_versions(registration_ref,security_scope,event_ref,length(result_revision) DESC,result_revision DESC) WHERE json_type(snapshot_json,'$.assessment')='object'`,
   'CREATE INDEX qualification_refresh_due ON qualification_refresh_state(retry_at,registration_ref)',
   'CREATE INDEX qualification_source_page ON upload_envelopes(registration_ref,event_id)',
   `CREATE TRIGGER qualification_result_immutable BEFORE UPDATE ON qualification_result_versions BEGIN SELECT RAISE(ABORT,'immutable qualification result'); END`

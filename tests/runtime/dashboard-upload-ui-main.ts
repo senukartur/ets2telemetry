@@ -4,12 +4,14 @@ import {readFileSync} from 'node:fs';
 import {initialDashboardUploadStatus, isDashboardUploadStatus, type DashboardUploadStatus} from '../../packages/contracts/src/dashboard-upload';
 import {UPLOAD_CHANNELS, validUploadArguments, type UploadAction} from '../../apps/desktop/src/dashboard-upload/contract';
 import {validateJournalTripPage, type JournalSyncRow, type JournalTripListItem} from '../../packages/contracts/src/journal';
+import {initialQualificationState,isQualificationState,type QualificationGame,type QualificationState,type QualificationWire} from '../../packages/contracts/src/qualification';
+import {QUALIFICATION_CHANNELS,validQualificationArguments} from '../../apps/desktop/src/qualification/contract';
 
 // This entry is built only in the marked runtime-smoke fixture directory; it imports no production main or uploader.
 if (readFileSync(path.join(__dirname, '.upload-ui-root'), 'utf8') !== 'ets2telemetry.dashboard-upload.ui.v1\n') throw Error('INVALID_FIXTURE_ROOT');
 app.setPath('userData', path.join(__dirname, 'profile'));
 app.setPath('sessionData', path.join(__dirname, 'session'));
-const origin = 'https://dashboard.example', owner = {origin, accountId: 'fixture-account', companyId: 'fixture-company', identityEpoch: 'fixture-epoch'};
+const origin = 'https://dashboard.example', owner = {origin, accountId: '00000000-0000-4000-8000-000000000005', companyId: 'fixture-company', identityEpoch: 'fixture-epoch'};
 let status = initialDashboardUploadStatus(origin), window: BrowserWindow;
 let pending: ((status: DashboardUploadStatus) => void) | undefined;
 let pendingKind: 'verify' | 'confirm' | null = null, failure: DashboardUploadStatus['error'] = null;
@@ -17,6 +19,13 @@ const counts = {verify: 0, confirm: 0, cancel: 0, disconnect: 0};
 const denied = {navigation: 0, newWindow: 0, permissions: 0};
 const rows = ['unavailable', 'unbound', 'identity-pending', 'pending', 'queued', 'sending', 'held', 'sent'].map((state, index): JournalSyncRow => ({tripUuid: `70000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`, state: state as JournalSyncRow['state'], materialVersion: index < 2 ? null : '2', latestRevision: index < 4 ? null : 1, lastDurableUploadUtcMs: state === 'sent' ? 5000 : null, reason: state === 'held' ? 'validation' : null}));
 const absent = {available: false, reason: 'not-observed'} as const;
+const companion=JSON.parse(readFileSync(path.join(__dirname,'companion-v1.json'),'utf8')) as {schema:string;value:unknown}[];
+const qualificationStates=Object.fromEntries((['ets2','ats'] as const).map(game=>{
+  const snapshot=structuredClone(companion.find(item=>item.schema==='Qualification'&&(item.value as QualificationWire['Qualification']).game===game)!.value) as QualificationWire['Qualification'];
+  return [game,{...initialQualificationState(game,owner),snapshot,availability:'ready',stale:false,fetchedUtcMs:1795000000000}];
+})) as Record<QualificationGame,QualificationState>;
+const result=structuredClone(companion.filter(item=>item.schema==='ResultBatch').flatMap(item=>(item.value as QualificationWire['ResultBatch']).items).find(item=>item.assessmentBasis==='current')!);
+rows[7].qualification={current:result,previous:null,awaiting:false};
 const trips = rows.map(({tripUuid}): JournalTripListItem => ({tripUuid, game: 'ets2', isHardMode: false, hardModeDetails: null, gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, gameModeAmbiguous: false, outcome: 'open', closeReason: null, recordingCompleteness: 'partial', startedUtcMs: 1000, endedUtcMs: null, observedDistanceM: absent, fuelUsedL: absent, job: {source: 'event', sourceCity: absent, sourceCompany: absent, destinationCity: absent, destinationCompany: absent, cargo: absent, market: absent, isSpecialJob: absent, plannedDistance: {...absent, unit: 'm'}, expectedIncome: absent}}));
 function publish(value: DashboardUploadStatus) {if (!isDashboardUploadStatus(value)) throw Error('INVALID_FIXTURE_STATUS'); status = structuredClone(value); window.webContents.send(UPLOAD_CHANNELS.status, status);}
 const fixture = {
@@ -26,6 +35,7 @@ const fixture = {
   settle(value: DashboardUploadStatus) {if (!pending) throw Error('NO_PENDING_FIXTURE_OPERATION'); const done = pending; pending = undefined; pendingKind = null; publish(value); done(structuredClone(status));},
   get pendingKind() {return pendingKind;},
   get status() {return structuredClone(status);}
+  ,qualification(game:QualificationGame,change:Partial<QualificationState>={}){const state={...qualificationStates[game],...change};if(!isQualificationState(state))throw Error('INVALID_QUALIFICATION_FIXTURE');qualificationStates[game]=state;window.webContents.send(QUALIFICATION_CHANNELS.status,state);return state;}
 };
 (globalThis as unknown as {uploadUiFixture: typeof fixture}).uploadUiFixture = fixture;
 void app.whenReady().then(async () => {
@@ -51,6 +61,10 @@ void app.whenReady().then(async () => {
     publish(action === 'verify' ? {...initialDashboardUploadStatus(origin), state: 'verifying'} : {...status, state: 'connecting'});
     pendingKind = action;
     return new Promise<DashboardUploadStatus>(resolve => {pending = resolve;});
+  });
+  for(const action of ['get','refresh'] as const)ipcMain.handle(QUALIFICATION_CHANNELS[action],(event,...args:unknown[])=>{
+    if(event.sender!==window.webContents||event.senderFrame!==window.webContents.mainFrame||!validQualificationArguments(args))throw Error('INVALID_QUALIFICATION_FIXTURE_REQUEST');
+    return status.owner&&['connected','paused'].includes(status.state)?qualificationStates[args[0] as QualificationGame]:initialQualificationState(args[0] as QualificationGame);
   });
   ipcMain.handle('journal:list-trips', (event, ...args: unknown[]) => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || args.length !== 1 || JSON.stringify(args[0]) !== '{}') throw Error('INVALID_FIXTURE_JOURNAL');

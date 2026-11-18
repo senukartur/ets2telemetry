@@ -5,6 +5,7 @@
 // so synthetic and replay data are never shown as game history. See docs/journal.md.
 import {isHardModeDetails, type HardModeDetails} from './hard-mode';
 import {isDashboardOwner, type DashboardOwner} from './dashboard-upload';
+import {isQualificationWire} from './qualification';
 import {validateServerMessage, type Available, type Currency, type EventOccurrence, type EventRecord, type GameMode, type JobConfiguration, type Money,
   type TrailerConfiguration, type TruckConfiguration, type UnavailableReason, type Uint64} from './protocol-v1';
 import {isTruckPowertrain, type TruckPowertrain} from './truck-powertrain';
@@ -121,7 +122,9 @@ export interface JournalTripListItem {
   netIncome?: {raw: string; currency: Currency} | null;
   job: JournalJobSummary;
 }
+export interface JournalQualification {current:import('./qualification').QualificationResult|null;previous:import('./qualification').QualificationResult|null;latest?:import('./qualification').QualificationResult;awaiting:boolean}
 export interface JournalSyncRow {
+  qualification?:JournalQualification;
   tripUuid: string;
   state: 'unavailable' | 'unbound' | 'identity-pending' | 'pending' | 'queued' | 'sending' | 'held' | 'sent';
   materialVersion: string | null; latestRevision: number | null; lastDurableUploadUtcMs: number | null;
@@ -189,6 +192,7 @@ export interface JournalRefuels {
   unavailableReason?: 'retained-path-unproven' | 'annotation-limit';
 }
 export interface JournalTripDetail {
+  qualification?:{owner:DashboardOwner;connectionVersion:string;row:JournalSyncRow};
   database: JournalDatabase;
   trip: JournalTripListItem & {
     pluginSessionId: string;
@@ -478,6 +482,13 @@ function page(rows: unknown, limit: number, cursor: unknown, check: (value: unkn
   return list;
 }
 /** Validates a `journalTrips` answer exactly; throws JournalContractError otherwise. */
+function qualificationDecoration(value:unknown):void {
+  const decoration=exact(value,['current','previous','awaiting',...(isRecord(value)&&Object.hasOwn(value,'latest')?['latest']:[])]);boolean(decoration.awaiting);
+  if(Object.hasOwn(decoration,'latest')&&!isQualificationWire('Result',decoration.latest))bad();
+  for(const key of ['current','previous'] as const)if(decoration[key]!==null&&!isQualificationWire('Result',decoration[key]))bad();
+  const current=decoration.current as import('./qualification').QualificationResult|null;
+  if(current&&(current.assessmentBasis!=='current'||current.assessmentPending||current.correctionPending||current.state!=='decided'||!current.assessment))bad();
+}
 export function validateJournalTripPage(value: unknown): JournalTripPage {
   const o = exact(value, ['database', 'trips', 'nextCursor', ...(isRecord(value) && Object.hasOwn(value, 'sync') ? ['sync'] : []), ...(isRecord(value) && Object.hasOwn(value, 'totals') ? ['totals'] : [])]);
   database(o.database);
@@ -490,7 +501,8 @@ export function validateJournalTripPage(value: unknown): JournalTripPage {
     if (!Array.isArray(sync.rows) || sync.rows.length !== (o.trips as JournalTripListItem[]).length) bad();
     const seen = new Set<string>();
     for (const [index, item] of (sync.rows as unknown[]).entries()) {
-      const row = exact(item, ['tripUuid', 'state', 'materialVersion', 'latestRevision', 'lastDurableUploadUtcMs', 'reason']);
+      const row = exact(item, ['tripUuid', 'state', 'materialVersion', 'latestRevision', 'lastDurableUploadUtcMs', 'reason',...(isRecord(item)&&Object.hasOwn(item,'qualification')?['qualification']:[])]);
+      if(Object.hasOwn(row,'qualification'))qualificationDecoration(row.qualification);
       uuid(row.tripUuid);
       if (row.tripUuid !== (o.trips as JournalTripListItem[])[index].tripUuid || seen.has(row.tripUuid)) bad();
       seen.add(row.tripUuid as string);
@@ -539,8 +551,14 @@ export function validateJournalIntervalPage(value: unknown, limit = Math.max(...
 /** Validates a `journalTrip` answer exactly; throws JournalContractError otherwise. */
 export function validateJournalTripDetail(value: unknown): JournalTripDetail {
   const o = exact(value, ['database', 'trip', 'job', 'truck', 'trailers', 'outcomeDetails', 'money', 'window', 'intervals', 'samples', 'exportBounds',
+    ...(isRecord(value) && Object.hasOwn(value,'qualification')?['qualification']:[]),
     ...(isRecord(value) && Object.hasOwn(value, 'energyPowertrain') ? ['energyPowertrain'] : []),
     ...(isRecord(value) && Object.hasOwn(value, 'refuels') ? ['refuels'] : [])]);
+  if(Object.hasOwn(o,'qualification')){
+    const decoration=exact(o.qualification,['owner','connectionVersion','row']);
+    const row=o.trip as Record<string,unknown>;
+    validateJournalTripPage({database:o.database,trips:[Object.fromEntries(listKeys(row).map(key=>[key,row[key]]))],nextCursor:null,sync:{owner:decoration.owner,connectionVersion:decoration.connectionVersion,rows:[decoration.row]}});
+  }
   if (Object.hasOwn(o, 'energyPowertrain') && !isTruckPowertrain(o.energyPowertrain)) bad();
   if (Object.hasOwn(o, 'refuels')) {
     const hasReason = isRecord(o.refuels) && Object.hasOwn(o.refuels, 'unavailableReason');

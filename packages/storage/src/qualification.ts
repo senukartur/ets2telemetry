@@ -1,13 +1,21 @@
 // Private utility/worker commands. Registration and connection authority never come from a renderer.
 import {isQualificationWire, isQualificationCounter, type QualificationSnapshot, type QualificationResultBatch, type QualificationSourceRequest, type QualificationResult} from '../../contracts/src/qualification';
 import {uploadShape as shape, uploadOne as one, uploadNull as nullable, uploadUuid, uploadSafe, uploadRecord} from '../../contracts/src/dashboard-upload';
+import {isUploadPreparation,type UploadProjectionPreparation} from './upload-projection';
 export interface QualificationAuthority {registrationId: string; connectionVersion: string}
 export interface QualificationRefresh {afterEvent: string | null; retryAtMs: number; failureStreak: number; suspended: boolean}
 export interface QualificationStoredCache {snapshot: QualificationSnapshot; fetchedUtcMs: number}
 export interface QualificationStoredState {active: boolean; securityScope: string | null; caches: QualificationStoredCache[]; refresh: QualificationRefresh}
 export interface QualificationLocalSource {request: QualificationSourceRequest; localMaterialDigest: string; result: QualificationResult | null}
+export interface QualificationLocalPreview {tripUuid:string;rawTripUuid:string;materialVersion:string;actualDistance:QualificationWirePreviewDistance}
+type QualificationWirePreviewDistance = import('../../contracts/src/qualification').QualificationPreviewInput['actualDistance'];
 type Command<I, V> = {args: {input: I}; value: V};
 export interface QualificationCommands {
+  readQualificationPreviewPins:Command<Record<never,never>,{items:(QualificationAuthority&{pinId:string})[]}>;
+  beginQualificationPreview:Command<QualificationAuthority&{pinId:string;tripUuid:string},UploadProjectionPreparation>;
+  advanceQualificationPreview:Command<QualificationAuthority&{pinId:string},UploadProjectionPreparation>;
+  releaseQualificationPreview:Command<QualificationAuthority&{pinId:string},UploadProjectionPreparation>;
+  readQualificationPreview: Command<QualificationAuthority & {game:'ets2'|'ats';pluginSessionId:string}, {current:QualificationLocalPreview|null}>;
   readQualificationCache: Command<QualificationAuthority, QualificationStoredState>;
   setQualificationScope: Command<QualificationAuthority & {securityScope: string}, {active: boolean}>;
   saveQualificationCache: Command<QualificationAuthority & {snapshot: QualificationSnapshot; fetchedUtcMs: number}, {saved: boolean}>;
@@ -21,6 +29,9 @@ const authority = {registrationId: uploadUuid, connectionVersion: isQualificatio
 const scope = (v: unknown) => isQualificationWire('SecurityScope', v);
 const refresh = shape({afterEvent: nullable(uploadUuid), retryAtMs: uploadSafe, failureStreak: v => uploadSafe(v) && v <= 9, suspended: one(true,false)});
 const requests: Record<QualificationCommandName, (v: unknown) => boolean> = {
+  readQualificationPreviewPins:shape({}),beginQualificationPreview:shape({...authority,pinId:uploadUuid,tripUuid:uploadUuid}),
+  advanceQualificationPreview:shape({...authority,pinId:uploadUuid}),releaseQualificationPreview:shape({...authority,pinId:uploadUuid}),
+  readQualificationPreview: shape({...authority,game:one('ets2','ats'),pluginSessionId:uploadUuid}),
   readQualificationCache: shape(authority),
   setQualificationScope: shape({...authority, securityScope: scope}),
   saveQualificationCache: shape({...authority, snapshot: v => isQualificationWire('Qualification', v), fetchedUtcMs: uploadSafe}),
@@ -34,6 +45,9 @@ export function isQualificationCommand(v: unknown): v is QualificationCommand {
   return uploadRecord(v) && typeof v.name === 'string' && isQualificationCommandName(v.name) && shape({name: one(v.name), input: requests[v.name]})(v);
 }
 export function isQualificationCommandValue(command: QualificationCommand, value: unknown): boolean {
+  if(command.name==='readQualificationPreviewPins')return shape({items:v=>Array.isArray(v)&&v.length<=8&&v.every(shape({...authority,pinId:uploadUuid}))})(value);
+  if(command.name==='beginQualificationPreview'||command.name==='advanceQualificationPreview'||command.name==='releaseQualificationPreview')return isUploadPreparation(value,command.input.pinId);
+  if (command.name === 'readQualificationPreview') return shape({current:nullable(shape({tripUuid:uploadUuid,rawTripUuid:uploadUuid,materialVersion:isQualificationCounter,actualDistance:shape({availability:one('known','unknown'),final:one(false),metres:nullable(v=>isQualificationWire('Decimal',v)),support:one('whole-trip','partial','unknown')})}))})(value);
   if (command.name === 'readQualificationCache') return shape({active: one(true,false), securityScope: nullable(scope), caches: v => Array.isArray(v) && v.length <= 2 && v.every(shape({snapshot: s => isQualificationWire('Qualification', s), fetchedUtcMs: uploadSafe})), refresh})(value);
   if (command.name === 'setQualificationScope') return shape({active: one(true,false)})(value);
   if (command.name === 'saveQualificationCache' || command.name === 'saveQualificationRefresh') return shape({saved: one(true,false)})(value);

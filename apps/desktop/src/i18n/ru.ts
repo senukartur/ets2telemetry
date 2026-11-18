@@ -3,6 +3,8 @@ import {channelCopyTable} from '../channel';
 
 // ET-055: a staging build shows its own product, folder and plugin names (channelCopyTable); production text is unchanged.
 export const RU_DICTIONARY: TranslationDictionary = channelCopyTable(Object.freeze({
+  "nav.qualification": "Моя квалификация",
+  "upload.companionScope": "Если токен даёт доступ companion, приложение также читает вашу квалификацию и сохранённые оценки и отправляет минимальные данные активного задания для предварительной проверки до загрузки: код и массу груза, текущие и прежние типы прицепов, подтверждённую фактическую дистанцию, завершённость Hard Mode, фактическое начало и необязательную ссылку на событие. Замеры, позиции, профили и диагностика остаются локально.",
   "upload.intro": "Рейсы из игры отправляются в Dashboard компании. Запись и журнал работают и без подключения.",
   "upload.connection": "Подключение к Dashboard",
   "upload.unconfigured": "Синхронизация с Dashboard недоступна в этой сборке: адрес сервиса не задан. Журнал и локальная запись продолжают работать.",

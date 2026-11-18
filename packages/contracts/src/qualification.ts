@@ -67,6 +67,7 @@ export interface QualificationState {
   owner: DashboardOwner | null; game: QualificationGame; availability: QualificationAvailability;
   snapshot: QualificationSnapshot | null; preview: QualificationPreview | null; fetchedUtcMs: number | null;
   stale: boolean; refreshing: boolean;
+  activeJob:boolean;
 }
 export interface QualificationBridge {
   getQualification(game: QualificationGame): Promise<QualificationState>;
@@ -74,12 +75,12 @@ export interface QualificationBridge {
   subscribeQualification(listener: (state: QualificationState) => void): () => void;
 }
 export function initialQualificationState(game: QualificationGame, owner: DashboardOwner | null = null): QualificationState {
-  return {owner, game, availability: owner ? 'loading' : 'disconnected', snapshot: null, preview: null, fetchedUtcMs: null, stale: true, refreshing: false};
+  return {owner, game, availability: owner ? 'loading' : 'disconnected', snapshot: null, preview: null, fetchedUtcMs: null, stale: true, refreshing: false,activeJob:false};
 }
 export function isQualificationState(value: unknown): value is QualificationState {
-  if (!uploadShape({owner: uploadNull(isDashboardOwner), game: isQualificationGame, availability: uploadOne('disconnected','loading','ready','offline','unsupported','disabled','permission-required','unavailable'), snapshot: uploadNull(v => isQualificationWire('Qualification', v)), preview: uploadNull(v => isQualificationWire('Preview', v)), fetchedUtcMs: uploadNull(uploadSafe), stale: uploadOne(true,false), refreshing: uploadOne(true,false)})(value)) return false;
+  if (!uploadShape({owner: uploadNull(isDashboardOwner), game: isQualificationGame, availability: uploadOne('disconnected','loading','ready','offline','unsupported','disabled','permission-required','unavailable'), snapshot: uploadNull(v => isQualificationWire('Qualification', v)), preview: uploadNull(v => isQualificationWire('Preview', v)), fetchedUtcMs: uploadNull(uploadSafe), stale: uploadOne(true,false), refreshing: uploadOne(true,false),activeJob:uploadOne(true,false)})(value)) return false;
   const state = value as QualificationState;
-  return state.owner !== null ? (!state.snapshot || state.snapshot.game === state.game) && (!state.snapshot || !state.preview || state.snapshot.securityScope === state.preview.securityScope) : state.availability === 'disconnected' && state.snapshot === null && state.preview === null && state.fetchedUtcMs === null;
+  return state.owner !== null ? (!state.snapshot || state.snapshot.game === state.game&&state.snapshot.ownerId===state.owner.accountId) && (!state.preview || !!state.snapshot && state.snapshot.securityScope === state.preview.securityScope) : state.availability === 'disconnected' && state.snapshot === null && state.preview === null && state.fetchedUtcMs === null&&!state.activeJob;
 }
 export type QualificationGame = 'ets2' | 'ats';
 export type QualificationCue = 'pass' | 'fail' | 'neutral';

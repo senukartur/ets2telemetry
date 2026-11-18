@@ -61,6 +61,8 @@ Hard Mode checks whether the game's persisted profile settings meet twelve reali
 
 Account & sync verifies a personal token, then asks the driver to confirm the exact Dashboard owner and all retained eligible game-trip summaries before upload. Existing owners remain attached to their trips. The page shows one connection card and one upload result counted in distinct trips, keeps the last complete totals through recounts and lists trips awaiting identity, held trips and queue pressure only when they occur; Journal badges require current material and durable receipt evidence. Upload is not company acceptance. When a deployment has no configured service origin, Account explains unavailable configuration and exposes no token controls or sync decorations. Local recording works throughout.
 
+My qualification shows connected drivers their separate ETS2/ATS levels, credited progress and five server-owned requirements, retaining scoped snapshots through temporary outages. An active trip has a provisional Lucide Medal cue in every overlay layout. Journal details retain final server assessment snapshots and previous explanations after corrections; upload receipts never imply qualification, company acceptance or promotion. These decorations do not change JSON exports or restore server history.
+
 ### Application
 
 The application runs in the notification area as a single instance. Closing the main window hides it; recording and the overlay continue until the driver chooses Exit. It can start with Windows and shows its interface in English or Russian, in a light or dark theme that can follow the Windows setting. Game-provided names (cargo, cities, companies, trucks) are never translated.

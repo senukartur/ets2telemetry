@@ -41,6 +41,11 @@ function attempt<T>(body: () => T): Result<T> {
 /** One open database. Commands run synchronously, one at a time, on its single verified writer connection. */
 export class Storage {
   constructor(private readonly connection: StorageConnection) {}
+  readQualificationPreviewPins(input:QualificationCommands['readQualificationPreviewPins']['args']['input']) {return attempt(()=>qualification.readQualificationPreviewPins(this.connection,input));}
+  beginQualificationPreview(input:QualificationCommands['beginQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.beginQualificationPreview(this.connection,input,options));}
+  advanceQualificationPreview(input:QualificationCommands['advanceQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.advanceQualificationPreview(this.connection,input,options));}
+  releaseQualificationPreview(input:QualificationCommands['releaseQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.releaseQualificationPreview(this.connection,input,options));}
+  readQualificationPreview(input:QualificationCommands['readQualificationPreview']['args']['input']) {return attempt(()=>qualification.readQualificationPreview(this.connection,input));}
   readQualificationCache(input:QualificationCommands['readQualificationCache']['args']['input']) {return attempt(()=>qualification.readQualificationCache(this.connection,input));}
   setQualificationScope(input:QualificationCommands['setQualificationScope']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.setQualificationScope(this.connection,input,options));}
   saveQualificationCache(input:QualificationCommands['saveQualificationCache']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.saveQualificationCache(this.connection,input,options));}

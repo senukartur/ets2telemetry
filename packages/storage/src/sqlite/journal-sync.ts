@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type {JournalSyncRow, JournalTripSync} from '../../../contracts/src/journal';
 import {isDashboardOwner, uploadUuid, type DashboardOwner} from '../../../contracts/src/dashboard-upload';
 import {identityPending} from './identity-pending';
+import {isQualificationWire} from '../../../contracts/src/qualification';
 
 type Row = Record<string, unknown>;
 const get = (db: Database.Database, sql: string, ...args: unknown[]) => db.prepare(sql).get(...args) as Row | undefined;
@@ -78,5 +79,30 @@ export function journalSync(db: Database.Database, tripUuids: readonly string[])
     }
     return envelope.state === 'queued' ? {...result, state: 'queued'} : absent;
   });
+  if(Number(db.pragma('user_version',{simple:true}))>=11){
+    const scope=get(db,'SELECT security_scope FROM qualification_refresh_state WHERE registration_ref=?',config.active_registration)?.security_scope;
+    let bytes=0;
+    if(scope)for(const row of rows){
+      if(row.state==='unavailable'||row.state==='unbound'||row.state==='identity-pending')continue;
+      const records=db.prepare(`SELECT v.snapshot_json,e.revision FROM qualification_result_heads h JOIN qualification_result_versions v USING(registration_ref,event_ref,security_scope,version)
+        JOIN upload_envelopes e ON e.event_id=h.event_ref JOIN upload_source_bindings b ON b.root_ref=e.root_ref
+        WHERE h.registration_ref=? AND h.security_scope=? AND b.trip_uuid=? AND b.registration_ref=? ORDER BY e.revision DESC LIMIT 2`).all(config.active_registration,scope,row.tripUuid,config.active_registration) as Row[];
+      const results=records.map(record=>{const value:unknown=JSON.parse(String(record.snapshot_json));return isQualificationWire('Result',value)?value:null;});
+      const latest=results[0]??null;
+      const applicable=latest&&Number(records[0].revision)===row.latestRevision&&row.state==='sent'&&latest.assessmentBasis==='current'&&latest.state==='decided'&&!latest.assessmentPending&&!latest.correctionPending&&latest.assessment!==null;
+      const showPrevious=latest&&(Number(records[0].revision)<(row.latestRevision??0)||latest.assessmentBasis==='predecessor'||row.state==='sent'||row.state==='pending');
+      let previous=applicable?results[1]??null:showPrevious?latest:null;
+      if((applicable||showPrevious)&&!previous?.assessment){
+        const retained=get(db,`SELECT v.snapshot_json FROM qualification_result_versions v JOIN upload_envelopes e ON e.event_id=v.event_ref
+          JOIN upload_source_bindings b ON b.root_ref=e.root_ref WHERE v.registration_ref=? AND v.security_scope=? AND b.trip_uuid=? AND b.registration_ref=?
+          AND json_type(v.snapshot_json,'$.assessment')='object' AND (v.event_ref<>? OR v.version<>?)
+          ORDER BY e.revision DESC,length(v.result_revision) DESC,v.result_revision DESC LIMIT 1`,config.active_registration,scope,row.tripUuid,config.active_registration,latest?.requestedEventId??'',latest?.version??'');
+        const value:unknown=retained?JSON.parse(String(retained.snapshot_json)):null;previous=isQualificationWire('Result',value)?value:null;
+      }
+      const decoration={current:applicable?latest:null,previous,...(latest?{latest}:{}),awaiting:row.state==='sent'&&!applicable};
+      bytes+=Buffer.byteLength(JSON.stringify(decoration));if(bytes>1048576)continue;
+      row.qualification=decoration;
+    }
+  }
   return {owner, connectionVersion: String(config.version), rows};
 }
