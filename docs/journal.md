@@ -103,7 +103,7 @@ ET-016 PR-3 adds five methods to the dashboard's preload bridge, after `finishOv
 | --- | --- |
 | `SERVICE_UNAVAILABLE` | No ready telemetry service: before the first readiness of a restarted service, after a failure, exit or restart exhaustion, while the application or the service stops |
 | `DATABASE_OPENING` | The service is still opening its database |
-| `DATABASE_UNAVAILABLE` | The database could not be opened or failed later; `storageCode` names the storage error code that made it unavailable (for example `PERMISSION_DENIED`, `SCHEMA_NEWER`). `storageCode: 'TIMEOUT'` means a storage command, possibly this read, missed the storage client's 10 s deadline: that fails the client closed, so the database and recording stay stopped for that telemetry service until it restarts ([the telemetry service](telemetry-service-v1.md#journal-queries-et-016)) |
+| `DATABASE_UNAVAILABLE` | The database could not be opened or failed later; `storageCode` names the storage error code that made it unavailable (for example `PERMISSION_DENIED`, `SCHEMA_NEWER`). `storageCode: 'TIMEOUT'` means a storage command, possibly this read, missed the storage client's 10 s deadline: the failed worker is retired and the database and recording remain unavailable while it exits and the next worker opens the database ([the telemetry service](telemetry-service-v1.md#journal-queries-et-016)) |
 | `BUSY` | Main already holds one request in flight and four waiting, the service is still running an earlier read that main timed out, or the storage client's queue is full |
 | `TIMEOUT` | No answer from the service within main's 15 s deadline; the read may be retried |
 | `NOT_FOUND` | The trip is not in the database (`UNKNOWN_TRIP`) |

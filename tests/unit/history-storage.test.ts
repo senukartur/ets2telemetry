@@ -1,5 +1,5 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {CLOSE_TERMINATE_RESERVE_MS, HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HistoryStorage, recorderClient, type HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
+import {CLOSE_TERMINATE_RESERVE_MS, HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HISTORY_RETIREMENT_NOTICE_MS, HistoryStorage, recorderClient, type HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
 import {SERVICE_STOP_BUDGET_MS, ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
 import type {Result, StorageErrorCode} from '../../packages/storage/src/api';
 import {COMMAND_DEADLINE_MS, type StorageClient, type StorageWorkerHandle} from '../../packages/storage/src/client';
@@ -403,7 +403,12 @@ describe('re-opening history storage after a recoverable stop (ET-037)', () => {
     expect(f.events()).toContainEqual(['HISTORY_STORAGE_UNAVAILABLE', {code: 'TIMEOUT', command: 'listTrips'}]);
 
     const closed = shutdown ? f.history.close().catch((error: unknown) => error) : undefined;
-    await vi.advanceTimersByTimeAsync(COMMAND_DEADLINE_MS);
+    const notices = () => f.events().filter(([name]) => name === 'HISTORY_STORAGE_RETIREMENT_PENDING');
+    await vi.advanceTimersByTimeAsync(HISTORY_RETIREMENT_NOTICE_MS - 1);
+    expect(notices()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(HISTORY_RETIREMENT_NOTICE_MS);
+    expect(notices()).toEqual(shutdown ? [] : [['HISTORY_STORAGE_RETIREMENT_PENDING', {code: 'TIMEOUT', waitMs: HISTORY_RETIREMENT_NOTICE_MS}]]);
     expect(f.createWorker).toHaveBeenCalledOnce();
     if (closed) expect(await closed).toMatchObject({message: 'History storage did not close cleanly'});
 

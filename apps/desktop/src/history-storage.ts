@@ -28,6 +28,8 @@ export const CLOSE_TERMINATE_RESERVE_MS = 200;
 export const HISTORY_REOPEN_BACKOFF_MS = [250, 500, 1000, 2000, 4000] as const;
 /** Maximum retry attempts before giving up re-opening. */
 export const MAX_HISTORY_REOPEN_ATTEMPTS = 60;
+/** Report once if a previous worker is still blocking replacement after this wait. */
+export const HISTORY_RETIREMENT_NOTICE_MS = 30_000;
 
 const systemTimers: ClientTimers = {
   setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
@@ -91,6 +93,7 @@ export class HistoryStorage {
   #databaseUuid: string | undefined;
   #invalidJournalAnswers = 0;
   #retryTimer: unknown = undefined;
+  #retirementTimer: unknown = undefined;
   #attempts = 0;
   #file: {path: string; backupsDirectory: string} | undefined;
   #target: RecordingDatabase | undefined;
@@ -151,7 +154,7 @@ export class HistoryStorage {
         this.#unavailable(result.error.code);
         // The worker has nothing left to serve; end its thread now rather than at shutdown.
         void client.close();
-        if (isReopenRetryable(result.error)) void client.waitForExit().then(() => this.#scheduleRetry(result.error));
+        if (isReopenRetryable(result.error)) this.#retryAfterExit(client, result.error);
         return;
       }
       const summary = result.value;
@@ -173,8 +176,27 @@ export class HistoryStorage {
     this.#unavailable(error.code, command);
     if (!recover) return;
     this.options.onRuntimeTimeout?.();
+    this.#retryAfterExit(client, error);
+  }
+
+  #retryAfterExit(client: StorageClient, error: StorageError): void {
+    if (this.#closing) return;
     // A timed-out native write may still commit. The replacement must observe its final durable outcome.
-    void client.waitForExit().then(() => this.#scheduleRetry(error));
+    const timers = this.options.timers ?? systemTimers;
+    this.#retirementTimer = timers.setTimeout(() => {
+      this.#retirementTimer = undefined;
+      this.options.log('HISTORY_STORAGE_RETIREMENT_PENDING', undefined, {code: error.code, waitMs: HISTORY_RETIREMENT_NOTICE_MS});
+    }, HISTORY_RETIREMENT_NOTICE_MS);
+    void client.waitForExit().then(() => {
+      this.#clearRetirementTimer();
+      this.#scheduleRetry(error);
+    });
+  }
+
+  #clearRetirementTimer(): void {
+    if (this.#retirementTimer === undefined) return;
+    (this.options.timers ?? systemTimers).clearTimeout(this.#retirementTimer);
+    this.#retirementTimer = undefined;
   }
 
   #scheduleRetry(error: StorageError): void {
@@ -212,6 +234,7 @@ export class HistoryStorage {
   async close(graceMs?: number): Promise<void> {
     this.#closing = true;
     this.#clearRetryTimer();
+    this.#clearRetirementTimer();
     const client = this.#client;
     if (!client) { this.#set('closed'); return; }
     const effectiveGrace = this.options.closeGraceMs ?? graceMs;
