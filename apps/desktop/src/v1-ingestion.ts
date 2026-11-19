@@ -185,6 +185,15 @@ export class V1Ingestion {
     if (this.disposed || !current || !this.durableWanted(current.pluginSessionId)) return;
     this.attempt = 0; current.reconnect();
   }
+
+  suspendStorage(): void { this.delivery?.suspendStorage(); }
+
+  async resumeStorage(createSink: () => DurableSink, isCurrent: () => boolean): Promise<void> {
+    await this.delivery?.idle();
+    if (this.disposed || !isCurrent()) return;
+    this.delivery?.resumeStorage(createSink);
+    this.durableAvailabilityChanged();
+  }
   /**
    * Ends the source and waits for owned processes (the intake phase of a shutdown). Nothing is acknowledged afterwards;
    * the storage-commit pipeline keeps its work until `flush`.

@@ -18,10 +18,12 @@ import type {HardModeDiagnostic, HardModeDetails, HardModeObservation} from '../
 import {hardModeDiagnostic, unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {JobConfiguration, Uint64} from '../../../packages/contracts/src/protocol-v1';
+import {isUint64} from '../../../packages/contracts/src/protocol-v0';
+import {MAX_EVENT_PAGE} from '../../../packages/storage/src/api';
 import type {AttachInput, CapturedEndpoint, CapturedRunning, CommitResult, CompletenessKind, SampleAppendResult, SampleInput, TripEffect} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {
-  dueAttach, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
+  dueAttach, endsStaleCheckpointJob, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
   type TripState, type TripView
 } from '../../../packages/telemetry-core/src/index';
 import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, HardModeCapture, HardModeCheckTarget, DurableSink, ReadingMessage, RecorderErrorCode, SampleSink, SinkError, SinkResult, WelcomeMessage} from './durable-sink';
@@ -442,7 +444,35 @@ export class TripRecorderSink implements DurableSink {
     return result;
   }
 
-  async checkpoint(message: Extract<ReadingMessage,{kind:'checkpoint'}>): Promise<SinkResult<undefined>> {
+  private staleCheckpoint?: ReadingMessage;
+
+  async checkpoint(message: Extract<ReadingMessage, {kind: 'checkpoint'}>): Promise<SinkResult<undefined>> {
+    this.staleCheckpoint = undefined;
+    const sessionId = message.source.pluginSessionId, configuration = message.data.state.configuration;
+    const session = this.state.sessions[sessionId];
+    if (this.state.connection !== sessionId || !session || session.game !== message.source.game) return refused('TRIP_UNKNOWN_SESSION');
+    const {ackedThroughEventSeq, nextEventSeq} = message.data.status.delivery;
+    const storedThrough = BigInt(session.processedThrough);
+    const replayEnd = BigInt(nextEventSeq) - 1n;
+    const storedReplayEnd = storedThrough < replayEnd ? storedThrough : replayEnd;
+    // A write can survive without an ACK. Consult the stored part of the replay before allowing a late attach:
+    // an already stored outcome is a duplicate on the wire and will not run the trip reducer again.
+    if (configuration.job.available) {
+      for (let after = BigInt(ackedThroughEventSeq); after < storedReplayEnd;) {
+        const page = await this.client.listEvents(sessionId, {afterEventSeq: after.toString(), limit: MAX_EVENT_PAGE});
+        if (!page.ok) return page;
+        for (const event of page.value) {
+          if (BigInt(event.eventSeq) > storedReplayEnd) break;
+          const revision = (event.occurred as {configurationRevision?: unknown} | null)?.configurationRevision;
+          if (isUint64(revision) && endsStaleCheckpointJob(event.type, revision, configuration.revision)) {
+            this.staleCheckpoint = message;
+            break;
+          }
+        }
+        if (this.staleCheckpoint || page.value.length < MAX_EVENT_PAGE) break;
+        after = BigInt(page.value[page.value.length - 1].eventSeq);
+      }
+    }
     return this.client.recordTrailerBaseline({message});
   }
   observe(message: ReadingMessage, context: CommitContext): SinkResult<undefined> {
@@ -463,7 +493,8 @@ export class TripRecorderSink implements DurableSink {
       this.previousSample=undefined;this.linkProfile=undefined;this.boundaryPrevious=undefined;this.boundaryRunning=undefined;this.trustedPredecessor=undefined;
       // A running checkpoint may own a sampled endpoint; unchanged counters must preserve its next observed step.
       this.continuity={pluginSessionId:message.source.pluginSessionId,processInstanceId:message.source.processInstanceId,sourceClockId:message.capture.clockId,...message.data.continuity};
-      const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs});
+      const hydrated = stepTrip(next, {kind: 'checkpoint', message, receivedUtcMs: context.receivedUtcMs, staleJob: this.staleCheckpoint === message});
+      this.staleCheckpoint = undefined;
       if (!hydrated.ok) return refused(RECORDER_CODE[hydrated.code]);
       next = hydrated.state;
     }

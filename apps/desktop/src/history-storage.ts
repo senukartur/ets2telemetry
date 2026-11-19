@@ -6,6 +6,7 @@ import type {JournalDatabase} from '../../../packages/contracts/src';
 import type {StorageError, StorageErrorCode} from '../../../packages/storage/src/api';
 import {StorageClient, workerHandle, type ClientTimers, type StorageWorkerHandle} from '../../../packages/storage/src/client';
 import {isReopenRetryable, storageError} from '../../../packages/storage/src/errors';
+import type {CommandName} from '../../../packages/storage/src/worker/protocol';
 import type {DiagnosticFacts} from './diagnostics';
 import {processEntrypoint} from './entrypoints';
 import {dataPaths} from './paths';
@@ -27,6 +28,8 @@ export const CLOSE_TERMINATE_RESERVE_MS = 200;
 export const HISTORY_REOPEN_BACKOFF_MS = [250, 500, 1000, 2000, 4000] as const;
 /** Maximum retry attempts before giving up re-opening. */
 export const MAX_HISTORY_REOPEN_ATTEMPTS = 60;
+/** Report once if a previous worker is still blocking replacement after this wait. */
+export const HISTORY_RETIREMENT_NOTICE_MS = 30_000;
 
 const systemTimers: ClientTimers = {
   setTimeout: (callback, milliseconds) => setTimeout(callback, milliseconds),
@@ -47,8 +50,10 @@ export interface HistoryStorageOptions {
    * `%LOCALAPPDATA%\ETS2Telemetry\synthetic\<name>.sqlite` with that purpose and backups in `synthetic\backups`.
    */
   target?: RecordingDatabase;
-  /** ET-015a (R10): called once, after the database opened, so durable delivery can start without waiting for a reconnection. */
+  /** Called after each successful open, including recovery. */
   onOpened?: () => void;
+  /** The open worker missed a command deadline. Stop recording work while keeping the source connected for replay. */
+  onRuntimeTimeout?: () => void;
   /** ET-015c (G3): called after every change of `state`, for the recording status. */
   onStateChange?: (state: HistoryState) => void;
   /** Tests only. */
@@ -88,6 +93,7 @@ export class HistoryStorage {
   #databaseUuid: string | undefined;
   #invalidJournalAnswers = 0;
   #retryTimer: unknown = undefined;
+  #retirementTimer: unknown = undefined;
   #attempts = 0;
   #file: {path: string; backupsDirectory: string} | undefined;
   #target: RecordingDatabase | undefined;
@@ -125,7 +131,10 @@ export class HistoryStorage {
     if (this.#closing || this.#state === 'closed') return;
     let client: StorageClient;
     try {
-      client = new StorageClient(this.options.createWorker(), {timers: this.options.timers, closeGraceMs: this.options.closeGraceMs ?? HISTORY_CLOSE_GRACE_MS, onFailure: error => this.#unavailable(error.code),
+      client = new StorageClient(this.options.createWorker(), {
+        timers: this.options.timers,
+        closeGraceMs: this.options.closeGraceMs ?? HISTORY_CLOSE_GRACE_MS,
+        onFailure: (error, command) => this.#workerFailed(client, error, command),
         // ET-016: a journal answer that broke the journal contract failed only that read; the database stays open.
         onJournalAnswerInvalid: ({command}) => {
           const count = ++this.#invalidJournalAnswers;
@@ -145,9 +154,7 @@ export class HistoryStorage {
         this.#unavailable(result.error.code);
         // The worker has nothing left to serve; end its thread now rather than at shutdown.
         void client.close();
-        if (!this.#closing && isReopenRetryable(result.error)) {
-          this.#scheduleRetry(result.error);
-        }
+        if (isReopenRetryable(result.error)) this.#retryAfterExit(client, result.error);
         return;
       }
       const summary = result.value;
@@ -162,6 +169,34 @@ export class HistoryStorage {
       if (summary.removedPartialBackups) this.options.log('HISTORY_BACKUP_PARTIALS_REMOVED', undefined, {count: summary.removedPartialBackups});
       if (this.#state === 'open') this.options.onOpened?.();
     });
+  }
+
+  #workerFailed(client: StorageClient, error: StorageError, command?: CommandName): void {
+    const recover = !this.#closing && this.#state === 'open' && error.code === 'TIMEOUT';
+    this.#unavailable(error.code, command);
+    if (!recover) return;
+    this.options.onRuntimeTimeout?.();
+    this.#retryAfterExit(client, error);
+  }
+
+  #retryAfterExit(client: StorageClient, error: StorageError): void {
+    if (this.#closing) return;
+    // A timed-out native write may still commit. The replacement must observe its final durable outcome.
+    const timers = this.options.timers ?? systemTimers;
+    this.#retirementTimer = timers.setTimeout(() => {
+      this.#retirementTimer = undefined;
+      this.options.log('HISTORY_STORAGE_RETIREMENT_PENDING', undefined, {code: error.code, waitMs: HISTORY_RETIREMENT_NOTICE_MS});
+    }, HISTORY_RETIREMENT_NOTICE_MS);
+    void client.waitForExit().then(() => {
+      this.#clearRetirementTimer();
+      this.#scheduleRetry(error);
+    });
+  }
+
+  #clearRetirementTimer(): void {
+    if (this.#retirementTimer === undefined) return;
+    (this.options.timers ?? systemTimers).clearTimeout(this.#retirementTimer);
+    this.#retirementTimer = undefined;
   }
 
   #scheduleRetry(error: StorageError): void {
@@ -199,6 +234,7 @@ export class HistoryStorage {
   async close(graceMs?: number): Promise<void> {
     this.#closing = true;
     this.#clearRetryTimer();
+    this.#clearRetirementTimer();
     const client = this.#client;
     if (!client) { this.#set('closed'); return; }
     const effectiveGrace = this.options.closeGraceMs ?? graceMs;
@@ -217,12 +253,12 @@ export class HistoryStorage {
     this.options.onStateChange?.(state);
   }
 
-  #unavailable(code: StorageErrorCode): void {
+  #unavailable(code: StorageErrorCode, command?: CommandName): void {
     this.#failure ??= code;
     if (this.#state !== 'closed') this.#set('unavailable');
     if (this.#reported) return;
     this.#reported = true;
-    this.options.log('HISTORY_STORAGE_UNAVAILABLE', undefined, {code});
+    this.options.log('HISTORY_STORAGE_UNAVAILABLE', undefined, {code, ...(command ? {command} : {})});
   }
 }
 

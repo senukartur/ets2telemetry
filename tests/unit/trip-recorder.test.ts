@@ -136,6 +136,25 @@ class ModelStorage implements TripRecorderClient {
   }
 }
 
+it.each(['504', '503'])('uses only stored unacknowledged events below checkpoint nextEventSeq=%s', async nextEventSeq => {
+  const storage = new ModelStorage(), script = new Script(ETS2_A), recorder = new TripRecorderSink(storage);
+  const checkpoint = script.checkpoint(job(), 0, {}, '7');
+  checkpoint.data.status.delivery.ackedThroughEventSeq = '2';
+  checkpoint.data.status.delivery.nextEventSeq = nextEventSeq;
+  const rows = Array.from({length: 503}, (_, i): EventRow => ({
+    eventSeq: String(i + 1), type: i === 1 || i === 502 ? 'job.delivered' : 'simulation.started',
+    occurred: {configurationRevision: '7'}, record: {}, firstRedelivered: false, protocolMinor: 0, committedUtcMs: 0
+  }));
+  vi.spyOn(storage, 'upsertSession').mockImplementation(() => ok({created: false, committedThroughEventSeq: '503'}));
+  const reads = vi.spyOn(storage, 'listEvents').mockImplementation((_session, {afterEventSeq = '0', limit = 500} = {}) =>
+    ok(rows.filter(row => Number(row.eventSeq) > Number(afterEventSeq)).slice(0, limit)));
+  await recorder.openSession(script.welcome());
+  expect(await recorder.checkpoint(checkpoint)).toEqual({ok: true, value: undefined});
+  expect(recorder.observe(checkpoint, {receivedUtcMs: RECEIVED_UTC}).ok).toBe(true);
+  expect(reads.mock.calls.map(([, page]) => page?.afterEventSeq)).toEqual(nextEventSeq === '504' ? ['2', '502'] : ['2']);
+  expect(recorder.attach.due()).toBe(nextEventSeq === '503');
+});
+
 it('records ordinary paused acceptance and delivery without an absence-confirmation handshake',async()=>{
   const storage=new ModelStorage(),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC},recorder=new TripRecorderSink(storage);
   expect((await recorder.openSession(s.welcome())).ok).toBe(true);

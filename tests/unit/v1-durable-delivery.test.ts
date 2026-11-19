@@ -887,3 +887,21 @@ it('REG-003/006 checks ACK_AHEAD before attempting checkpoint persistence',async
   const delivery=new DurableDelivery(sink),link=new Link(sink.log),connection=delivery.connect(welcome(),link);
   connection.checkpoint(checkpointAt('1'),RECEIVED);await delivery.idle();expect(link.closes).toEqual([['ack-ahead','ACK_AHEAD_OF_STORAGE']]);await delivery.stop();
 });
+
+it('fails closed when a pipeline exception occurs during the storage suspension', async () => {
+  const sink: MemorySink & DurableSink = new MemorySink();
+  const delivery = new DurableDelivery(sink), link = new Link(sink.log);
+  sink.observe = () => {
+    delivery.suspendStorage();
+    throw new Error('Unexpected observation failure');
+  };
+  const connection = delivery.connect(welcome(), link);
+  connection.checkpoint(checkpointAt('0'), RECEIVED);
+  await delivery.idle();
+  const replace = vi.fn(() => new MemorySink());
+  delivery.resumeStorage(replace);
+  expect(replace).not.toHaveBeenCalled();
+  expect(delivery.status).toEqual({state: 'failed', code: 'INTERNAL'});
+  expect(link.closes).toEqual([['unavailable', 'INTERNAL']]);
+  await delivery.stop();
+});

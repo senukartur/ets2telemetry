@@ -41,8 +41,8 @@ export interface ClientTimers {
 }
 export interface StorageClientOptions {
   timers?: ClientTimers; commandDeadlineMs?: number; openDeadlineMs?: number; closeGraceMs?: number; maxQueued?: number;
-  /** Called once when the worker fails or misses a deadline, with the error the command in flight received. */
-  onFailure?: (error: StorageError) => void;
+  /** Called once on worker failure with the reported error and the fixed name of any command in flight. */
+  onFailure?: (error: StorageError, command?: CommandName) => void;
   /**
    * Called when a journal answer broke the journal contract (ET-016): that command got JOURNAL_ANSWER_INVALID and the
    * client keeps running. The fact is the command name only; the owner logs it as a fixed code. It is called after the
@@ -94,6 +94,9 @@ export class StorageClient {
   #inFlight: InFlight | undefined;
   readonly #queue: Pending[] = [];
   #exited = false;
+  #resolveExit!: () => void;
+  readonly #exitPromise = new Promise<void>(resolve => { this.#resolveExit = resolve; });
+  #termination?: Promise<void>;
   #close: Promise<{clean: boolean}> | undefined;
   #finishClose: ((clean: boolean) => void) | undefined;
   #closeAcknowledged = false;
@@ -112,6 +115,9 @@ export class StorageClient {
   }
 
   get state(): ClientState { return this.#state; }
+
+  /** Unlike close(), this waits for actual thread exit even when native I/O outlasts the shutdown budget. */
+  waitForExit(): Promise<void> { return this.#exitPromise; }
 
   open(options: WorkerOpenOptions): Promise<Result<OpenSummary>> {
     return this.#request({name: 'open', options: {path: options.path, purpose: options.purpose, backupsDirectory: options.backupsDirectory, appVersion: options.appVersion}});
@@ -318,6 +324,7 @@ export class StorageClient {
 
   #exit(code: number): void {
     this.#exited = true;
+    this.#resolveExit();
     if (this.#state === 'closing' && this.#closeAcknowledged && code === 0) { this.#closed(); return; }
     this.#fail('WORKER_FAILED');
   }
@@ -341,7 +348,7 @@ export class StorageClient {
     for (const pending of this.#queue.splice(0)) pending.resolve(failure('WORKER_FAILED'));
     const terminated = this.#terminate();
     if (closing) void terminated.then(() => this.#finishClose?.(false));
-    else this.settings.onFailure?.(storageError(code));
+    else this.settings.onFailure?.(storageError(code), inFlight?.command.name);
   }
 
   /**
@@ -374,6 +381,6 @@ export class StorageClient {
 
   #terminate(): Promise<void> {
     if (this.#exited) return Promise.resolve();
-    return this.worker.terminate().then(() => undefined, () => undefined);
+    return this.#termination ??= this.worker.terminate().then(() => undefined, () => undefined);
   }
 }

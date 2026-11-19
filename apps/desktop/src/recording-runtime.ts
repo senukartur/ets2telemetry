@@ -9,11 +9,11 @@ import type {ProfileObservation} from '../../../packages/telemetry-core/src/trip
 // docs/telemetry-service-v1.md#service-wiring.
 import type {HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
 import type {RecordingHealth, SourceSelection} from '../../../packages/contracts/src';
-import type {StorageWorkerHandle} from '../../../packages/storage/src/client';
+import type {StorageClient, StorageWorkerHandle} from '../../../packages/storage/src/client';
 import type {DiagnosticFacts} from './diagnostics';
 import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, HISTORY_STORAGE_STEP_NAME, recorderClient, type HistoryStorageOptions} from './history-storage';
 import {recordingPlan, type RecordingPlan} from './recording-policy';
-import {deriveRecordingStatus, RecordingStatusPublisher, type RecordingStatusTimers} from './recording-status';
+import {addLosses, deriveRecordingStatus, RecordingStatusPublisher, ZERO_LOSSES, type RecordingStatusTimers} from './recording-status';
 import type {ShutdownSequence} from './shutdown-sequence';
 import {TripRecorderSink} from './trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from './v1-ingestion';
@@ -48,8 +48,8 @@ export interface RecordingRuntimeOptions {
   onV1Healthy?: V1IngestionOptions['onHealthy'];
   /** Tests only: bounds, timers and clocks of the ingestion and its pipeline. */
   ingestionOverrides?: RecordingIngestionOverrides;
-  /** Tests only: the stamped application version, close grace, and reopen retry overrides of the database. */
-  historyOverrides?: Pick<HistoryStorageOptions, 'appVersion' | 'closeGraceMs' | 'reopenBackoffMs' | 'maxReopenAttempts'>;
+  /** Tests only: the stamped application version and timing overrides of the database. */
+  historyOverrides?: Pick<HistoryStorageOptions, 'appVersion' | 'closeGraceMs' | 'reopenBackoffMs' | 'maxReopenAttempts' | 'timers'>;
   /** ET-015c (G4, G5): every recording status to send to main, from `start()` until `stopStatus()`. */
   onRecordingStatus?: (status: RecordingHealth) => void;
   /** Tests only: the coalescing interval (G5) and timers of the recording status; 250 ms and the system timers by default. */
@@ -89,9 +89,17 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   const plan = recordingPlan(options.env, {gameHistory: options.gameHistory, log: event => log(event)});
   // ET-015c (G5): every input of the recording status reports its changes here.
   const changed = () => status.changed();
-  // The recorder reaches storage through the history client, so a command before the open or after a failure answers
-  // STORAGE_CLOSED (recorderClient).
-  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed, profileEvidence: options.profileEvidence, profileStatus: options.profileStatus, hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip}) : undefined;
+  // Before the database opens, the recorder's storage requests answer STORAGE_CLOSED.
+  const createRecorder = (client?: StorageClient) => {
+    // Once bound, work from this recorder can only reach its own worker generation.
+    let bound = client;
+    return new TripRecorderSink(recorderClient({get client() {return bound ??= history.client;}}), {
+      onChange: changed, profileEvidence: options.profileEvidence, profileStatus: options.profileStatus,
+      hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip
+    });
+  };
+  let recorder = plan.durableSelections.length ? createRecorder() : undefined;
+  let retiredLosses = ZERO_LOSSES;
   // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.
   let recorded: SourceSelection | undefined;
   const v1 = new V1Ingestion({
@@ -107,15 +115,28 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
     ...options.ingestionOverrides
   });
   // The durable history database (ET-013, OD-2), or the recording target that replaces it.
+  let recovering = false;
   const history: HistoryStorage = new HistoryStorage({localAppData: options.localAppData, log, createWorker: options.createWorker,
-    target: plan.database, ...(recorder ? {onOpened: () => v1.durableAvailabilityChanged(), onStateChange: changed} : {}), ...options.historyOverrides});
+    target: plan.database, ...(recorder ? {
+      onOpened: () => {
+        if (!recovering) { v1.durableAvailabilityChanged(); return; }
+        recovering = false;
+        const client = history.client;
+        void v1.resumeStorage(() => {
+          retiredLosses = addLosses(retiredLosses, recorder!.losses());
+          return recorder = createRecorder(client);
+        }, () => history.client === client);
+      },
+      onRuntimeTimeout: () => { recovering = true; v1.suspendStorage(); },
+      onStateChange: changed
+    } : {}), ...options.historyOverrides});
   /** G3: the status from the current state of the database, the ingestion, its pipeline and the recorder. */
   const recordingStatus = (): RecordingHealth => {
     if (!recorder) return {state: 'disabled'};
     const current = v1.current, game = current.observation?.source.game;
     return deriveRecordingStatus({recorder: true, target: plan.database.purpose, history: {state: history.state, code: history.failureCode},
       durableSelections: plan.durableSelections, v1: current, retryCode: v1.durableRetryCode ?? null, recorded: recorded === current.selection,
-      losses: recorder.losses(), trip: game ? recorder.tripSummary(game) : null});
+      losses: addLosses(retiredLosses, recorder.losses()), trip: game ? recorder.tripSummary(game) : null});
   };
   const status = new RecordingStatusPublisher(recordingStatus, next => options.onRecordingStatus?.(next), options.statusOverrides);
   return {

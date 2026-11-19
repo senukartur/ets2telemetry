@@ -38,7 +38,7 @@ export function initialTripState(): TripState {
 export function stepTrip(state: TripState, input: TripInput): TripStepResult {
   switch (input.kind) {
     case 'session': return stepSession(state, input.welcome, input.coveredThrough, input.openTrips);
-    case 'checkpoint': return stepCheckpoint(state, input.message, input.receivedUtcMs);
+    case 'checkpoint': return stepCheckpoint(state, input.message, input.receivedUtcMs, input.staleJob);
     case 'attach': return stepAttach(state, input.receivedUtcMs);
     case 'event': return stepEvent(state, input.message, input.coveredThrough, input.receivedUtcMs);
     case 'gap': return stepGap(state, input.message, input.coveredThrough, input.receivedUtcMs);
@@ -486,8 +486,8 @@ function stepEvent(state: TripState, message: EventMessage, coveredThrough: Uint
   // A replayed event can show that the checkpoint's state lagged the replay and that its job had already ended or been
   // replaced (a newer clear or configuration proves it, an outcome is treated as ending it): the checkpoint job is then
   // neither untracked nor a late-attach trip (stale checkpoints, docs/trips.md).
-  if (session.checkpointJob && ((!replayed(c) && (record.type==='job.cleared' || record.type==='job.delivered' || record.type==='job.cancelled')) || replayed(c) && endsStaleCheckpointJob(record,occurred.configurationRevision,session.checkpointJob.configurationRevision))) session.checkpointJob=null;
-  if (replayed(c) && session.pendingAttach !== null && endsStaleCheckpointJob(record, occurred.configurationRevision, session.pendingAttach.configurationRevision)) {
+  if (session.checkpointJob && ((!replayed(c) && (record.type==='job.cleared' || record.type==='job.delivered' || record.type==='job.cancelled')) || replayed(c) && endsStaleCheckpointJob(record.type,occurred.configurationRevision,session.checkpointJob.configurationRevision))) session.checkpointJob=null;
+  if (replayed(c) && session.pendingAttach !== null && endsStaleCheckpointJob(record.type, occurred.configurationRevision, session.pendingAttach.configurationRevision)) {
     session.pendingAttach = null;
     if (session.untrackedJob?.source === 'checkpoint') session.untrackedJob = null;
   }
@@ -666,7 +666,7 @@ function stepSession(state: TripState, welcome: WelcomeMessage, coveredThrough: 
  * supersedes T9's "a checkpoint job stays untracked"); an `attach` input opens it once the replayed events have drained,
  * unless a replayed event showed the checkpoint stale and ended its job (endsStaleCheckpointJob).
  */
-function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUtcMs: number | undefined): TripStepResult {
+function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUtcMs: number | undefined, staleJob = false): TripStepResult {
   const id = message.source.pluginSessionId;
   if (state.connection !== id || !has(state.sessions, id) || state.sessions[id].game !== message.source.game) return {ok: false, code: 'UNKNOWN_SESSION'};
   const draft = structuredClone(state), session = draft.sessions[id], slot = draft.games[session.game], job = message.data.state.configuration.job;
@@ -678,18 +678,18 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUt
   const next = message.data.status.delivery.nextEventSeq;
   if (session.reconnect !== null) {
     session.reconnect.through = (BigInt(next) - 1n).toString();
-    if (!job.available || jobKey(job.value) !== slot.trip?.jobKey || canonicalJson(plain(job.value.cargoLoaded)) !== canonicalJson(slot.trip.cargoLoaded) || message.data.state.simulation !== 'paused' ||
+    if (staleJob || !job.available || jobKey(job.value) !== slot.trip?.jobKey || canonicalJson(plain(job.value.cargoLoaded)) !== canonicalJson(slot.trip.cargoLoaded) || message.data.state.simulation !== 'paused' ||
       BigInt(next) <= BigInt(session.processedThrough)) finishReconnect(session, slot, false);
   }
   session.attachedFromEventSeq = next;
   session.pendingAttach = null;
   session.checkpointJob = null;
-  if (job.available) session.checkpointJob = {nextEventSeq: next, key: jobKey(job.value), job: structuredClone(job.value),
+  if (job.available && !staleJob) session.checkpointJob = {nextEventSeq: next, key: jobKey(job.value), job: structuredClone(job.value),
     labelUtcMs: utcOf(message.data.state.captureUtcUnixMs) ?? session.lastUtcMs ?? receivedUtcMs ?? null, monotonicNs: message.capture.monotonicNs,
     clockId: message.capture.clockId, gameMode: modeOf(message.data.status.gameMode), simulation: message.data.state.simulation, configurationRevision: message.data.state.configuration.revision};
   if (slot.trip === null) {
-    session.untrackedJob = job.available ? {key: jobKey(job.value), source: 'checkpoint'} : null;
-    if (job.available) {
+    session.untrackedJob = job.available && !staleJob ? {key: jobKey(job.value), source: 'checkpoint'} : null;
+    if (job.available && !staleJob) {
       // The trip starts at the checkpoint: its label follows T15 (the capture label, else the session's last label, else the receipt label).
       const label = utcOf(message.data.state.captureUtcUnixMs) ?? session.lastUtcMs ?? (receivedUtcMs !== undefined && Number.isSafeInteger(receivedUtcMs) && receivedUtcMs >= 0 ? receivedUtcMs : null);
       session.pendingAttach = {nextEventSeq: next, key: jobKey(job.value), job: structuredClone(job.value), labelUtcMs: label, monotonicNs: message.capture.monotonicNs,
@@ -716,9 +716,9 @@ function stepCheckpoint(state: TripState, message: CheckpointMessage, receivedUt
  * An earlier revision proves nothing: the state can also lead the store (OD-5 S11), so the event may be older than the
  * checkpoint's job.
  */
-function endsStaleCheckpointJob(record: EventRecord, revision: Uint64, checkpointRevision: Uint64): boolean {
+export function endsStaleCheckpointJob(type: string, revision: Uint64, checkpointRevision: Uint64): boolean {
   const event = BigInt(revision), checkpoint = BigInt(checkpointRevision);
-  switch (record.type) {
+  switch (type) {
     case 'job.cleared': case 'job.configured': return event > checkpoint;
     case 'job.delivered': case 'job.cancelled': return event >= checkpoint;
     default: return false;

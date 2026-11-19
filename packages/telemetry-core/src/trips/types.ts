@@ -52,7 +52,7 @@ export interface TripSeed {
  */
 export type TripInput =
   | {kind: 'session'; welcome: WelcomeMessage; coveredThrough: Uint64; openTrips: TripSeed[]}
-  | {kind: 'checkpoint'; message: CheckpointMessage; receivedUtcMs?: number}
+  | {kind: 'checkpoint'; message: CheckpointMessage; receivedUtcMs?: number; staleJob?: boolean}
   | {kind: 'attach'; receivedUtcMs: number}
   | {kind: 'event'; message: EventMessage; coveredThrough: Uint64; receivedUtcMs: number}
   | {kind: 'gap'; message: GapMessage; coveredThrough: Uint64; receivedUtcMs: number}
