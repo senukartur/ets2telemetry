@@ -208,7 +208,7 @@ describe('a journal read past the 10 s storage deadline (PR #97 review)', () => 
     };
     return {worker, sent};
   }
-  it('fails the storage client closed: the read answers DATABASE_UNAVAILABLE TIMEOUT, the database stays unavailable and recording stops', async () => {
+  it('fails a timed-out read closed and reports recording stopped while the worker has not exited', async () => {
     vi.useFakeTimers();
     try {
       const {worker, sent} = silentJournalWorker(), logs: unknown[][] = [];
@@ -226,14 +226,14 @@ describe('a journal read past the 10 s storage deadline (PR #97 review)', () => 
       expect(runtime.history.state).toBe('open');
       await vi.advanceTimersByTimeAsync(1);
       await expect(read).resolves.toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'TIMEOUT'});
-      // The client failed closed and its worker was terminated; the database is unavailable for this service.
+      // The client failed closed and requested termination. This fixture has not signaled thread exit yet.
       expect([runtime.history.state, runtime.history.failureCode, runtime.history.client]).toEqual(['unavailable', 'TIMEOUT', undefined]);
       expect(worker.terminate).toHaveBeenCalledOnce();
-      expect(logs).toContainEqual(['HISTORY_STORAGE_UNAVAILABLE', {code: 'TIMEOUT'}]);
+      expect(logs).toContainEqual(['HISTORY_STORAGE_UNAVAILABLE', {code: 'TIMEOUT', command: 'journalTrips'}]);
       // Recording stops: the recorder's storage refuses every command, and the status is stopped with the same code.
       await expect(recorderClient(runtime.history).committedThrough('10000000-0000-4000-8000-000000000001')).resolves.toMatchObject({ok: false, error: {code: 'STORAGE_CLOSED'}});
       expect(runtime.recordingStatus()).toMatchObject({state: 'stopped', target: 'synthetic', code: 'TIMEOUT'});
-      // A retry is not answered TIMEOUT again: the database stays unavailable until the service restarts.
+      // A retry is rejected while there is no open database.
       await expect(journal.query(TRIPS)).resolves.toEqual({ok: false, code: 'DATABASE_UNAVAILABLE', storageCode: 'TIMEOUT'});
       expect(sent).toHaveLength(2);
       runtime.stopStatus();

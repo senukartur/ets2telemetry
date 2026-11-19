@@ -13,8 +13,9 @@ import {existsSync, readFileSync} from 'node:fs';
 import {EventEmitter, once} from 'node:events';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import type {StorageWorkerHandle} from '../../packages/storage/src/client';
-import {createRecordingRuntime, type RecordingIngestionOverrides, type RecordingRuntime} from '../../apps/desktop/src/recording-runtime';
+import {COMMAND_DEADLINE_MS, type StorageWorkerHandle} from '../../packages/storage/src/client';
+import {HISTORY_REOPEN_BACKOFF_MS} from '../../apps/desktop/src/history-storage';
+import {createRecordingRuntime, type RecordingIngestionOverrides, type RecordingRuntime, type RecordingRuntimeOptions} from '../../apps/desktop/src/recording-runtime';
 import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
 import {ShutdownSequence, type ShutdownTimers, SERVICE_STOP_BUDGET_MS} from '../../apps/desktop/src/shutdown-sequence';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
@@ -56,13 +57,13 @@ const TIMELINE_CODES = /^(HISTORY_STORAGE_OPENED|HISTORY_STORAGE_CLOSED|V1_DURAB
  * One service's recording runtime for `synthetic:<name>` under the workspace as LOCALAPPDATA, built by the production
  * factory. Only the worker, the fixture connect, the test close grace and ingestion test knobs are supplied.
  */
-function serviceRuntime(name: string, worker: StorageWorkerHandle, socket: ReturnType<typeof tracedConnect>, timeline: string[],
-  options: {onState?: (state: V1SourceState) => void; ingestionOverrides?: RecordingIngestionOverrides} = {}) {
+function serviceRuntime(name: string, worker: StorageWorkerHandle | (() => StorageWorkerHandle), socket: ReturnType<typeof tracedConnect>, timeline: string[],
+  options: {onState?: (state: V1SourceState) => void; ingestionOverrides?: RecordingIngestionOverrides; historyOverrides?: RecordingRuntimeOptions['historyOverrides']} = {}) {
   const logs: [string, unknown][] = [], states: V1SourceState[] = [];
   const runtime = createRecordingRuntime({env: {ETS2TELEMETRY_RECORDING: `synthetic:${name}`}, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory,
     log: (event, _detail, facts) => { logs.push([event, facts]); if (TIMELINE_CODES.test(event)) timeline.push(event); },
-    createWorker: () => worker, connect: socket.connect, ingestionOverrides: options.ingestionOverrides,
-    historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS},
+    createWorker: typeof worker === 'function' ? worker : () => worker, connect: socket.connect, ingestionOverrides: options.ingestionOverrides,
+    historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS, ...options.historyOverrides},
     onV1State: state => { states.push(state); options.onState?.(state); }});
   return {runtime, logs, states};
 }
@@ -91,6 +92,74 @@ function shutdownClock() {
 }
 
 describe('ET-015c recording runtime with the real storage worker and the real shutdown sequence', () => {
+  it.each(['before commit', 'after commit'])('recovers a delivery timed out %s without an early ACK or a duplicate trip', async stage => {
+    const input = scenario('normal-delivery');
+    // The delivery is event 8. Run the final clear on the replacement connection.
+    input.steps.at(-1)!.atMs = 630;
+    const replay = withTransport(input, 'storage-timeout-delivery', [
+      connect(0, {durable: true, commit: 'each', ack: 'each'}), disconnect(605),
+      connect(620, {durable: true, commit: 'each', ack: 'each'}), disconnect(650)
+    ]);
+    const server = await serveV1Reactive(replay, {scale: 0, awaitScriptedAcks: true});
+    const worker = storageWorker(), timeline: string[] = [], clock = shutdownClock();
+    let deliveryRequest: number | undefined, requestReached!: (response?: unknown) => void;
+    const reached = new Promise<unknown>(resolve => { requestReached = resolve; });
+    const handle: StorageWorkerHandle = {
+      ...worker.handle,
+      postMessage: request => {
+        if (request.command.name === 'commitEvent' && (request.command.input.message as {data: {eventSeq: string}}).data.eventSeq === '8') {
+          deliveryRequest = request.id;
+          if (stage === 'before commit') { requestReached(); return; }
+        }
+        worker.handle.postMessage(request);
+      },
+      onMessage: listener => worker.handle.onMessage(message => {
+        if (deliveryRequest !== undefined && (message as {id: number}).id === deliveryRequest) requestReached(message);
+        else listener(message);
+      })
+    };
+    let workers = 0;
+    const socket = tracedConnect(timeline);
+    const {runtime, logs} = serviceRuntime('timeout-delivery', () => {
+      if (++workers === 1) return handle;
+      timeline.push('replacement');
+      return tracedHandle(storageWorker().handle, timeline).handle;
+    }, socket, timeline, {historyOverrides: {timers: clock.timers}, ingestionOverrides: {sampleFlushMs: NO_FLUSH_TIMER_MS}});
+    try {
+      await startDurable(runtime, server.endpoint);
+      const response = await guarded(reached, 'the delivery request or its committed response', HANG_GUARD_MS);
+      if (stage === 'after commit') expect(response).toMatchObject({result: {ok: true, value: {committedThroughEventSeq: '8'}}});
+      expect(timeline.filter(line => line.startsWith('ack '))).toEqual(['ack 1', 'ack 2', 'ack 3', 'ack 4', 'ack 5', 'ack 6', 'ack 7']);
+      clock.advanceTo(COMMAND_DEADLINE_MS);
+      expect(runtime.recordingStatus()).toMatchObject({state: 'stopped', code: 'TIMEOUT'});
+      expect(logs).toContainEqual(['HISTORY_STORAGE_UNAVAILABLE', {code: 'TIMEOUT', command: 'commitEvent'}]);
+      expect(runtime.v1.current.fresh).toBe(true);
+      expect(socket.sockets()).toBe(1);
+      await guarded(worker.exit, 'the timed-out worker exit', HANG_GUARD_MS);
+      expect(workers).toBe(1);
+      await Promise.resolve();
+      clock.advanceTo(COMMAND_DEADLINE_MS + HISTORY_REOPEN_BACKOFF_MS[0]);
+      const report = await guarded(server.done, 'the replay through the replacement worker', HANG_GUARD_MS);
+      expect(report.connections.map(connection => [connection.durable, connection.closedBy])).toEqual([[true, 'client'], [true, 'disconnect']]);
+      expect(servedAcks(report, 0)).toEqual(['1', '2', '3', '4', '5', '6', '7']);
+      expect(servedAcks(report, 1)).toEqual(['8', '9']);
+      expect(timeline.indexOf('done commitEvent 8')).toBeLessThan(timeline.indexOf('ack 8'));
+      expect(timeline).toContain('done commitEvent 8');
+      await runtime.v1.stop();
+      await runtime.history.close();
+      const storage = await reader('timeout-delivery').open();
+      try {
+        const session = sessionOf(replay);
+        expect(ok(storage.listEvents(session)).map(event => event.eventSeq)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+        expect(ok(storage.listTrips()).trips).toMatchObject([{openedEventSeq: '3', outcome: 'delivered', outcomeEventSeq: '8', recordingCompleteness: 'partial'}]);
+      } finally { storage.close(); }
+    } finally {
+      runtime.stopStatus();
+      await runtime.v1.stop();
+      await server.stop();
+    }
+  }, 90_000);
+
   it('persists the held final sample after 829 ms of controlled shutdown time without an ACK after stop', async () => {
     const base = samplesScenario();
     // The first five authored steps end at the 100 ms running frame, yielding exactly source second 1000.

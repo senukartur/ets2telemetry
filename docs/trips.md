@@ -239,7 +239,7 @@ The state therefore lags `nextEventSeq` by the events stored since the last publ
 - a `job.cleared` or `job.configured` with a revision above *R*: it happened after the configuration the checkpoint shows, so it proves that job was cleared or replaced. A replayed configuration opens its own trip from its real event (`opened-before-attach`), which tracks whatever job was current;
 - a `job.delivered` or `job.cancelled` with a revision of *R* or above: it happened while the checkpoint's configuration, or a later one, was current, and is treated as ending the checkpoint's job. It does not prove it: after a clear and a new configuration, an outcome may still belong to the earlier job (REG-004, O7). The rule matches the ordinary one, where any outcome ends an untracked job while no trip is open. Outcomes do not advance the revision, so an outcome at revision *R* can follow the checkpoint's configuration, for example a delivery whose clear the store had not taken when the checkpoint was built.
 
-The reducer then drops the pending late-attach trip and stops treating the checkpoint job as untracked. A later live fine is free driving, and a later identical live `job.configured` opens an ordinary trip without a `late-attach` cause.
+The reducer then drops the pending late-attach trip and stops treating the checkpoint job as untracked. The recorder checks the stored part of the unacknowledged replay before using the checkpoint. A delivery committed before its reply was lost can therefore invalidate the checkpoint even when the replayed delivery is a duplicate. A later live fine is free driving, and a later identical live `job.configured` opens an ordinary trip without a `late-attach` cause.
 
 **What stays unchanged.**
 

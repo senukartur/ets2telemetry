@@ -165,6 +165,7 @@ export class DurableDelivery {
   private pendingItems = 0;
   private pendingReadings = 0;
   private failedCode?: string;
+  private storageSuspended = false;
   private blockedSession?: string;
   private latest?: DurableConnection;
   private current: DurableStatus = {state: 'pending'};
@@ -186,7 +187,7 @@ export class DurableDelivery {
   /** Running totals of rows storage skipped as already stored and of rows the pending bound dropped, for their logs. */
   private sampleSkipped = 0;
   private sampleDropped = 0;
-  constructor(private readonly sink: DurableSink, private readonly options: DurableDeliveryOptions = {}) {
+  constructor(private sink: DurableSink, private readonly options: DurableDeliveryOptions = {}) {
     this.maxPending = options.maxPendingCommits ?? MAX_PENDING_COMMITS;
     if (!Number.isSafeInteger(this.maxPending) || this.maxPending < 1) throw new Error('Invalid pending commit bound');
     this.maxReadings = options.maxPendingReadings ?? MAX_PENDING_READINGS;
@@ -223,6 +224,7 @@ export class DurableDelivery {
   /** Starts a durable connection at its welcome. Its session opens in FIFO order after earlier queued work. */
   connect(welcome: WelcomeMessage, link: DurableLink): DurableConnection {
     const connection = this.latest = new DurableConnection(this, welcome.source.pluginSessionId, link, welcome.version.minor);
+    if (this.storageSuspended) { connection.dropped = true; return connection; }
     if (this.failedCode !== undefined || this.stopped) { connection.dropped = true; link.close('unavailable', this.failedCode ?? 'INTERNAL'); return connection; }
     this.setStatus({state: 'pending'});
     this.push({connection, kind: 'open', welcome});
@@ -230,6 +232,24 @@ export class DurableDelivery {
   }
   /** Resolves when no work is queued or in flight. */
   async idle(): Promise<void> { while (this.running) await this.running; }
+
+  /** Stop writes and ACKs while letting the connected producer retain events for redelivery. */
+  suspendStorage(): void {
+    if (this.stopped || this.failedCode !== undefined) return;
+    this.storageSuspended = true;
+    this.stopWrites('TIMEOUT');
+  }
+
+  /** Called after idle(), so no work from the failed worker can affect the replacement recorder. */
+  resumeStorage(createSink: () => DurableSink): void {
+    if (this.stopped || !this.storageSuspended) return;
+    this.sink = createSink();
+    this.storageSuspended = false;
+    this.failedCode = undefined;
+    this.setStatus(this.blockedSession ? {state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'} : {state: 'pending'});
+    // Start a new cursor at the producer's ACK point. The new recorder reads its durable state from SQLite.
+    this.latest?.link.close('retryable', 'TIMEOUT');
+  }
   /**
    * Drops queued work, including a queued `samples` op, and waits for the one command in flight; no commit, observation
    * or ACK follows. Then, unless durable delivery failed, it writes every pending sample row (H11): one write per plugin
@@ -506,11 +526,8 @@ export class DurableDelivery {
     if (code === this.retrying) return;
     this.retrying = code; this.options.onRetryCode?.(code);
   }
-  /**
-   * Stops durable delivery for the service lifetime. `connection` is the one whose work failed; a failed `samples` op
-   * has none, so the latest connection is closed instead (H12). Pending samples are discarded and counted once.
-   */
-  private unavailable(connection: DurableConnection | undefined, code: string): void {
+  /** Pending samples are discarded and counted once when writes stop. */
+  private stopWrites(code: string): void {
     if (this.failedCode === undefined) {
       this.failedCode = code;
       this.options.log?.('V1_DURABLE_UNAVAILABLE', {code});
@@ -520,6 +537,12 @@ export class DurableDelivery {
       if (discarded > 0) this.options.log?.('V1_SAMPLES_DISCARDED', {count: discarded});
     }
     for (const op of this.queue.splice(0)) { if (op.kind !== 'samples') op.connection.dropped = true; this.release(op); }
+    if (this.latest) this.latest.dropped = true;
+  }
+  /** Fail closed for the service lifetime on errors outside runtime storage recovery. */
+  private unavailable(connection: DurableConnection | undefined, code: string): void {
+    if (this.storageSuspended) return;
+    this.stopWrites(code);
     const target = connection ?? this.latest;
     if (!target) return;
     target.dropped = true;
