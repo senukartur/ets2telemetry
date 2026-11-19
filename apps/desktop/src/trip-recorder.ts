@@ -449,8 +449,10 @@ export class TripRecorderSink implements DurableSink {
   async checkpoint(message: Extract<ReadingMessage, {kind: 'checkpoint'}>): Promise<SinkResult<undefined>> {
     this.staleCheckpoint = undefined;
     const sessionId = message.source.pluginSessionId, configuration = message.data.state.configuration;
+    const session = this.state.sessions[sessionId];
+    if (this.state.connection !== sessionId || !session || session.game !== message.source.game) return refused('TRIP_UNKNOWN_SESSION');
     const {ackedThroughEventSeq, nextEventSeq} = message.data.status.delivery;
-    const storedThrough = BigInt(this.state.sessions[sessionId].processedThrough);
+    const storedThrough = BigInt(session.processedThrough);
     const replayEnd = BigInt(nextEventSeq) - 1n;
     const storedReplayEnd = storedThrough < replayEnd ? storedThrough : replayEnd;
     // A write can survive without an ACK. Consult the stored part of the replay before allowing a late attach:

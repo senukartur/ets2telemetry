@@ -168,6 +168,7 @@ export class DurableDelivery {
   private storageSuspended = false;
   private blockedSession?: string;
   private latest?: DurableConnection;
+  private inFlightConnection?: DurableConnection;
   private current: DurableStatus = {state: 'pending'};
   private conflicts = 0;
   private retries = new Map<string, number>();
@@ -244,6 +245,8 @@ export class DurableDelivery {
   resumeStorage(createSink: () => DurableSink): void {
     if (this.stopped || !this.storageSuspended) return;
     this.sink = createSink();
+    this.sampleBackoff = false;
+    this.sampleDropped = 0;
     this.storageSuspended = false;
     this.failedCode = undefined;
     this.setStatus(this.blockedSession ? {state: 'failed', code: 'ACK_AHEAD_OF_STORAGE'} : {state: 'pending'});
@@ -313,6 +316,7 @@ export class DurableDelivery {
   }
   private async pump(): Promise<void> {
     for (let op = this.queue.shift(); op; op = this.queue.shift()) {
+      this.inFlightConnection = op.kind === 'samples' ? undefined : op.connection;
       try {
         if (op.kind === 'samples') await this.writeSamples();
         else if (!op.connection.dropped) await this.run(op);
@@ -320,6 +324,7 @@ export class DurableDelivery {
       // A defect in a link or sink callback must not stall the queue; it fails durable delivery closed.
       catch { try { this.unavailable(op.kind === 'samples' ? undefined : op.connection, 'INTERNAL'); } catch { /* the link failed again; delivery is already failed */ } }
       finally {
+        this.inFlightConnection = undefined;
         this.release(op);
         // Rows left after a batch: the next batch at once when a full one is pending, otherwise the timer.
         if (op.kind === 'samples') this.scheduleSamples();
@@ -538,10 +543,15 @@ export class DurableDelivery {
     }
     for (const op of this.queue.splice(0)) { if (op.kind !== 'samples') op.connection.dropped = true; this.release(op); }
     if (this.latest) this.latest.dropped = true;
+    if (this.inFlightConnection) this.inFlightConnection.dropped = true;
   }
   /** Fail closed for the service lifetime on errors outside runtime storage recovery. */
   private unavailable(connection: DurableConnection | undefined, code: string): void {
-    if (this.storageSuspended) return;
+    if (this.storageSuspended) {
+      // Expected worker errors are retired with the outstanding op. An unexpected pipeline failure is still terminal.
+      this.storageSuspended = false;
+      this.failedCode = undefined;
+    }
     this.stopWrites(code);
     const target = connection ?? this.latest;
     if (!target) return;

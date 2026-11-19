@@ -13,7 +13,7 @@ import type {StorageClient, StorageWorkerHandle} from '../../../packages/storage
 import type {DiagnosticFacts} from './diagnostics';
 import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, HISTORY_STORAGE_STEP_NAME, recorderClient, type HistoryStorageOptions} from './history-storage';
 import {recordingPlan, type RecordingPlan} from './recording-policy';
-import {deriveRecordingStatus, RecordingStatusPublisher, type RecordingStatusTimers} from './recording-status';
+import {addLosses, deriveRecordingStatus, RecordingStatusPublisher, ZERO_LOSSES, type RecordingStatusTimers} from './recording-status';
 import type {ShutdownSequence} from './shutdown-sequence';
 import {TripRecorderSink} from './trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from './v1-ingestion';
@@ -99,6 +99,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
     });
   };
   let recorder = plan.durableSelections.length ? createRecorder() : undefined;
+  let retiredLosses = ZERO_LOSSES;
   // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.
   let recorded: SourceSelection | undefined;
   const v1 = new V1Ingestion({
@@ -121,7 +122,10 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
         if (!recovering) { v1.durableAvailabilityChanged(); return; }
         recovering = false;
         const client = history.client;
-        void v1.resumeStorage(() => recorder = createRecorder(client), () => history.client === client);
+        void v1.resumeStorage(() => {
+          retiredLosses = addLosses(retiredLosses, recorder!.losses());
+          return recorder = createRecorder(client);
+        }, () => history.client === client);
       },
       onRuntimeTimeout: () => { recovering = true; v1.suspendStorage(); },
       onStateChange: changed
@@ -132,7 +136,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
     const current = v1.current, game = current.observation?.source.game;
     return deriveRecordingStatus({recorder: true, target: plan.database.purpose, history: {state: history.state, code: history.failureCode},
       durableSelections: plan.durableSelections, v1: current, retryCode: v1.durableRetryCode ?? null, recorded: recorded === current.selection,
-      losses: recorder.losses(), trip: game ? recorder.tripSummary(game) : null});
+      losses: addLosses(retiredLosses, recorder.losses()), trip: game ? recorder.tripSummary(game) : null});
   };
   const status = new RecordingStatusPublisher(recordingStatus, next => options.onRecordingStatus?.(next), options.statusOverrides);
   return {

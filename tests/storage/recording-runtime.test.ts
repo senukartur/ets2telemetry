@@ -151,7 +151,12 @@ describe('ET-015c recording runtime with the real storage worker and the real sh
       try {
         const session = sessionOf(replay);
         expect(ok(storage.listEvents(session)).map(event => event.eventSeq)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
-        expect(ok(storage.listTrips()).trips).toMatchObject([{openedEventSeq: '3', outcome: 'delivered', outcomeEventSeq: '8', recordingCompleteness: 'partial'}]);
+        const trips = ok(storage.listTrips()).trips;
+        expect(trips).toMatchObject([{openedEventSeq: '3', outcome: 'delivered', outcomeEventSeq: '8', recordingCompleteness: 'partial'}]);
+        if (stage === 'before commit') {
+          const {intervals} = ok(storage.journalIntervals(trips[0].tripUuid, {limit: 100}));
+          expect(intervals).toContainEqual(expect.objectContaining({kind: 'not-connected', cause: 'consumer-restart'}));
+        }
       } finally { storage.close(); }
     } finally {
       runtime.stopStatus();
