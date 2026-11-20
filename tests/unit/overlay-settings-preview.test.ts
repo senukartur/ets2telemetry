@@ -108,6 +108,16 @@ it.each([0.5, 1, 3])('contains all enabled rows at scale %s using the production
   expect(card.factor).toBe(scale === 0.5 ? 0.35 : scale === 1 ? 0.7 : 2.1);
 });
 
+it('fits the fixed status footer in a narrow 300% preview even when only gear is enabled', () => {
+  const sections = Object.fromEntries(Object.keys(DEFAULT_OVERLAY_SETTINGS.sections).map(id => [id, id === 'gear'])) as typeof DEFAULT_OVERLAY_SETTINGS.sections;
+  const size = overlayPreviewSize({...DEFAULT_OVERLAY_SETTINGS, layout: 'strip', sections}, 3, 220);
+  // The 160 px footer needs 188 CSS px with the padding/border allowance. Two 112 px tags, gear and the footer each
+  // take a separate row in the 162 px inner width: 4 x 38 + 2 = 154, rather than the clipped one-row fallback.
+  expect(size.cssWidth).toBe(188);
+  expect(size.cssHeight).toBe(154);
+  expect(size.width).toBe(220);
+});
+
 it('renders deterministic settings-only data and applies background opacity without accessing a desktop bridge', () => {
   vi.stubGlobal('window', undefined);
   try {

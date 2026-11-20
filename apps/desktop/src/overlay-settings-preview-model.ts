@@ -4,7 +4,7 @@ import {OVERLAY_NOMINAL_SIZE} from './overlay-geometry';
 import {overlayZoom} from './overlay-placement';
 import {CLUSTER_GAUGE_SIZE_CSS, layoutReservedCss} from './overlay-rows';
 import {OVERLAY_SECTION_IDS} from './overlay-sections';
-import {stripCssHeight, stripRowCount, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS} from './overlay-strip';
+import {stripCssHeight, stripRowCount, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS} from './overlay-strip';
 
 export type ExampleCruiseState = 'active' | 'off' | 'unavailable';
 
@@ -42,7 +42,7 @@ export function overlayPreviewSize(settings: OverlaySettings, scale: number, ava
   const zoom = overlayZoom(scale), width = Math.max(1, availableWidth);
   if (settings.layout === 'strip') {
     // At large scales a minimum logical width still fits a whole item. Fit the result to this preview only.
-    const widest = Math.max(...OVERLAY_SECTION_IDS.filter(id => settings.sections[id]).map(id => STRIP_ITEM_MAX_WIDTH_CSS[id]), 100);
+    const widest = Math.max(STRIP_HARD_MODE_MAX_WIDTH_CSS, ...OVERLAY_SECTION_IDS.filter(id => settings.sections[id]).map(id => STRIP_ITEM_MAX_WIDTH_CSS[id]));
     const cssWidth = Math.max(width / zoom, widest + 2 * STRIP_PADDING_X_CSS + 4);
     const cssHeight = stripCssHeight(stripRowCount(settings.sections, cssWidth) ?? 1);
     const factor = Math.min(zoom, width / cssWidth);
