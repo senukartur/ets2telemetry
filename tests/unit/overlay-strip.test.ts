@@ -222,6 +222,7 @@ it('matches the strip rules in renderer.css', () => {
   expect(rule('.overlay *, .overlay *::before, .overlay *::after')).toContain('box-sizing: border-box;');
   const row = rule('.overlay-strip-row');
   expect(row).toContain('flex-wrap: wrap;');
+  expect(row).toMatch(/(?:^|;)\s*width: 100%;/);
   expect(row).toContain('max-width: 100%;');
   expect(row).toContain(`column-gap: ${STRIP_COLUMN_GAP_CSS}px;`);
   expect(row).toContain(`padding: 0 ${STRIP_PADDING_X_CSS}px;`);

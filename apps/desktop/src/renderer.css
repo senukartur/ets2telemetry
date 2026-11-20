@@ -40,7 +40,7 @@ html:has(.overlay-body) { background: transparent; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
+.overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; width: 100%; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
 .overlay-strip-row > * { height: 38px; }
 .overlay-strip-row > .overlay-tag { flex: none; align-self: center; }
 .overlay-strip .overlay-item { min-width: 0; overflow: hidden; }
