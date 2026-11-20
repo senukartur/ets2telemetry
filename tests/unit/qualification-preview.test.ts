@@ -33,10 +33,11 @@ describe('server provisional applicability timelines (REG-003/008/009/010)',()=>
   });
   it('uses only the first SDK body type per double/triple coupling and preserves a missing first slot and prior coupling',()=>{
     const slots=[0,1,2].map(index=>({available:true as const,value:trailer(index,{id:{available:true,value:`trailer-${index}`},bodyType:{available:true,value:index===0?'double':'physical-part'}})}));
-    const proof={version:2 as const,status:'proven' as const,items:slots.map(slot=>slot.value),recordingLoss:false};
-    expect(qualificationTrailerFacts(proof,slots)).toEqual({complete:true,items:[{code:'double',provenance:'attached'}]});
-    expect(qualificationTrailerFacts(proof,[{available:false,reason:'not-observed'},...slots.slice(1)])).toEqual({complete:false,items:[{code:'double',provenance:'previous'},{code:null,provenance:'unknown'}]});
-    expect(qualificationTrailerFacts(proof,slots,['lowbed',null]).items).toEqual([{code:'lowbed',provenance:'previous'},{code:null,provenance:'unknown'},{code:'double',provenance:'attached'}]);
+    expect(qualificationTrailerFacts(slots)).toEqual({complete:true,items:[{code:'double',provenance:'attached'}]});
+    // A missing first slot is unknown; the physical parts behind it add no code.
+    expect(qualificationTrailerFacts([{available:false,reason:'not-observed'},...slots.slice(1)])).toEqual({complete:false,items:[{code:null,provenance:'unknown'}]});
+    expect(qualificationTrailerFacts(slots,['lowbed'])).toEqual({complete:true,items:[{code:'lowbed',provenance:'previous'},{code:'double',provenance:'attached'}]});
+    expect(qualificationTrailerFacts(slots,['lowbed',null])).toEqual({complete:false,items:[{code:'lowbed',provenance:'previous'},{code:null,provenance:'unknown'},{code:'double',provenance:'attached'}]});
   });
   it('invalidates a delayed positive at maximum crossing, rollback, support loss, context change, retirement, edit and expiry',()=>{
     const reply=fixture<QualificationPreview>('maximum-guard-delayed-positive'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');

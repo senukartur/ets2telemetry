@@ -1,7 +1,8 @@
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
+import type {Available} from '../../packages/contracts/src/protocol-v1';
 import {beginUploadFold,advanceUploadFold,finishUploadFold,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadSummary, mapUploadProjection,
-  type UploadMember, type UploadProjection, type UploadProjectionPage, type UploadSummary} from '../../packages/storage/src/upload-projection';
+  type UploadConfiguration, type UploadMember, type UploadProjection, type UploadProjectionPage, type UploadSummary} from '../../packages/storage/src/upload-projection';
 import {ETS2_A, ETS2_B, job} from '../shared/trip-messages';
 
 const golden = JSON.parse(readFileSync('tests/fixtures/dashboard-upload/continued-summary.json','utf8')) as {expected: UploadSummary};
@@ -73,13 +74,15 @@ describe('private Dashboard summary projection', () => {
     f.pin.readiness=f.pin.rootReadiness='ready';expect(mapUploadProjection(f.pin,f.pages.slice(0,2))).toEqual({status:'hold',reason:'evidence-incomplete'});
     f.pages[0].snapshot=f.pin.snapshot.replace(/:5$/,':6');expect(mapUploadProjection(f.pin,f.pages)).toEqual({status:'hold',reason:'evidence-incomplete'});
   });
-  it('folds all historical trailers and intervals without exposing private rows or claiming a current chain', () => {
+  it('pools repeated historical trailers into one slot and adds no reason for intervals, without exposing private rows', () => {
     const f=fixture();f.pin.totals.configurations=11;f.pin.totals.intervals=51;f.pin.snapshot=`u2:${db}:${child}:80000000-0000-4000-8000-000000000001:${root}:5`;
     const config=f.pages[1].rows[0];f.pages[1].rows=Array.from({length:11},(_,i)=>({...config,id:String(i+1)}));f.pages[1].total=11;
     f.pages[2].rows=Array.from({length:51},(_,i)=>({id:String(i+1),rawTripUuid:root,pluginSessionId:ETS2_A,kind:'event-loss'}));f.pages[2].total=51;
     for(const page of f.pages)page.snapshot=f.pin.snapshot;
-    const value=mapped(f);expect(value.summary.snapshot.trailers).toEqual({complete:false,items:[]});
-    expect(value.summary.snapshot.evidence.reasons).toEqual(['recording-intervals','trailer-context-changed','trailer-context-unproven']);
+    const value=mapped(f);
+    // Eleven records of slot 0 without a body type are one item, and the lead body type is still unknown.
+    expect(value.summary.snapshot.trailers).toEqual({complete:false,items:[{index:0,id:{available:true,value:'curtainsider'},bodyType:absent,chainType:absent}]});
+    expect(value.summary.snapshot.evidence.reasons).toEqual(['trailer-context-unavailable']);
     const wire=JSON.stringify(value.summary);for(const key of ['rawTripUuid','proof','profile','samples','position','occurrence','revision','accountingHead'])expect(wire).not.toContain(`"${key}"`);
   });
   it('preserves native terminal money despite aggregate uncertainty and keeps anomalous UTC unknown', () => {
@@ -128,24 +131,65 @@ it('REG-004/009 folds independently expected pages with constant state and refus
 });
 
 
-describe('TEL-034 stored whole-trip rule context',()=>{
-  function complete(coupling=false){
-    const f=fixture();f.pin.ruleContext={version:2,status:'proven',recordingLoss:false,items:[{index:0,id:{available:true,value:'trailer-a'},bodyType:{available:true,value:'curtainsider'},chainType:absent},
-      ...(coupling?[{index:1,id:{available:true as const,value:'trailer-b'},bodyType:absent,chainType:absent}]:[])]};return f;
+describe('pooled trailers and stored whole-trip rule context',()=>{
+  const known=(value:string)=>({available:true,value} as const);
+  /** One copied configuration row. Its ID is the event row ID, so a higher ID is the later record. */
+  const config=(id:string,index:number,trailerId:Available<string>,bodyType:Available<string>,session=ETS2_A):UploadConfiguration=>({id,
+    occurrence:{pluginSessionId:session,rawTripUuid:session===ETS2_A?root:child,eventSeq:id,type:'trailer.configured',utcMs:1000},index,idValue:trailerId,bodyType,chainType:absent});
+  function recorded(...rows:UploadConfiguration[]){
+    const f=fixture();f.pages[1].rows=rows;f.pages[1].total=f.pin.totals.configurations=rows.length;return f;
   }
-  it.each([false,true])('projects a proven unchanged chain including first-slot-only coupling types (%s)',coupling=>{
+  function folded(f:ReturnType<typeof fixture>){
+    let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
+    return finishUploadFold(f.pin,fold);
+  }
+  const leadItem={index:0,id:known('trailer-a'),bodyType:known('curtainsider'),chainType:absent};
+  // The rear slot is recorded first, so the items show the slot order, not the record order.
+  const complete=(coupling=false)=>recorded(...(coupling?[config('2',1,absent,absent)]:[]),config('3',0,known('trailer-a'),known('curtainsider')));
+  it.each([false,true])('reports a lead trailer with a body type as complete, in slot order, when a rear slot has no ID (coupling %s)',coupling=>{
     const f=complete(coupling);f.pin.facts.moneyIncomplete=false;f.pin.facts.clockAnomaly=true;f.pin.facts.gameMode.ambiguous=true;
     f.pin.facts.job.cargoMass={available:true,value:0,unit:'kg'};
     const summary=mapped(f).summary.snapshot;
-    expect(summary.trailers.complete).toBe(true);expect(summary.trailers.items).toHaveLength(coupling?2:1);
+    expect(summary.trailers).toEqual({complete:true,items:coupling?[leadItem,{index:1,id:absent,bodyType:absent,chainType:absent}]:[leadItem]});
     expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[],clockAnomaly:true});
     expect(summary.gameMode.ambiguous).toBe(true);expect(summary.cargoDamage).toEqual(f.pin.facts.cargoDamage);
-    let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
-    expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
-    delete fold.ruleContextVersion;
-    const legacy=finishUploadFold(f.pin,fold);expect(legacy).toMatchObject({status:'projected',summary:{snapshot:{trailers:{complete:false},evidence:{ruleContextComplete:false}}}});
+    expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
   });
-  it.each([false,true])('retains accounting uncertainty independently of proven trailers and exact native amounts (%s)',moneyIncomplete=>{
+  it('keeps one item for a slot that two member sessions recorded, and the later record wins',()=>{
+    const first=config('2',0,known('trailer-a'),known('curtainsider')),second=config('5',0,known('trailer-b'),known('lowbed'),ETS2_B);
+    const f=recorded(first,second),[members,configurations,intervals]=f.pages,cursor=`${f.pin.snapshot}:configurations:2`;
+    // Two pages, as two durable fold turns read them.
+    f.pages=[members,{...configurations,rows:[first],nextCursor:cursor},{...configurations,cursor,rows:[second]},intervals];
+    const summary=mapped(f).summary.snapshot;
+    expect(summary.trailers).toEqual({complete:true,items:[{index:0,id:known('trailer-b'),bodyType:known('lowbed'),chainType:absent}]});
+    expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
+    expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
+  });
+  it('reports no trailer and the fixed reason when no configuration is linked',()=>{
+    const f=recorded(),summary=mapped(f).summary.snapshot;
+    expect(summary.trailers).toEqual({complete:false,items:[]});
+    expect(summary.evidence).toMatchObject({ruleContextComplete:false,reasons:['trailer-context-unavailable']});
+    expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
+  });
+  it.each([
+    ['a blank lead body type',config('2',0,known('trailer-a'),known('  ')),{index:0,id:known('trailer-a'),bodyType:known('  '),chainType:absent}],
+    ['a body type only on a rear slot',config('2',1,known('trailer-b'),known('curtainsider')),{index:1,id:known('trailer-b'),bodyType:known('curtainsider'),chainType:absent}]
+  ] as const)('keeps the recorded item but stays incomplete with %s',(_name,row,item)=>{
+    const f=recorded(row),summary=mapped(f).summary.snapshot;
+    expect(summary.trailers).toEqual({complete:false,items:[item]});
+    expect(summary.evidence).toMatchObject({ruleContextComplete:false,reasons:['trailer-context-unavailable']});
+    expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
+  });
+  it('accepts a pin that still carries a retired ruleContext and ignores it',()=>{
+    const f=complete(),legacy={version:2,status:'unproven',items:[],recordingLoss:true};
+    Object.assign(f.pin,{ruleContext:legacy});
+    expect(isUploadProjection(f.pin)).toBe(true);
+    const summary=mapped(f).summary.snapshot;
+    expect(summary.trailers).toEqual({complete:true,items:[leadItem]});
+    expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
+    expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
+  });
+  it.each([false,true])('retains accounting uncertainty independently of complete trailers and exact native amounts (%s)',moneyIncomplete=>{
     const f=complete(true);f.pin.facts.moneyIncomplete=moneyIncomplete;
     f.pin.facts.penalty={available:true,value:{raw:'0',sdkType:'s64',currency:{status:'unknown'}}};
     f.pin.facts.fuelUsed={available:true,value:12,unit:'L'};
@@ -156,36 +200,12 @@ describe('TEL-034 stored whole-trip rule context',()=>{
     expect(summary.penalty).toEqual({available:true,value:{raw:'0',sdkType:'s64',currency:{status:'unknown'}}});
     expect(summary.expectedIncome).toEqual({available:true,value:{raw:'18446744073709551615',sdkType:'u64',currency:{status:'unknown'}}});
     expect(summary.observedDistance).toEqual({available:true,value:0,unit:'m'});expect(summary.fuelUsed).toEqual({available:true,value:12,unit:'L'});
-    let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
-    expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
-  });
-  it('downgrades a retained sparse version2 positive and agrees with the incremental fold',()=>{
-    const f=complete(true);f.pin.ruleContext!.items[1].index=2;f.pin.facts.moneyIncomplete=false;
-    expect(isUploadProjection(f.pin)).toBe(true);
-    expect(mapped(f).summary.snapshot).toMatchObject({trailers:{complete:false},evidence:{ruleContextComplete:false,reasons:['trailer-context-unproven']}});
-    let fold=beginUploadFold(f.pin);for(const page of f.pages)fold=advanceUploadFold(f.pin,fold,page,()=>true);
-    expect(finishUploadFold(f.pin,fold)).toEqual(mapUploadProjection(f.pin,f.pages));
-  });
-  it('keeps a retained version1 proven result unproven because it did not examine job-prefix evidence',()=>{
-    const f=complete();f.pin.ruleContext!.version=1;expect(isUploadProjection(f.pin)).toBe(true);
-    expect(mapped(f).summary.snapshot).toMatchObject({trailers:{complete:false},evidence:{ruleContextComplete:false,reasons:['trailer-context-unproven']}});
+    expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
   });
   it.each(['sourceCityId','destinationCityId','cargoId','cargoMass'] as const)('requires stored %s while leaving catalog and ADR resolution to Dashboard',key=>{
     const f=complete();Object.assign(f.pin.facts.job,{[key]:key==='cargoMass'?{...absent,unit:'kg'}:absent});
     expect(mapped(f).summary.snapshot.evidence.ruleContextComplete).toBe(false);
     expect(mapped(f).summary.snapshot.evidence.reasons).toEqual([key==='cargoMass'?'cargo-mass-unavailable':'job-context-unavailable']);
-  });
-  it.each(['changed','unavailable','unproven'] as const)('preserves the bounded %s reason',status=>{
-    const f=complete();f.pin.ruleContext!.status=status;f.pin.ruleContext!.items=[];
-    expect(mapped(f).summary.snapshot.evidence).toMatchObject({ruleContextComplete:false,reasons:[`trailer-context-${status}`]});
-  });
-  it('rejects a complete proof with missing IDs/type, invalid slots or recording loss',()=>{
-    for(const change of [({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.version='2' as never;},
-      ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.items[0].bodyType=absent;},
-      ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.items[0].id={available:true,value:''};},
-      ({pin}:ReturnType<typeof complete>)=>{pin.ruleContext!.recordingLoss=true;}]){
-      const f=complete();change(f);expect(isUploadProjection(f.pin)).toBe(false);
-    }
   });
 
   it('validates hardModeResult and accounting in summary snapshot according to minor contract version', () => {
