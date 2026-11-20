@@ -125,13 +125,17 @@ function tableState(expected) {
   if (state.error) return state;
   return state.page?.startsWith(`Page ${expected.page}.`) && rows.length === expected.count ? state : false;
 }
-/** Self-contained: the bounding boxes of the status, speed and fuel lines against the viewport (B6). */
+/**
+ * Self-contained: the bounding boxes of the status line and the Live placeholder against the viewport (B6). The journal
+ * scenario has no game source, so Live shows the placeholder scene, not the instruments.
+ */
 function liveLinesInViewport() {
   const box = id => {
     const node = globalThis.document.querySelector(`[data-testid="${id}"]`), bounds = node?.getBoundingClientRect();
     return bounds ? {top: Math.round(bounds.top), bottom: Math.round(bounds.bottom), visible: bounds.width > 0 && bounds.height > 0} : null;
   };
-  return {innerHeight: globalThis.innerHeight, scrollY: globalThis.scrollY, status: box('shell.status.connection'), speed: box('live-speed-number'), fuel: box('fuel')};
+  return {innerHeight: globalThis.innerHeight, scrollY: globalThis.scrollY, display: globalThis.document.querySelector('[data-testid="live-telemetry"]')?.getAttribute('data-live-display') ?? null,
+    status: box('shell.status.connection'), placeholder: box('live.placeholder')};
 }
 
 /** Chooses a filter in its shadcn Select: open the trigger, then click the option, which Radix renders in a portal. */
@@ -142,22 +146,22 @@ async function chooseFilter(page, testId, option) {
 const clickTestId = (page, testId, scope) => (scope ? page.locator(scope).getByTestId(testId) : page.getByTestId(testId)).click({timeout: 5000});
 
 /**
- * Run 1: the empty history. The Live tab is the default, and the status, speed and fuel lines lie inside the 800 x 500
- * window below the tab list (B6). The Journal tab then shows `No trips recorded` with the recording-off note and no
- * test-database banner; back on Live, the speed line is shown again.
+ * Run 1: the empty history. The Live tab is the default: without a game the status line lies inside the 800 x 500 window
+ * and the placeholder scene starts in it (B6). The Journal tab then shows `No trips recorded` with the recording-off note
+ * and no test-database banner; back on Live, the placeholder is shown again.
  */
 export async function runJournalEmpty({dashboard, record}) {
   await dashboard.evaluate(() => globalThis.scrollTo(0, 0));
   const viewport = record.liveViewport = await dashboard.evaluate(liveLinesInViewport);
-  for (const line of ['status', 'speed', 'fuel']) {
-    assert.ok(viewport[line]?.visible && viewport[line].top >= 0 && viewport[line].bottom <= viewport.innerHeight, `The ${line} line is outside the first viewport`);
-  }
+  assert.ok(viewport.status?.visible && viewport.status.top >= 0 && viewport.status.bottom <= viewport.innerHeight, 'The status line is outside the first viewport');
+  assert.equal(viewport.display, 'placeholder', 'Live shows the dashboard without a game');
+  assert.ok(viewport.placeholder?.visible && viewport.placeholder.top >= 0 && viewport.placeholder.top < viewport.innerHeight, 'The Live placeholder does not start in the first viewport');
   record.liveLinesInViewport = true;
   assert.equal(await dashboard.getByTestId('tab-live').getAttribute('aria-current'), 'page');
   await clickTestId(dashboard, 'tab-journal');
   const empty = record.emptyHistory = await until(dashboard, listState, {page: 1, count: 0});
   // Only one tab panel is shown: the Live cards are hidden, not stacked above the journal.
-  record.liveHiddenInJournal = await dashboard.getByTestId('live-speed-number').isHidden() && await dashboard.getByTestId('overlay-settings').isHidden();
+  record.liveHiddenInJournal = await dashboard.getByTestId('live-telemetry').isHidden() && await dashboard.getByTestId('overlay-settings').isHidden();
   assert.equal(record.liveHiddenInJournal, true, 'The Live panel is shown while the Journal tab is open');
   assert.deepEqual({error: empty.error, empty: empty.empty, emptyNote: empty.emptyNote, banner: empty.banner, next: empty.next, previous: empty.previous},
     {error: null, empty: 'No trips recorded', emptyNote: null, banner: null, next: false, previous: false});
@@ -165,7 +169,7 @@ export async function runJournalEmpty({dashboard, record}) {
   // "recording is off in this version" note.
   record.emptyHistoryShown = true; record.recordingOffNoteAbsent = true;
   await clickTestId(dashboard, 'tab-live');
-  await dashboard.getByTestId('live-speed-number').waitFor({state: 'visible', timeout: 5000});
+  await dashboard.getByTestId('live.placeholder').waitFor({state: 'visible', timeout: 5000});
   // The closed Journal tab is unmounted and holds no page.
   await dashboard.getByTestId('journal').waitFor({state: 'detached', timeout: 5000});
   record.liveRestored = true;
@@ -246,7 +250,7 @@ export async function runJournalSeeded({dashboard, record}) {
   // 120 logical trips; 3 + 2 + 1 + 650 anchor samples, 3,600 of the paging trip and 5 of the logical trip are 4,261 seconds, 1.18 h shown rounded down.
   const page1 = await until(dashboard, listState, {page: 1, count: 50, first: T.paging, totals: '120 trips · 1.1 h recorded'});
   assert.equal(page1.banner, BANNER); record.syntheticBannerShown = true;
-  assert.equal(await dashboard.getByTestId('live-speed-number').isHidden(), true, 'The Live panel is shown while the Journal tab is open');
+  assert.equal(await dashboard.getByTestId('live-telemetry').isHidden(), true, 'The Live panel is shown while the Journal tab is open');
   pages.push({...rowSummary(page1.rows), next: page1.next, previous: page1.previous});
   await clickTestId(dashboard, 'journal-list-next');
   // The answer of a later page has no totals: the first page's stay on screen.

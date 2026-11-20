@@ -461,15 +461,16 @@ function Test-JournalReceipt {
     $filters = $journal.filters
     if ($null -eq $filters -or @($filters.none).Count -ne 3 -or !(Test-ReceiptInteger -Value $filters.partial -Minimum 41 -Maximum 41)) { return $false }
     # Review round 1: the B6 viewport bounds and the anchors' order are re-checked here, not only as driver flags. The
-    # status, speed and fuel lines must lie inside the first viewport; page 3 lists the anchors newest first, and the
+    # status line must lie inside the first viewport and, without a game, the Live placeholder must start in it; page 3 lists the anchors newest first, and the
     # details are opened oldest first.
     $viewport = $journal.liveViewport
     if ($null -eq $viewport -or !(Test-ReceiptInteger -Value $viewport.innerHeight -Minimum 1 -Maximum 100000)) { return $false }
-    foreach ($line in @('status','speed','fuel')) {
-        $box = $viewport.$line
-        if ($null -eq $box -or $box.visible -isnot [bool] -or !$box.visible -or !(Test-ReceiptInteger -Value $box.top -Minimum 0 -Maximum 100000) -or
-            !(Test-ReceiptInteger -Value $box.bottom -Minimum 0 -Maximum 100000) -or $box.top -gt $box.bottom -or $box.bottom -gt $viewport.innerHeight) { return $false }
-    }
+    $box = $viewport.status
+    if ($null -eq $box -or $box.visible -isnot [bool] -or !$box.visible -or !(Test-ReceiptInteger -Value $box.top -Minimum 0 -Maximum 100000) -or
+        !(Test-ReceiptInteger -Value $box.bottom -Minimum 0 -Maximum 100000) -or $box.top -gt $box.bottom -or $box.bottom -gt $viewport.innerHeight) { return $false }
+    $box = $viewport.placeholder
+    if ($viewport.display -cne 'placeholder' -or $null -eq $box -or $box.visible -isnot [bool] -or !$box.visible -or !(Test-ReceiptInteger -Value $box.top -Minimum 0 -Maximum 100000) -or
+        !(Test-ReceiptInteger -Value $box.bottom -Minimum 0 -Maximum 100000) -or $box.top -gt $box.bottom -or $box.top -ge $viewport.innerHeight) { return $false }
     $anchorRows = '7a000000-0000-4000-8000-000000000008,7a000000-0000-4000-8000-000000000007,7a000000-0000-4000-8000-000000000006,7a000000-0000-4000-8000-000000000005,7a000000-0000-4000-8000-000000000004,7a000000-0000-4000-8000-000000000003,7a000000-0000-4000-8000-000000000002,7a000000-0000-4000-8000-000000000001'
     $anchorDetails = '7a000000-0000-4000-8000-000000000001,7a000000-0000-4000-8000-000000000002,7a000000-0000-4000-8000-000000000003,7a000000-0000-4000-8000-000000000004,7a000000-0000-4000-8000-000000000005,7a000000-0000-4000-8000-000000000006,7a000000-0000-4000-8000-000000000007,7a000000-0000-4000-8000-000000000008'
     if ((@($journal.anchorRows | ForEach-Object { $_.trip }) -join ',') -cne $anchorRows -or

@@ -91,6 +91,13 @@
   --yu-tile-teal-gradient: linear-gradient(135deg, rgba(20, 184, 166, 0.28), rgba(31, 41, 55, 0.95) 70%);
   --yu-tile-teal-border: rgba(45, 212, 191, 0.45);
 
+  /* Live placeholder scene (live-placeholder.tsx); the truck's own colours are fixed */
+  --yu-ph-sky: #17233A;
+  --yu-ph-road: #243248; --yu-ph-road-edge: #33445E; --yu-ph-lane: #5B6C86;
+  --yu-ph-shadow: rgba(0, 0, 0, 0.35); --yu-ph-shadow-soft: rgba(0, 0, 0, 0.18);
+  --yu-ph-trailer-top: #E2E8F0; --yu-ph-trailer-side: #CBD5E1; --yu-ph-trailer-front: #A3B0C2; --yu-ph-trailer-line: #8A99AE; --yu-ph-rib: #B8C3D3;
+  --yu-ph-tree-light: #3C7F66; --yu-ph-tree-dark: #2C6250; --yu-ph-trunk: #6B5D4C; --yu-ph-puff: #3A4A63;
+
   /* Controls */
   --yu-switch-thumb: #E2E8F0;
   --yu-segment-selected-bg: #1E293B;
@@ -229,6 +236,13 @@
     --yu-tile-border: rgba(37, 99, 235, 0.35);
     --yu-tile-teal-gradient: linear-gradient(135deg, rgba(13, 148, 136, 0.12), #FFFFFF 70%);
     --yu-tile-teal-border: rgba(13, 148, 136, 0.35);
+
+    /* Live placeholder scene */
+    --yu-ph-sky: #EEF3FA;
+    --yu-ph-road: #D3DAE5; --yu-ph-road-edge: #C3CCDA; --yu-ph-lane: #FFFFFF;
+    --yu-ph-shadow: rgba(15, 23, 42, 0.10); --yu-ph-shadow-soft: rgba(15, 23, 42, 0.07);
+    --yu-ph-trailer-top: #FFFFFF; --yu-ph-trailer-side: #F4F7FB; --yu-ph-trailer-front: #E2E8F0; --yu-ph-trailer-line: #B8C3D3; --yu-ph-rib: #E3E8F0;
+    --yu-ph-tree-light: #8CC7AE; --yu-ph-tree-dark: #5FAE8C; --yu-ph-trunk: #8A7A66; --yu-ph-puff: #E2E8F0;
 
     /* Controls */
     --yu-switch-thumb: #FFFFFF;

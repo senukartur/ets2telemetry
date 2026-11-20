@@ -537,6 +537,43 @@ button.yu-info-hint, .yu-info-hint { display: inline-flex; align-items: center; 
 .yu-connection strong { display: block; font-size: 15px; font-weight: 700; color: var(--yu-text-strong); }
 .yu-connection p { margin: 0; font-size: 12px; color: var(--yu-text-secondary); }
 
+/* The Live placeholder (live-placeholder.tsx): a fixed 960 x 440 stage centred in the card, cropped at its sides on a
+   narrow window, with a static edge fade above it. Only transform and opacity animate, each moving part on its own layer. */
+.yu-live-placeholder { position: relative; height: 440px; overflow: hidden; isolation: isolate; border: 1px solid var(--yu-border); border-radius: var(--yu-radius-card); background: radial-gradient(ellipse 470px 260px at 50% 48%, var(--yu-ph-sky), var(--yu-bg-card)); }
+.yu-live-placeholder::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 470px 250px at 50% 48%, transparent 62%, var(--yu-bg-card) 100%); }
+.yu-ph-stage { position: absolute; left: 50%; top: 50%; width: 960px; height: 440px; margin: -232px 0 0 -480px; }
+.yu-ph-svg { position: absolute; left: 0; top: 0; overflow: visible; }
+.yu-ph-layer { position: absolute; inset: 0; will-change: transform; }
+.yu-ph-lane { animation: yu-ph-lane 0.9s linear infinite; }
+.yu-ph-trees { animation: yu-ph-trees 2.7s linear infinite; }
+.yu-ph-truck { animation: yu-ph-bob 0.6s ease-in-out infinite; }
+.yu-ph-wheel { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
+.yu-ph-rim { position: absolute; will-change: transform; animation: yu-ph-spin 0.92s linear infinite; }
+.yu-ph-rim svg { display: block; }
+.yu-ph-puff { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--yu-ph-puff); opacity: 0; will-change: transform, opacity; animation: yu-ph-puff 1.8s ease-out infinite; }
+.yu-ph-puff-late { animation-delay: 0.9s; }
+.yu-ph-caption { position: absolute; left: 16px; right: 16px; bottom: 18px; z-index: 1; margin: 0; text-align: center; font-size: 13px; color: var(--yu-text-muted); }
+.yu-ph-svg .ph-road { fill: var(--yu-ph-road); }
+.yu-ph-svg .ph-road-edge { fill: var(--yu-ph-road-edge); }
+.yu-ph-svg .ph-lane { fill: var(--yu-ph-lane); }
+.yu-ph-svg .ph-shadow { fill: var(--yu-ph-shadow); }
+.yu-ph-svg .ph-shadow-soft { fill: var(--yu-ph-shadow-soft); }
+.yu-ph-svg .ph-trailer-top { fill: var(--yu-ph-trailer-top); }
+.yu-ph-svg .ph-trailer-side { fill: var(--yu-ph-trailer-side); }
+.yu-ph-svg .ph-trailer-front { fill: var(--yu-ph-trailer-front); }
+.yu-ph-svg .ph-trailer-line { stroke: var(--yu-ph-trailer-line); stroke-width: 0.8; stroke-linejoin: round; }
+.yu-ph-svg .ph-rib { fill: var(--yu-ph-rib); }
+.yu-ph-svg .ph-tree-light { fill: var(--yu-ph-tree-light); }
+.yu-ph-svg .ph-tree-dark { fill: var(--yu-ph-tree-dark); }
+.yu-ph-svg .ph-trunk { stroke: var(--yu-ph-trunk); }
+.yu-ph-svg .ph-text { font-family: var(--yu-font); }
+@keyframes yu-ph-lane { to { transform: translate(var(--yu-ph-lane-x), var(--yu-ph-lane-y)); } }
+@keyframes yu-ph-trees { to { transform: translate(var(--yu-ph-trees-x), var(--yu-ph-trees-y)); } }
+@keyframes yu-ph-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+@keyframes yu-ph-spin { to { transform: rotate(360deg); } }
+@keyframes yu-ph-puff { 0% { transform: translate(0, 0) scale(0.5); opacity: 0.9; } 100% { transform: translate(-46px, -50px) scale(2.2); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .yu-live-placeholder * { animation: none !important; } }
+
 /* Instrument: gauge, gear and fuel wrap as one row of flex items. */
 .yu-instrument { background: var(--yu-instrument-gradient); border: 1px solid var(--yu-border); }
 .yu-instrument > [data-slot="card-content"] { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px; padding: 14px 18px; }

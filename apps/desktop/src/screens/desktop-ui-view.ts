@@ -196,6 +196,8 @@ export function liveScreenState(status: LiveTelemetry['status'] | undefined, cur
   if (current) return paused ? 'paused' : 'connected';
   return status === 'stale' || status === 'disconnected' ? 'stale' : 'waiting';
 }
+/** Whether the game sends current data, which shows the dashboard: a pause and one current stream of two count. */
+export const liveHasData = (state: LiveScreenState) => state === 'connected' || state === 'paused' || state === 'partial';
 
 /**
  * The game mode for the game chip and the Game session card: v1's current mode evidence through the combiner's freshness.
@@ -217,8 +219,11 @@ export function staleReasonText(reason: string | undefined, language: AppLanguag
   if (!reason) return null;
   return NO_NEW_DATA.test(reason) ? t('live.staleReason', undefined, language) : connectionReasonText(reason, language);
 }
-/** The Live page subline: what the values are worth now. Only the stale state adds a reason; nothing claims an update rate. */
-export function liveSubline(state: LiveScreenState, game: string, reason: string | undefined, language: AppLanguage = 'en'): string {
+/**
+ * The Live page subline: what the values are worth now. Only the stale state adds a reason; nothing claims an update rate.
+ * While the placeholder shows, the subline stays one text whatever the connection does.
+ */
+export function liveSubline(state: LiveScreenState | 'placeholder', game: string, reason: string | undefined, language: AppLanguage = 'en'): string {
   const detail = state === 'connected' ? game ? t('live.sub.connected', {game}, language) : t('ui.status.connected', undefined, language) : t(`live.sub.${state}`, undefined, language);
   const why = state === 'stale' ? staleReasonText(reason, language) : null;
   return t('live.sub', {v: why ? `${detail} · ${why}` : detail}, language);
