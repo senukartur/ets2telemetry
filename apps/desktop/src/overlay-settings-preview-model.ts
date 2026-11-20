@@ -3,7 +3,7 @@ import {CRUISE_CONTROL_OFF} from '../../../packages/telemetry-core/src/cruise-co
 import {OVERLAY_NOMINAL_SIZE} from './overlay-geometry';
 import {overlayZoom} from './overlay-placement';
 import {CLUSTER_GAUGE_SIZE_CSS, layoutReservedCss} from './overlay-rows';
-import {OVERLAY_SECTION_IDS} from './overlay-sections';
+import {formatCargoDamage, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {stripCssHeight, stripRowCount, STRIP_HARD_MODE_MAX_WIDTH_CSS, STRIP_ITEM_MAX_WIDTH_CSS, STRIP_PADDING_X_CSS} from './overlay-strip';
 
 export type ExampleCruiseState = 'active' | 'off' | 'unavailable';
@@ -27,6 +27,7 @@ export function overlayExample(settings: OverlaySettings, language: AppLanguage,
     'distance-remaining': {id: 'distance-remaining', state: 'value', text: '412 km'},
     deadline: {id: 'deadline', state: 'value', text: '8 h 25 min'},
     'expected-income': {id: 'expected-income', state: 'value', text: '24680 EUR'},
+    'cargo-damage': {id: 'cargo-damage', state: 'value', text: formatCargoDamage(0.04, language)},
     'game-time': {id: 'game-time', state: 'value', text: '14:35'},
     'mandatory-break': {id: 'mandatory-break', state: 'value', text: '3 h 15 min'},
     'rest-state': {id: 'rest-state', state: 'value', text: '8 h 20 min'}

@@ -906,3 +906,7 @@ On [ET-112](https://trello.com/c/bgIyf8U2) the owner approved fixing the partial
 ## ET-119 qualification progress and server results — November 18, 2026
 
 On [ET-119](https://trello.com/c/ecFxl641) the owner approved a connected-account My qualification page, the Lucide Medal icon in navigation, Journal and a provisional icon-only overlay indicator and retained server assessments in Journal/details. The concrete design adds SQLite schema 11, narrow get/refresh/subscribe qualification IPC and a separate bounded utility-process HTTP lane reusing protected account credentials. Server decisions and snapshots remain authoritative; upload receipts never establish qualification. Qualification decorations stay outside the existing export format.
+
+## ET-121 live cargo damage in protocol v1.6 — November 20, 2026
+
+The owner approved the [ET-121](https://trello.com/c/ZunIHoH5) plan to add live cargo damage to negotiated protocol v1.6 and use the matching v0 configuration revision for overlay display.

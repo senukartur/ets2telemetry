@@ -205,7 +205,7 @@ describe('simulator v1 mandatory break capture (ET-052)', () => {
   const breakOf = (a: AdapterModel) => a.published.nextMandatoryBreak;
   it('lists the channel before the placement in registration order', () => {
     // The optional readings after the mandatory break retain their registration order.
-    expect(CHANNELS.slice(-5)).toEqual(['mandatory.break', 'cruise_control', 'navigation.speed.limit', 'rest.stop', 'world.placement']);
+    expect(CHANNELS.slice(-6)).toEqual(['mandatory.break', 'cruise_control', 'navigation.speed.limit', 'rest.stop', 'job.cargo.damage', 'world.placement']);
     expect(CHANNELS.indexOf('mandatory.break')).toBeGreaterThan(CHANNELS.indexOf('navigation.distance'));
   });
   it('is not-observed before any callback and carries each s32 value exactly, zero and negative included', () => {

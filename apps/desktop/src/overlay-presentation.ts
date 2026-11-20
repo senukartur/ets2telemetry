@@ -5,7 +5,7 @@ import {fixed, formatConsumption, formatDistance, formatMoneyAmount} from '../..
 import {convertMass, convertVolume} from '../../../packages/telemetry-core/src/units';
 import {carriesField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {liveSources, V1_JOB_FIELDS} from './live-sources';
-import {DEFAULT_OVERLAY_SETTINGS, isGaugeFraction, OVERLAY_SECTION_IDS} from './overlay-sections';
+import {DEFAULT_OVERLAY_SETTINGS, formatCargoDamage, isGaugeFraction, OVERLAY_SECTION_IDS} from './overlay-sections';
 import {speedGaugeFraction} from './speed-gauge';
 import {DEFAULT_GEAR_DISPLAY, DEFAULT_UNIT_PROFILES, displayGame, gearDisplayFor, isExplicitFixture, profileFor, speedNumber, speedUnit, volumeUnit} from './unit-profiles';
 import {localizeDeadlineString} from './i18n';
@@ -35,6 +35,7 @@ const SECTION_FIELDS: Readonly<Record<OverlaySectionId, {parts: readonly LiveFie
   'distance-remaining': {parts: ['route-remaining']},
   'deadline': {parts: ['deadline']},
   'expected-income': {parts: ['expected-income']},
+  'cargo-damage': {parts: []},
   'game-time': {parts: ['game-time']},
   'mandatory-break': {parts: ['mandatory-break']},
   'rest-state': {parts: ['rest-state']}
@@ -133,6 +134,13 @@ export function overlayPresentation(live: LiveTelemetry, units: UnitProfiles = D
   for (const id of OVERLAY_SECTION_IDS) {
     const {parts, detail} = SECTION_FIELDS[id];
     if (!overlay.sections[id]) continue;
+    if (id === 'cargo-damage') {
+      if (current ? sources.job !== 'none' : shown.has(id) && !!observation) {
+        const damage = sources.cargoDamage;
+        sections.push(current && damage.state === 'value' ? {id, state: 'value', text: formatCargoDamage(damage.value, language)} : {id, state: 'unavailable'});
+      }
+      continue;
+    }
     if (!parts.some(carried)) {
       // A shown v1 section whose v1 carriage is lost while an update still carries a v0 observation (main stripped an
       // invalid projection, or the v1 origin or game stopped matching) keeps its dash (ET-012a L5). An update without a v0

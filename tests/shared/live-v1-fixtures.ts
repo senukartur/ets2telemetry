@@ -4,7 +4,7 @@
 import {readFileSync} from 'node:fs';
 import type {LiveTelemetry, LiveTelemetryV1, SourceSelection} from '../../packages/contracts/src';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
-import {decodePayload, type GearboxState, type LiveStateV1, type Measure, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {decodePayload, type CargoDamage, type GearboxState, type LiveStateV1, type Measure, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import type {V1SourceState} from '../../apps/desktop/src/v1-ingestion';
 
 export type V0State = Extract<v0.ServerMessage, {kind: 'checkpoint' | 'snapshot'}>;
@@ -52,6 +52,7 @@ export interface V1Options {
   /** ET-084: the projection's speed limit; by default what the fixture carries, or not-supported below minor 4. */
   speedLimit?: Measure<'m/s'>;
   restState?: Measure<'min'>;
+  cargoDamage?: CargoDamage;
 }
 /** The live v1 projection of a v1 fixture message, by hand: the state without its window and two status fields. */
 export function v1Projection(name = 'snapshot-live', options: V1Options = {}): LiveTelemetryV1 {
@@ -66,6 +67,7 @@ export function v1Projection(name = 'snapshot-live', options: V1Options = {}): L
   // ET-084: likewise the speed limit; a fixture below minor 4 carries none, so it is not-supported.
   state.speedLimit = structuredClone(options.speedLimit ?? state.speedLimit ?? {available: false, reason: 'not-supported', unit: 'm/s'});
   state.restState = structuredClone(options.restState ?? state.restState ?? {available: false, reason: 'not-supported', unit: 'min'});
+  state.cargoDamage = structuredClone(options.cargoDamage ?? state.cargoDamage ?? {available: false, reason: 'not-supported', unit: 'fraction'});
   const job = state.configuration.job;
   if ((options.ids ?? 'v0') === 'v0' && job.available) {
     job.value.cargoId = {available: true, value: 'cargo.logs'};

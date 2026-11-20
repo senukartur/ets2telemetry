@@ -34,7 +34,7 @@ std::vector<std::string> welcome_event_types(bool gameplay_events_registered, bo
 // `minor` is the minor the connection selected (default 0). Every message of a connection
 // carries it in its envelope and the welcome announces it; only checkpoints and snapshots differ in content:
 // `state.gearbox` from minor 1, `state.nextMandatoryBreak` from minor 2, `state.cruiseControl` from minor 3 and
-// `state.speedLimit` from minor 4, followed by `state.restState` from minor 5. Each earlier minor keeps its encoding.
+// `state.speedLimit` from minor 4, followed by `state.restState` from minor 5 and `state.cargoDamage` from minor 6. Each earlier minor keeps its encoding.
 class Encoder {
  public:
   explicit Encoder(SessionIdentity identity) : identity_(std::move(identity)) {}

@@ -7,7 +7,7 @@ import {once} from 'node:events';
 import path from 'node:path';
 import {Worker} from 'node:worker_threads';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {FrameDecoder, decodePayload, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {V1_MAX_MINOR, FrameDecoder, decodePayload, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
 import {StorageDurableSink, type DurableStorageClient} from '../../apps/desktop/src/durable-sink';
 import {V1Ingestion, type V1SourceState} from '../../apps/desktop/src/v1-ingestion';
@@ -55,8 +55,8 @@ async function run(input: Json, plan: Plan) {
   failed.catch(() => undefined);
   const track = (work: Promise<unknown>) => { background.push(work.catch(error => fail(error))); };
   const connect = (endpoint: string, progress: Progress) => {
-    // ET-050b, ET-052, ET-071, ET-084: the ingestion offers minor 4 and the simulator serves it, so both directions may carry {1,4}.
-    const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server', {maxMinor: 5});
+    // ET-050b, ET-052, ET-071, ET-084: decode every minor the desktop and simulator can negotiate.
+    const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server', {maxMinor: V1_MAX_MINOR});
     let index: number | undefined;
     // Registered before the ingestion's listeners: a welcome is numbered before the ingestion applies it.
     socket.on('data', (chunk: Buffer) => {
@@ -83,7 +83,7 @@ async function run(input: Json, plan: Plan) {
       } catch { /* the ingestion's own decoder reports the violation */ }
     });
     socket.write = ((bytes: Uint8Array, ...rest: unknown[]) => {
-      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 5}) as ClientMessage;
+      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: V1_MAX_MINOR}) as ClientMessage;
       if (m.kind === 'ack' && index !== undefined && plan.dropAcks?.includes(index)) return true;
       return (write as (...args: unknown[]) => boolean)(bytes, ...rest);
     });

@@ -179,8 +179,7 @@ Json game_duration(const Field<std::int32_t>& f) {
   return with_unit(field(f, [](std::int32_t v) { return number(v); }), "min");
 }
 // The state of `minor`: minor 1 adds `gearbox`, minor 2 adds `nextMandatoryBreak` after it, minor 3 adds `cruiseControl`
-// (ET-071) after that, minor 4 adds `speedLimit` (ET-084), and minor 5 adds `restState` (ET-118). A lower minor carries none of the later keys,
-// whatever the POD holds, so lower-minor bytes never change.
+// (ET-071) after that, minor 4 adds `speedLimit` (ET-084), minor 5 adds `restState`, and minor 6 adds `cargoDamage`. The negotiated minor determines exactly which keys are written.
 Json state(const StatePod& s, const Currency& currency, unsigned minor) {
   Object o{{"simulation", text_value(simulation(s.simulation))},
     {"speed", measure(scaled(s.speed_mps, 1, -1000, 1000, "m/s"))}, {"fuel", measure(scaled(s.fuel_l, 1, 0, 1e6, "L"))},
@@ -199,6 +198,12 @@ Json state(const StatePod& s, const Currency& currency, unsigned minor) {
   // SDK m/s unscaled, speed's bounds: zero and negative are values meaning no limit; non-finite or above-bound is `invalid`.
   if (minor >= 4) o.emplace("speedLimit", measure(scaled(s.speed_limit_mps, 1, -1000, 1000, "m/s")));
   if (minor >= 5) o.emplace("restState", game_duration(s.rest_state_min));
+  if (minor >= 6) {
+    const auto damage = scaled(s.cargo_damage_fraction, 1, 0, 1, "fraction");
+    auto encoded = measure(damage);
+    if (damage.reading.value) encoded = with(std::move(encoded), "v0ConfigurationRevision", decimal(s.v0_configuration_revision));
+    o.emplace("cargoDamage", std::move(encoded));
+  }
   return Json{std::move(o)};
 }
 }

@@ -7,6 +7,7 @@
 #include <cstring>
 #include <limits>
 #include "common/scssdk_telemetry_common_channels.h"
+#include "common/scssdk_telemetry_job_common_channels.h"
 #include "common/scssdk_telemetry_truck_common_channels.h"
 #include "common/scssdk_telemetry_common_configs.h"
 #include "common/scssdk_telemetry_common_gameplay_events.h"
@@ -34,6 +35,7 @@ constexpr std::array<ChannelSpec, fields> specs{{
   // ET-084: the navigation speed limit in m/s, as speed's bounds: zero or negative means no limit and stays a value.
   {SCS_TELEMETRY_TRUCK_CHANNEL_navigation_speed_limit, SCS_VALUE_TYPE_float, "m/s", 1, -1000, 1000},
   {SCS_TELEMETRY_CHANNEL_next_rest_stop, SCS_VALUE_TYPE_s32, "min", 1, -2147483648.0, 2147483647.0},
+  {SCS_TELEMETRY_JOB_CHANNEL_cargo_damage, SCS_VALUE_TYPE_float, "fraction", 1, 0, 1},
   {SCS_TELEMETRY_TRUCK_CHANNEL_world_placement, SCS_VALUE_TYPE_dplacement, "game-world", 1, 0, 0}
 }};
 void increment(std::uint64_t& value) noexcept { if (value != UINT64_MAX) ++value; }
@@ -44,7 +46,7 @@ void add(std::atomic<std::uint64_t>& value, std::uint64_t count) noexcept {
 }
 // The protocol v1-only channels: optional at registration, and invisible to the v0 snapshot
 // ordering and the v0 diagnostics, so a game that provides them produces the same v0 and CAP0 bytes as one that does not.
-constexpr bool v1_only(Field field) noexcept { return field == Field::mandatory_break || field == Field::cruise_control || field == Field::speed_limit || field == Field::rest_state; }
+constexpr bool v1_only(Field field) noexcept { return field == Field::mandatory_break || field == Field::cruise_control || field == Field::speed_limit || field == Field::rest_state || field == Field::cargo_damage; }
 bool equal(const char* a, const char* b) noexcept {
   if (!a || !b) return false;
   for (std::size_t i = 0; i <= 128; ++i) { if (a[i] != b[i]) return false; if (!a[i]) return true; }
@@ -370,6 +372,7 @@ scs_result_t Adapter::initialize(scs_u32_t version, const scs_telemetry_init_par
     game_mode_ = {}; game_mode_emitted_ = false;
     v1_configuration_ = {}; v1_continuity_ = {}; v1_configuration_dirty_ = true; v1_gearbox_ = {}; v1_gearbox_dirty_ = true;
     clock_epoch_ = 0; observed_in_frame_.fill(false); in_frame_ = false;
+    cargo_damage_active_job_ = false; cargo_damage_boundary_ = false;
     producer_.identity.game_id.assign(input.common.game_id); producer_.identity.game.assign(ets2 ? "ets2" : "ats");
     producer_.identity.api_version = version; producer_.identity.game_telemetry_version = input.common.game_version;
     producer_.identity.process_id = GetCurrentProcessId();
@@ -468,6 +471,7 @@ bool Adapter::next_order() noexcept {
   ++producer_.boundary_order; return true;
 }
 void Adapter::clock_restart() noexcept {
+  cargo_damage_boundary_ = true;
   if (clock_epoch_ == 0xffffffffffffULL) { producer_.exhausted = true; producer_.active = false; source_live_.store(false, std::memory_order_release); return; }
   ++clock_epoch_;
   constexpr char hex[] = "0123456789abcdef";
@@ -582,11 +586,23 @@ void Adapter::event(scs_event_t event_id, const void* info) {
       if (info) {
         const auto& config = *static_cast<const scs_telemetry_configuration_t*>(info);
         configuration(config);
+        if (equal(config.id, SCS_TELEMETRY_CONFIG_job)) {
+          cargo_damage_active_job_ = config.attributes && producer_.state.job.status == Availability::available;
+          cargo_damage_boundary_ = true;
+        }
         if (!producer_.exhausted) evidence(cap0::Kind::configuration, config.id, config.attributes, true);
         if (!producer_.exhausted) v1_configuration(config);
       } else { failure(); evidence(cap0::Kind::configuration, nullptr, nullptr, true); } break;
     case SCS_TELEMETRY_EVENT_gameplay:
-      if (info) { const auto& event_info = *static_cast<const scs_telemetry_gameplay_event_t*>(info); copy_attributes(ObservationKind::gameplay, event_info.id, event_info.attributes); evidence(cap0::Kind::gameplay, event_info.id, event_info.attributes, true); v1_gameplay(event_info); }
+      if (info) {
+        const auto& event_info = *static_cast<const scs_telemetry_gameplay_event_t*>(info);
+        if (equal(event_info.id, SCS_TELEMETRY_GAMEPLAY_EVENT_job_delivered) || equal(event_info.id, SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled)) {
+          cargo_damage_active_job_ = false;
+          cargo_damage_boundary_ = true;
+        }
+        copy_attributes(ObservationKind::gameplay, event_info.id, event_info.attributes);
+        evidence(cap0::Kind::gameplay, event_info.id, event_info.attributes, true); v1_gameplay(event_info);
+      }
       else { failure(); evidence(cap0::Kind::gameplay, nullptr, nullptr, true); } break;
     case SCS_TELEMETRY_EVENT_started: case SCS_TELEMETRY_EVENT_paused:
       producer_.state.simulation = event_id == SCS_TELEMETRY_EVENT_started ? Simulation::running : Simulation::paused;
@@ -598,7 +614,7 @@ void Adapter::event(scs_event_t event_id, const void* info) {
         v1_emit(true);
       } break;
     case SCS_TELEMETRY_EVENT_frame_start:
-      observed_in_frame_.fill(false); in_frame_ = false;
+      observed_in_frame_.fill(false); in_frame_ = false; cargo_damage_boundary_ = false;
       if (info) {
         in_frame_ = true;
         const auto& frame = *static_cast<const scs_telemetry_frame_start_t*>(info);
@@ -844,6 +860,12 @@ void Adapter::publish_v1() noexcept {
     s.cruise_control_mps = sdk_value(Field::cruise_control);
     s.speed_limit_mps = sdk_value(Field::speed_limit);
     s.rest_state_min = v1_reading_s32(state.channels[static_cast<std::size_t>(Field::rest_state)]);
+    const auto damage = static_cast<std::size_t>(Field::cargo_damage);
+    s.cargo_damage_fraction = {};
+    if (!registered_channels_[damage]) s.cargo_damage_fraction.state = v1::FieldState::not_supported;
+    // Channel and job callbacks have no ordering guarantee within a frame.
+    else if (cargo_damage_active_job_ && in_frame_ && !cargo_damage_boundary_ && observed_in_frame_[damage]) s.cargo_damage_fraction = sdk_value(Field::cargo_damage);
+    s.v0_configuration_revision = state.configuration_revision;
     const auto& gear = state.channels[static_cast<std::size_t>(Field::gear)];
     s.gear = gear.status == Availability::available ? v1::Field<std::int32_t>{static_cast<std::int32_t>(gear.value), v1::FieldState::available} : v1::Field<std::int32_t>{0, v1_state(gear.status)};
     v1_game_time(s.game_time); s.capture_utc_unix_ms = utc_unix_ms(); s.boundary_order = producer_.boundary_order;

@@ -12,6 +12,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -655,7 +656,8 @@ std::vector<IsolationFrame> isolation_run(bool attach, int break_mode = 0, Field
   std::vector<IsolationFrame> frames;
   const auto end_frame = [&] {
     if (break_mode == 2) {
-      auto value = (optional == Field::mandatory_break || optional == Field::rest_state) ? s32(static_cast<std::int32_t>(frames.size()) * 7 - 3) : floating(static_cast<float>(frames.size()) * 2.5F);
+      auto value = (optional == Field::mandatory_break || optional == Field::rest_state) ? s32(static_cast<std::int32_t>(frames.size()) * 7 - 3)
+        : floating(static_cast<float>(frames.size()) * (optional == Field::cargo_damage ? 0.125F : 2.5F));
       host.channel(optional, &value);
     }
     host.frame_end(); IsolationFrame output; output.snapshot = std::make_unique<Snapshot>(); require(adapter->read_latest(*output.snapshot), "v0 frame published");
@@ -1576,6 +1578,75 @@ void rest_state() {
   }
   require(delivered, "the isolation script delivered Rest State");
 }
+void cargo_damage() {
+  {
+    BreakRig refused([](Host& host) { host.erroneous = "job.cargo.damage"; });
+    require(!refused.host.channels.count("job.cargo.damage"), "optional cargo damage registration may fail");
+    require(v1_read(*refused.adapter)->state.cargo_damage_fraction.state == v1::FieldState::not_supported, "refusal is not-supported");
+  }
+  BreakRig rig;
+  auto& host = rig.host;
+  const auto read_damage = [&] { return v1_read(*rig.adapter)->state.cargo_damage_fraction; };
+  const auto frame = [&](const scs_value_t* value, unsigned flags = 0) {
+    rig.start(flags); host.channel(Field::cargo_damage, value); host.frame_end();
+  };
+  require(host.channels.at("job.cargo.damage").type == SCS_VALUE_TYPE_float, "SDK cargo damage requests a float");
+  scs_named_value_t job[]{attribute("cargo.id", text("cargo.a")), attribute("destination.city.id", text("city.b")), {}}, empty[]{{}};
+  const auto partial = floating(0.125F);
+  frame(&partial);
+  require(read_damage().state == v1::FieldState::not_observed, "damage does not apply without a job");
+  host.config("job", job);
+  for (const float value : {0.0F, 0.125F, 1.0F}) {
+    const auto sample = floating(value);
+    frame(&sample);
+    const auto reading = read_damage();
+    require(reading.available() && reading.value == value, "damage preserves an available SDK fraction");
+    require(v1_read(*rig.adapter)->state.v0_configuration_revision == rig.current()->state.configuration_revision, "revision comes from the same publication");
+  }
+  rig.start(); host.frame_end();
+  require(read_damage().state == v1::FieldState::not_observed, "an absent callback clears the preceding frame");
+  frame(nullptr);
+  require(read_damage().state == v1::FieldState::not_observed, "NULL is not observed");
+  for (const auto& bad : {s32(0), floating(-0.01F), floating(1.01F), floating(std::numeric_limits<float>::quiet_NaN())}) {
+    frame(&bad);
+    require(read_damage().state == v1::FieldState::invalid, "wrong type, non-finite and out-of-range damage are invalid");
+  }
+  for (const bool before : {false, true}) {
+    rig.start();
+    if (before) host.channel(Field::cargo_damage, &partial);
+    host.config("job", job);
+    if (!before) host.channel(Field::cargo_damage, &partial);
+    host.frame_end();
+    require(read_damage().state == v1::FieldState::not_observed, "same-frame job configuration blocks either callback order");
+    frame(&partial);
+    require(read_damage().available(), "the first complete job frame can provide damage");
+  }
+  frame(&partial, SCS_TELEMETRY_FRAME_START_FLAG_timer_restart);
+  require(read_damage().state == v1::FieldState::not_observed, "timer restart discards the frame's reading");
+  for (const auto* event : {"job.delivered", "job.cancelled"}) {
+    host.config("job", job);
+    frame(&partial);
+    require(read_damage().available(), "job configuration enables the reading");
+    rig.start(); host.channel(Field::cargo_damage, &partial); host.gameplay(event, empty); host.frame_end();
+    require(read_damage().state == v1::FieldState::not_observed, "a terminal event invalidates the reading immediately");
+    frame(&partial);
+    require(read_damage().state == v1::FieldState::not_observed, "terminal job stays unavailable until the next configuration");
+  }
+  host.config("job", job); frame(&partial);
+  host.config("job", empty); frame(&partial);
+  require(read_damage().state == v1::FieldState::not_observed, "job clear invalidates the reading");
+}
+void cargo_damage_isolation() {
+  const auto absent = isolation_run(true, 1, Field::cargo_damage), present = isolation_run(true, 2, Field::cargo_damage);
+  require(absent.size() == present.size() && present.size() == 8, "cargo damage isolation frames");
+  const auto index = static_cast<std::size_t>(Field::cargo_damage);
+  for (std::size_t i = 0; i < present.size(); ++i) {
+    same_v0(*absent[i].snapshot, *present[i].snapshot, index);
+    require(present[i].snapshot->state.channels[index].status == Availability::available, "the isolation script delivered damage");
+    require(absent[i].evidence.size() == present[i].evidence.size(), "cargo damage preserves CAP0 envelope count");
+    for (std::size_t e = 0; e < present[i].evidence.size(); ++e) same_cap0(absent[i].evidence[e], present[i].evidence[e]);
+  }
+}
 }
 int main(int argc, char** argv) {
   try {
@@ -1596,6 +1667,7 @@ int main(int argc, char** argv) {
     // ET-084: the optional speed limit channel; needs tests/fixtures for the hand-written minor-4 corpus.
     else if (argc == 3 && std::string(argv[1]) == "speed-limit") speed_limit(argv[2]);
     else if (argc == 2 && std::string(argv[1]) == "rest-state") rest_state();
+    else if (argc == 2 && std::string(argv[1]) == "cargo-damage") { cargo_damage(); cargo_damage_isolation(); }
     else {
       game_mode_evidence(); lifecycle(); config_terminal_and_bounds(); clocks_and_contention(); failure_cleanup(); deferred_log(); missing_game_time_reset(); game_time_reset_callback_orders(); game_time_reset_frame_delimitation();
       v1_capture_records(); v1_state_and_gate(); v1_nonblocking(); v1_isolation(); v1_drain_into_store(); v1_session_boundary();

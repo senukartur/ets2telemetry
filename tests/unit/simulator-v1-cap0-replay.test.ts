@@ -95,14 +95,14 @@ describe('CAP-01 replay mandatory break (ET-052)', () => {
     for (const step of input.transport) if (step.action === 'connect') step.client!.maxMinor = maxMinor;
     return input;
   };
-  // ET-071, ET-084: the replay connection is minor 5 since the client offers it; CAP0 omits cruise control and the speed limit
+  // ET-071, ET-084: the replay connection is minor 6 since the client offers it; CAP0 omits cruise control and the speed limit
   // too, so both are not-observed.
-  it('serves a not-observed break, cruise control and speed limit on every minor-5 state message of each replayed run', () => {
+  it('serves a not-observed break, cruise control and speed limit on every minor-6 state message of each replayed run', () => {
     for (const run of [2, 4, 7, 8, 9]) {
       const all = states(load(run));
       expect(all.length).toBeGreaterThan(0);
       for (const m of all) {
-        expect(m.version).toEqual({major: 1, minor: 5}); expect(m.data.state.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'});
+        expect(m.version).toEqual({major: 1, minor: 6}); expect(m.data.state.nextMandatoryBreak).toEqual({available: false, reason: 'not-observed', unit: 'min'});
         expect(m.data.state.cruiseControl).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
         expect(m.data.state.speedLimit).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
       }
@@ -137,11 +137,11 @@ describe('CAP-01 replay gearbox (ET-050b)', () => {
   const twelve = slots([[-1, 1, 0], [-3, 1, 1], [-2, 1, 2], [-4, 1, 3], [1, 2, 0], [7, 2, 1], [2, 2, 2], [8, 2, 3], [3, 3, 0], [9, 3, 1], [4, 3, 2], [10, 3, 3],
     [5, 4, 0], [11, 4, 1], [6, 4, 2], [12, 4, 3]]);
   const states = (run: number) => replay(run).result.transcript.flatMap(l => l.message.kind === 'snapshot' || l.message.kind === 'checkpoint' ? [l.message] : []);
-  it('serves the gearbox on every state message of the replay connection, which is minor 5 since the client offers it (ET-052, ET-071, ET-084)', () => {
+  it('serves the gearbox on every state message of the replay connection, which is minor 6 since the client offers it (ET-052, ET-071, ET-084)', () => {
     for (const run of [2, 4, 7, 8, 9]) {
       const all = states(run);
       expect(all.length).toBeGreaterThan(0);
-      for (const m of all) { expect(m.version).toEqual({major: 1, minor: 5}); expect(m.data.state.gearbox).toBeDefined(); }
+      for (const m of all) { expect(m.version).toEqual({major: 1, minor: 6}); expect(m.data.state.gearbox).toBeDefined(); }
     }
   });
   it('carries the ATS Mack 18F/4R layout once run4 and run7 configured their trucks', () => {

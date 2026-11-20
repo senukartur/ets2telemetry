@@ -20,7 +20,7 @@ constexpr ULONGLONG end_budget_ms = 250, end_items_ms = 150, end_reserve_ms = 10
 // After the channel's last eventSeq, its open loss run reaches the worker with the next frame_end flush.
 constexpr ULONGLONG exhaustion_flush_ms = 250;
 // The endpoint selects min(hello maxMinor, endpoint_max_minor). Each connection carries the fields of its negotiated minor.
-constexpr unsigned endpoint_max_minor = 5;
+constexpr unsigned endpoint_max_minor = 6;
 // Static notices and bounded connection diagnostics are handed to the SDK thread.
 const sdk::DeferredLog invariant_log{SCS_LOG_TYPE_error, ETS2TELEMETRY_GAME_LOG_PREFIX " protocol v1 endpoint retired: invariant violation"};
 const sdk::DeferredLog close_overflow_log{SCS_LOG_TYPE_message, ETS2TELEMETRY_GAME_LOG_PREFIX " V1_CLOSE_DIAGNOSTICS_DROPPED"};

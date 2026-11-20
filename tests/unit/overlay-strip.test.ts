@@ -18,12 +18,12 @@ const only = (...ids: OverlaySectionId[]): OverlaySections =>
 const ALL = DEFAULT_OVERLAY_SECTIONS;
 // Expected rendered order, independent of the production strip order constant.
 const STRIP_ORDER: readonly OverlaySectionId[] = ['speed', 'speed-limit', 'gear', 'rpm', 'cruise-control', 'fuel', 'range',
-  'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income',
+  'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'cargo-damage',
   'game-time', 'mandatory-break', 'rest-state'];
 
 it('fixes the hand-written maximum widths of every strip item', () => {
   expect(STRIP_ITEM_MAX_WIDTH_CSS).toEqual({'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'speed-limit': 32, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300,
-    'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150});
+    'origin': 300, 'destination': 300, 'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'cargo-damage': 100, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150});
   expect({slots: STRIP_TAG_SLOTS, tag: STRIP_TAG_MAX_WIDTH_CSS, row: STRIP_ROW_HEIGHT_CSS, border: STRIP_BORDER_CSS, padding: STRIP_PADDING_X_CSS,
     gap: STRIP_COLUMN_GAP_CSS}).toEqual({slots: 2, tag: 112, row: 38, border: 1, padding: 12, gap: 14});
   expect(STRIP_HARD_MODE_MAX_WIDTH_CSS).toBe(160);
@@ -63,7 +63,7 @@ it.each([
   {name: 'driving-only at 1260', sections: OVERLAY_PRESETS['driving-only'], width: 1260, rows: 2, height: 78},
   {name: 'driving-only at 1398', sections: OVERLAY_PRESETS['driving-only'], width: 1398, rows: 1, height: 40},
   {name: 'job-focus at 1280', sections: OVERLAY_PRESETS['job-focus'], width: 1280, rows: 2, height: 78},
-  {name: 'all but RPM and cargo at 1280', sections: {...ALL, rpm: false, cargo: false}, width: 1280, rows: 3, height: 116}
+  {name: 'all but RPM and cargo at 1280', sections: {...ALL, rpm: false, cargo: false}, width: 1280, rows: 4, height: 154}
 ])('reserves $rows rows for $name', ({sections, width, rows, height}) => {
   expect(stripRowCount(sections, width)).toBe(rows);
   expect(stripCssHeight(rows)).toBe(height);
@@ -87,7 +87,7 @@ it('reserves cruise control its own 140 px slot (ET-071)', () => {
   expect(stripRowCount(only('cruise-control'), 592)).toBe(1);
   expect(stripRowCount(only('cruise-control'), 591)).toBe(2);
   // Removing it and ET-084's speed limit from every section at 1280 gives three rows (1242, 1092, then the indicator at 1250).
-  expect(stripRowCount({...ALL, 'cruise-control': false, 'speed-limit': false, 'rest-state': false}, 1280)).toBe(3);
+  expect(stripRowCount({...ALL, 'cruise-control': false, 'speed-limit': false, 'rest-state': false, 'cargo-damage': false}, 1280)).toBe(3);
 });
 
 it('reserves the speed limit sign its own 32 px slot (ET-084)', () => {

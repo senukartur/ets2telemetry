@@ -13,7 +13,7 @@ import {once} from 'node:events';
 import {existsSync, readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
+import {V1_MAX_MINOR, decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
 import type {StorageWorkerHandle} from '../../packages/storage/src/client';
 import {createRecordingRuntime, type RecordingRuntime} from '../../apps/desktop/src/recording-runtime';
 import {GAME_HISTORY_RECORDING} from '../../apps/desktop/src/recording-policy';
@@ -103,7 +103,7 @@ function gatedConnect(timeline: string[], afterEventSeq: string, release: () => 
     const socket = new ClientSocket(net.connect(endpoint), sockets++ === 0 ? {afterEventSeq, until: release} : undefined, fail);
     const write = socket.write.bind(socket);
     socket.write = (bytes: Uint8Array, ...rest: unknown[]) => {
-      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 5}) as ClientMessage;
+      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: V1_MAX_MINOR}) as ClientMessage;
       if (m.kind === 'ack') timeline.push(`ack ${m.data.throughEventSeq}`);
       return write(bytes, ...rest);
     };
