@@ -906,3 +906,7 @@ On [ET-112](https://trello.com/c/bgIyf8U2) the owner approved fixing the partial
 ## ET-119 qualification progress and server results — November 18, 2026
 
 On [ET-119](https://trello.com/c/ecFxl641) the owner approved a connected-account My qualification page, the Lucide Medal icon in navigation, Journal and a provisional icon-only overlay indicator and retained server assessments in Journal/details. The concrete design adds SQLite schema 11, narrow get/refresh/subscribe qualification IPC and a separate bounded utility-process HTTP lane reusing protected account credentials. Server decisions and snapshots remain authoritative; upload receipts never establish qualification. Qualification decorations stay outside the existing export format.
+
+## Pooled upload trailers — November 20, 2026
+
+The owner dropped the trailer replay proof for the Dashboard upload. It failed on the routine startup gap of a resumed game session and blocked qualification, and the owner states that a trailer cannot change within one job. The upload now reports the trailer configurations linked to any member session of the merged trip, one per slot with the later record winning, and the lead trailer's body type is enough for complete trailers. The `recording-intervals`, `trailer-context-unproven` and `trailer-context-changed` reasons are removed. Already uploaded trips are not repaired. See [the upload specification](docs/dashboard-upload.md).
