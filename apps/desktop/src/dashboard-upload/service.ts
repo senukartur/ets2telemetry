@@ -4,6 +4,7 @@ import {UploadScheduler,stored,type UploadStorage,type UploadClock} from './sche
 import {advertisedEventMinor,connectionResponse,registrationResponse,responseFailure,type UploadLimits} from './control-response';
 import type {UploadTransport,UploadHttpResult} from './http';
 import type {UploadServiceCommand,UploadServiceReply} from './service-contract';
+import type {UploadEventMinor} from '../../../../packages/storage/src/upload-sync';
 interface CompanionLifecycle {activate(configuration:import('../../../../packages/storage/src/upload-sync').UploadActiveConfiguration,token:string):Promise<void>;retire():Promise<void>;stop():Promise<void>;uploaded():void}
 const failure=(error:DashboardUploadError):UploadServiceReply=>({ok:false,error});
 function controlFailure(result:UploadHttpResult):DashboardUploadError {
@@ -15,7 +16,7 @@ export class DashboardUploadService {
   readonly scheduler:UploadScheduler;#control=false;#stopped=false;#startup:Promise<void>;#abort=new AbortController();#controlEpoch=0;
   constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,private readonly origin:string,producerVersion:string,publish:(status:DashboardUploadStatus)=>void,time?:UploadClock,private readonly companion?:CompanionLifecycle){this.scheduler=new UploadScheduler(db,http,origin,producerVersion,publish,time,()=>this.companion?.uploaded());this.#startup=stored(db.getUploadConfiguration()).then(async configuration=>{if(configuration.purpose!=='history')throw Error('RECONCILIATION');await stored(db.recoverUploadAttempt({startup:true}));});this.#startup.catch(()=>undefined);}
   /** The body stays the v1.0 control contract; the event minor for new freezes comes from the response header only. */
-  async #verify(token:string):Promise<{owner:DashboardOwner;limits:UploadLimits;contractMinor:0|1|2}|DashboardUploadError>{
+  async #verify(token:string):Promise<{owner:DashboardOwner;limits:UploadLimits;contractMinor:UploadEventMinor}|DashboardUploadError>{
     const result=await this.http.request('connection',token,undefined,this.#abort.signal);if(!result.ok||result.statusCode!==200)return controlFailure(result);
     const value=connectionResponse(result.body);return value?{owner:{origin:this.origin,accountId:value.accountId,companyId:value.companyId,identityEpoch:value.identityEpoch},limits:value.limits,contractMinor:advertisedEventMinor(result.eventVersions)}:'UNSUPPORTED_CONTRACT';
   }

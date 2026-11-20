@@ -1,13 +1,15 @@
 import {contentDigest} from '../../packages/storage/src/sqlite/digest';
 import {randomUUID} from 'node:crypto';
+import {readFileSync} from 'node:fs';
 import {afterEach,beforeEach,describe,expect,it} from 'vitest';
 import {MIGRATIONS,Storage,type SampleInput} from '../../packages/storage/src';
+import type {CargoOpening} from '../../packages/storage/src/api';
 import {openConnection} from '../../packages/storage/src/sqlite/connection';
 import {StorageClient} from '../../packages/storage/src/client';
 import {UploadScheduler,type UploadStorage,type UploadClock} from '../../apps/desktop/src/dashboard-upload/scheduler';
 import type {UploadHttpResult} from '../../apps/desktop/src/dashboard-upload/http';
-import type {UploadWork} from '../../packages/storage/src/upload-sync';
-import {encodeUploadEnvelope,uploadDigest,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
+import type {UploadEventMinor,UploadWork} from '../../packages/storage/src/upload-sync';
+import {encodeUploadEnvelope,readUploadMaterialStamp,uploadDigest,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS} from '../../packages/storage/src/upload-sync';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
 import {discoverRevision} from '../../packages/storage/src/sqlite/upload-discovery';
@@ -27,14 +29,15 @@ async function connectOwner(client:Storage|StorageClient){
   ok(await client.confirmUploadOwner({confirmationId:runId,registrationId,credentialGeneration:'generation',expectedVersion:'0'}));
   return {registrationId,runId};
 }
-async function recordOpening(client:Storage|StorageClient,baseline:boolean|'menu'){
+async function recordOpening(client:Storage|StorageClient,baseline:boolean|'menu',cargoOpening?:CargoOpening){
   const s=new Script(ETS2_A),tripUuid=tripUuidFor(s.session,'1');ok(await client.upsertSession({message:game(s.welcome())}));
   if(baseline){
     const checkpoint=game(s.checkpoint(null));checkpoint.data.state.boundaryOrder='0';
     checkpoint.data.state.configuration.trailers=Array.from({length:10},(_,index)=>index===0&&baseline!=='menu'?{available:true,value:trailer(0,{bodyType:{available:true,value:'curtainsider'}})}:{available:false,reason:'not-observed'});
     ok(await client.recordTrailerBaseline({message:checkpoint}));
   }
-  ok(await client.commitEvent({message:game(s.event(r.jobConfigured(),{simulation:baseline==='menu'?'paused':'running'})),profile:proof(s),effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
+  ok(await client.commitEvent({message:game(s.event(r.jobConfigured(),{simulation:baseline==='menu'?'paused':'running'})),profile:proof(s),...(cargoOpening?{cargoOpening}:{}),
+    effects:[{kind:'trip.open',tripUuid,game:'ets2',gameMode:mode,jobConfiguration:'this-event',recordingCompleteness:'complete',startedUtcMs:1000}]}));
   return {s,tripUuid};
 }
 async function setup(client:Storage|StorageClient,baseline:boolean|'menu'=false){
@@ -714,12 +717,12 @@ function engineOneSamples(storage:Storage,source:Awaited<ReturnType<typeof setup
 }
 const delivered=(storage:Storage,source:Awaited<ReturnType<typeof recordOpening>>)=>ok(storage.commitEvent({message:game(source.s.event(r.delivered())),
   effects:[{kind:'trip.close',tripUuid:source.tripUuid,outcome:'delivered',outcomeEvent:'this-event',closeReason:'outcome',recordingCompleteness:'complete',endedUtcMs:2000}]}));
-// ET-113: the negotiated minor fixes the frozen shape. v1.0 has neither field, v1.1 adds hardModeResult, v1.2 also adds
-// the accounting status of the engine-1 ledger head; every shape validates and is claimed with its exact bytes.
+// The negotiated minor fixes the snapshot fields. Every shape validates and is claimed with its exact bytes.
 it.each([
   [0,undefined,undefined],
   [1,'not-qualified',undefined],
-  [2,'not-qualified',{distance:'complete',fuel:'complete'}]
+  [2,'not-qualified',{distance:'complete',fuel:'complete'}],
+  [3,'not-qualified',{distance:'complete',fuel:'complete'}]
 ] as const)('REG-005/010 freezes an engine-1 delivered trip at contract minor %s with its own snapshot fields',async(minor,hardModeResult,accounting)=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
   engineOneSamples(storage,source);delivered(storage,source);
@@ -729,11 +732,79 @@ it.each([
   expect(envelope.contract).toEqual({major:1,minor});expect(envelope.type).toBe('trip.completed');
   expect(Object.hasOwn(envelope.snapshot,'hardModeResult')).toBe(hardModeResult!==undefined);expect(envelope.snapshot.hardModeResult).toBe(hardModeResult);
   expect(Object.hasOwn(envelope.snapshot,'accounting')).toBe(accounting!==undefined);expect(envelope.snapshot.accounting).toEqual(accounting);
+  expect(Object.hasOwn(envelope.snapshot,'cargoClassification')).toBe(minor===3);
+  expect(envelope.snapshot.cargoClassification).toBe(minor===3?null:undefined);
   expect(envelope.snapshot.observedDistance).toEqual({available:true,value:40,unit:'m'});
   expect(validateUploadEnvelope(envelope)).toBe(true);
   ok(storage.releaseUploadMaterialization({workId}));
   const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1002}));
   expect(attempt.status).toBe('claimed');expect(attempt.payload).toEqual(new Uint8Array(payload));
+});
+
+it.each([2,3] as const)('REG-005/010 compares a deferred cargo fill using event minor %s while preserving frozen receipts and identity',async minor=>{
+  const conn=await openConnection(ws.options({purpose:'history'}));let storage=new Storage(conn);opened.push(storage);
+  const owner=await connectOwner(storage), cargoId='synthetic_cargo', generation=randomUUID();
+  const source={...await recordOpening(storage,false,{cargoId,generation,classification:null}),...owner};
+  // Subsequent sample-only losses leave the already-partial upload summary unchanged.
+  ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));
+  const classification=(JSON.parse(readFileSync('tests/fixtures/dashboard-upload/cargo-classification.json','utf8')) as UploadEnvelope).snapshot.cargoClassification!;
+  async function freeze(contractMinor:UploadEventMinor,createdUtcMs:number){
+    const workId=await complete(storage,source);
+    const result=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs,contractMinor}));
+    ok(storage.releaseUploadMaterialization({workId}));return result;
+  }
+  const first=await freeze(minor,1000);
+  expect(first.status).toBe('frozen');
+  const claim=()=>ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:owner.registrationId,expectedVersion:'1',mode:'any',nowMs:5000}));
+  const attempt=claim(), firstBytes=attempt.payload!, original=JSON.parse(Buffer.from(firstBytes).toString()) as UploadEnvelope;
+  expect(attempt.eventId).toBe(first.eventId);
+  expect(original.snapshot.cargoClassification).toBe(minor===3?null:undefined);
+  ok(storage.recordUploadAttemptOutcome({attemptId:attempt.attemptId!,kind:'retry',retryAtMs:5000,nowMs:5000}));
+  expect(ok(storage.fillCargoClassification({game:'ets2',pluginSessionId:source.s.session,tripUuid:source.tripUuid,cargoId,generation,
+    opening:'event',boundary:'1',classification}))).toBe('filled');
+  expect(ok(storage.pageUploadDiscovery({registrationId:owner.registrationId,after:'0',limit:100})).items)
+    .toContainEqual(expect.objectContaining({tripUuid:source.tripUuid}));
+  const retry=claim(), receiptId=randomUUID();
+  expect(retry.eventId).toBe(first.eventId);expect(retry.payload).toEqual(firstBytes);
+  const ack=(attemptId:string,eventId:string,receiptId:string,contractMinor:UploadEventMinor,duplicate=false)=>ok(storage.commitUploadReceipt({
+    attemptId,statusCode:duplicate?200:202,body:new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:contractMinor},
+      eventId,receiptId,status:duplicate?'duplicate':'stored',firstReceivedAtUtcMs:5000})),
+  }));
+  expect(ack(retry.attemptId!,retry.eventId!,receiptId,1).status).toBe('invalid-response');
+  expect(ack(retry.attemptId!,retry.eventId!,receiptId,minor).status).toBe('delivered');
+  expect(ok(storage.reclaimUploadPayloads({limit:100})).reclaimed).toBe(1);
+  ok(storage.close());
+  const reopened=await openConnection(ws.options({purpose:'history'}));storage=new Storage(reopened);opened.push(storage);
+  expect(ack(retry.attemptId!,retry.eventId!,receiptId,minor,true).status).toBe('duplicate');
+
+  let next=await freeze(minor,2000);
+  if(minor===2){
+    expect(next.status).toBe('equal');
+    expect(claim().status).toBe('empty');
+    // A later ordinary revision can use new capabilities. Merely activating them had no pending work to send.
+    delivered(storage,source);
+    next=await freeze(3,3000);
+  }
+  expect(next.status).toBe('frozen');
+  const second=claim(), updated=JSON.parse(Buffer.from(second.payload!).toString()) as UploadEnvelope;
+  expect(second.eventId).toBe(next.eventId);
+  expect(updated).toMatchObject({contract:{major:1,minor:3},revision:2,type:minor===3?'trip.started':'trip.completed',
+    source:original.source,installationId:original.installationId,bindingId:original.bindingId,
+    snapshot:{hardModeResult:'not-qualified',accounting:{distance:'unknown',fuel:'unknown'},cargoClassification:classification}});
+  expect(updated.snapshot.cargoClassification).toEqual(classification);
+  const stamp=()=>reopened.writer().prepare('SELECT material_digest FROM upload_source_bindings').pluck().get();
+  expect(readUploadMaterialStamp(stamp())?.cargo).toMatch(/^[0-9a-f]{64}$/);
+  expect(ack(second.attemptId!,second.eventId!,randomUUID(),3,true).status).toBe('delivered');
+  expect(ok(storage.reclaimUploadPayloads({limit:100})).reclaimed).toBe(1);
+  expect(reopened.writer().prepare('SELECT payload FROM upload_envelopes ORDER BY revision').pluck().all()).toEqual([null,null]);
+  if(minor===3){
+    const saved=stamp();
+    for(const negotiated of [2,3] as const){
+      ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind:'sample-loss'}));
+      expect((await freeze(negotiated,4000)).status).toBe('equal');
+      expect(stamp()).toBe(saved);
+    }
+  }
 });
 // ET-113: an upgrade to v1.2 never re-encodes queued v1.0/v1.1 bytes. Without a material change the next comparison is
 // equal, so no revision is minted for the new version alone; the next material change freezes a v1.2 revision.
@@ -762,7 +833,7 @@ it.each([0,1] as const)('REG-005/010 keeps a queued minor %s envelope byte-ident
 // ET-113: both receipt statuses echo the frozen event's version; a receipt with another version is not an ACK and
 // leaves the claimed event in flight, so the receipt that echoes it still commits.
 it.each([
-  [0,2,'invalid-response'],[0,0,'delivered'],[1,1,'delivered'],[1,0,'invalid-response'],[2,2,'delivered'],[2,1,'invalid-response']
+  [0,2,'invalid-response'],[0,0,'delivered'],[1,1,'delivered'],[1,0,'invalid-response'],[2,2,'delivered'],[2,1,'invalid-response'],[3,3,'delivered'],[3,2,'invalid-response']
 ] as const)('REG-005/010 commits a receipt for a minor %s event only when it echoes that minor: receipt minor %s is %s',async(minor,receiptMinor,status)=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer();
   const workId=await complete(storage,source),frozen=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000,contractMinor:minor}));

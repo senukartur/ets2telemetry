@@ -2,6 +2,8 @@
 import {MAX_UPLOAD_PROJECTION_PINS,isUploadUuid} from './upload-projection';
 
 export const UPLOAD_MAX_EVENTS=10_000,UPLOAD_MAX_BYTES=64*1024*1024;
+export type UploadEventMinor = 0 | 1 | 2 | 3;
+export const isUploadEventMinor = (value: unknown): value is UploadEventMinor => value === 0 || value === 1 || value === 2 || value === 3;
 export type Check=(value:unknown)=>boolean;
 export const record=(value:unknown):value is Record<string,unknown>=>typeof value==='object' && value!==null && !Array.isArray(value);
 export const shape=(fields:Record<string,Check>):Check=>value=>record(value) && Object.keys(value).length===Object.keys(fields).length && Object.entries(fields).every(([key,check])=>Object.hasOwn(value,key)&&check(value[key]));
@@ -51,7 +53,7 @@ export interface UploadSyncCommands {
   pageUploadDiscovery:{args:{input:{registrationId:string;after:string;limit:number}};value:UploadDiscoveryPage};
   beginUploadMaterialization:{args:{input:{workId:string;tripUuid:string;registrationId:string}};value:UploadWork};
   advanceUploadMaterialization:{args:{input:{workId:string}};value:UploadWork};
-  freezeUploadMaterialization:{args:{input:{workId:string;producerVersion:string;createdUtcMs:number;contractMinor?:0|1|2}};value:UploadWork};
+  freezeUploadMaterialization:{args:{input:{workId:string;producerVersion:string;createdUtcMs:number;contractMinor?:UploadEventMinor}};value:UploadWork};
   releaseUploadMaterialization:{args:{input:{workId:string}};value:UploadWork};
   claimUploadAttempt:{args:{input:{attemptId:string;registrationId:string;expectedVersion:string;mode:'live'|'backfill'|'any';nowMs:number}};value:UploadAttemptResult};
   recordUploadAttemptOutcome:{args:{input:{attemptId:string;kind:'retry'|'authentication'|'configuration'|'reconciliation'|'validation';retryAtMs:number;nowMs:number}};value:UploadAttemptResult};
@@ -78,7 +80,7 @@ const requestChecks:Record<UploadSyncName,Check>={
   freezeUploadMaterialization:v=>{
     if(!record(v))return false;
     const {contractMinor,...rest}=v;
-    if(contractMinor!==undefined&&!one(0,1,2)(contractMinor))return false;
+    if(contractMinor!==undefined&&!isUploadEventMinor(contractMinor))return false;
     return shape({workId:isUploadUuid,producerVersion:v=>text(v)&&Buffer.byteLength(v)<=64,createdUtcMs:safe})(rest);
   },
   claimUploadAttempt:shape({attemptId:isUploadUuid,registrationId:isUploadUuid,expectedVersion:decimal,mode:one('live','backfill','any'),nowMs:safe}),

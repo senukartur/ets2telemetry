@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3';
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
 import {fromAvailability, fromU64Key, toReal, toSafeNumber, u64Key} from '../codec';
 import {fail} from '../errors';
+import {readCargoClassification} from '../cargo-classification';
 import {MAX_UPLOAD_PROJECTION_PINS,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, uploadSnapshotParts,
   type QualifiedOccurrence, type UploadConfiguration, type UploadFacts, type UploadInterval, type UploadMember,
   type UploadProjection, type UploadProjectionBegin, type UploadProjectionPreparation, type UploadProjectionPage, type UploadProjectionPageQuery, type UploadReadiness, type UploadVersions} from '../upload-projection';
@@ -75,6 +76,7 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
   const game = row.game as 'ets2' | 'ats';
   const diesel = tripEnergyPowertrain(db, game, row.truck_configuration_ref, snap.head, snap.logical, row.opened_event_ref, snap.events) === 'diesel';
   const accounting = uploadAccounting(db, snap.head);
+  const cargoClassification = readCargoClassification(row.cargo_classification);
   return {game, pluginSessionId: String(openingSession.plugin_session_uuid), outcome: row.outcome as UploadFacts['outcome'],
     closeReason: row.close_reason as UploadFacts['closeReason'], recordingCompleteness: row.recording_completeness as UploadFacts['recordingCompleteness'],
     openedBy: row.opened_by as 'event'|'checkpoint', checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null,
@@ -86,7 +88,8 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
       && !!get(db,`${ACCOUNTING_PATH} SELECT 1 FROM path WHERE cut_odometer_m IS NOT NULL OR depth=256 AND prefix_ref IS NOT NULL LIMIT 1`,{head:snap.head}) || quantitiesIncomplete(db,snap.head),
     clockAnomaly: opening?.utcMs !== null && opening?.utcMs !== undefined && opening.utcMs !== n(row.started_utc_ms)
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms),
-    hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n), accounting: {...accounting, fuel: diesel ? accounting.fuel : 'unknown'}};
+    hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n), accounting: {...accounting, fuel: diesel ? accounting.fuel : 'unknown'},
+    ...(cargoClassification ? {cargoClassification} : {})};
 }
 
 const unproven=(recordingLoss=false):RuleContext=>({version:2,status:'unproven',items:[],recordingLoss});
