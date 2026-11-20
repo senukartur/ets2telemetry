@@ -1,4 +1,3 @@
-import {fenceJoinedRuleEvidence,RULE_LOSSES,ruleEventType} from './trailer-baselines';
 import {startReplayBudget} from './quantities';
 import {retainUploadDeletion} from './upload-discovery';
 import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
@@ -220,7 +219,6 @@ function addInterval(c: EffectContext, interval: CompletenessInterval, ifAbsent 
   const clock = interval.sourceClockId === undefined ? null : clockRef(c.db, c.session.id, 'source-monotonic', interval.sourceClockId);
   statement(c.db, insert('completeness_intervals', ['plugin_session_ref', 'trip_ref', 'kind', 'start_utc_ms', 'end_utc_ms', 'start_monotonic_ns', 'end_monotonic_ns', 'source_clock_ref', 'first_event_seq', 'last_event_seq', 'detail_json', 'created_utc_ms']))
     .run(c.session.id, trip, kind, startUtc, endUtc, startMonotonic, endMonotonic, clock, first, last, detail, c.now);
-  if(trip===null&&RULE_LOSSES.some(loss=>loss===kind))fenceJoinedRuleEvidence(c.db,c.game,c.session.id,first,clock,startMonotonic);
 }
 
 /** Applies typed trip effects in order. Every reference is resolved inside the transaction; any failure aborts it. */
@@ -355,7 +353,6 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
         u64Key(occurred.configurationRevision), u64Key(occurred.boundaryOrder), payload, BigInt(m.version.minor), redelivered ? 1n : 0n, now);
     if (result.changes !== 1) fail('CONSTRAINT_VIOLATION');
     const eventRef = BigInt(result.lastInsertRowid);
-    if(ruleEventType(record.type))fenceJoinedRuleEvidence(db,session.game,session.id,seqKey);
     normalize(db, session.id, eventRef, record);
     if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
     if (input.hardMode) updateOpenHardMode(db, session.game, input.hardMode, now, input.hardModeFresh === true, 'frozen');
@@ -414,7 +411,6 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     statement(db, insert('event_gaps', ['plugin_session_ref', 'first_event_seq', 'last_event_seq', ...CAUSES.map(([, c]) => c), 'first_lost_monotonic_ns', 'first_lost_monotonic_ns_state',
       'last_lost_monotonic_ns', 'last_lost_monotonic_ns_state', 'source_clock_ref', 'redelivered', 'committed_utc_ms']))
       .run(session.id, firstKey, lastKey, ...CAUSES.map(([key]) => u64Key(d.causes[key])), firstLost, firstLostState, lastLost, lastLostState, clock, d.redelivered ? 1n : 0n, now);
-    fenceJoinedRuleEvidence(db,session.game,session.id,firstKey);
     // The carrier of a gap is the first eventSeq it newly covers: previouslyCoveredThrough + 1, or the gap's own first
     // eventSeq when it starts beyond that (ET-016, J7). It is at most lastEventSeq, which is above the coverage here.
     const firstNew = BigInt(previouslyCoveredThrough) + 1n, carrier = BigInt(d.firstEventSeq) > firstNew ? BigInt(d.firstEventSeq) : firstNew;
@@ -701,8 +697,7 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
   if (typeof interval !== 'object' || interval === null) fail('INVALID_INPUT');
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
   const ifAbsent = options.ifAbsent === true;
-  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id));
-    else if(Number(db.pragma('user_version',{simple:true}))>=7&&(RULE_LOSSES as readonly string[]).includes(interval.kind))projectSessionBounds(db,session.id); });
+  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id)); });
 }
 
 /**
