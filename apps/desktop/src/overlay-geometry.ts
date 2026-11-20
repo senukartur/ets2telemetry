@@ -20,21 +20,21 @@ export interface DipRect {x: number; y: number; width: number; height: number}
 /** Distance from the client area's edges; the strip sits closer to the top and bottom edges. */
 export const OVERLAY_MARGIN_DIP = 16;
 export const STRIP_TOP_MARGIN_DIP = 8;
-/** The strip's widest window at scale settings up to 1; above 1 it is this width times the setting (ET-045e decision Z3). */
-export const STRIP_MAX_WIDTH_DIP = 1280;
+/** Initial strip width before the game's client area is known; never limits the placed overlay. */
+export const STRIP_INITIAL_WIDTH_DIP = 1280;
 /** The strip's narrowest content width in CSS px (STRIP_MIN_WIDTH_DIP until ET-045e); the window is at least this × zoom. */
 export const STRIP_MIN_WIDTH_CSS = 480;
 /** Absorbs binary floating-point noise in a scaled height, such as 110 × 1.1 = 121.00000000000001. */
 const HEIGHT_EPSILON = 1e-6;
 
 /**
- * The size each layout is styled for at zoom 1, in CSS px. The strip's entry is its maximum width and the height of one
- * row; its actual height depends on the enabled sections (`overlaySize`, `overlayWindowSize`), and it narrows to fit
- * smaller client areas. The card, cluster and HUD are never lower than their entry times the zoom and grow only when
+ * The size each layout is styled for at zoom 1, in CSS px. The strip's entry is a preview reference width and the height
+ * of one row; its placed width fills the game client and its height depends on the enabled sections. The card, cluster
+ * and HUD are never lower than their entry times the zoom and grow only when
  * their enabled sections need more rows (ET-012d).
  */
 export const OVERLAY_NOMINAL_SIZE: Readonly<Record<OverlayLayout, {width: number; height: number}>> = Object.freeze({
-  strip: Object.freeze({width: STRIP_MAX_WIDTH_DIP, height: stripCssHeight(1)}),
+  strip: Object.freeze({width: STRIP_INITIAL_WIDTH_DIP, height: stripCssHeight(1)}),
   card: Object.freeze({width: 300, height: 360}),
   cluster: Object.freeze({width: 440, height: 220}),
   hud: Object.freeze({width: 320, height: 320})
@@ -69,17 +69,17 @@ function rowLayoutSize(layout: RowLayout, zoom: number, sections: OverlaySection
     height: Math.max(Math.round(nominal.height * zoom), surfaceHeightDip(layoutContentCss(layout, sections), LAYOUT_BORDER_CSS[layout], zoom))};
 }
 /**
- * The strip's widest window for a scale setting (ET-045e decision Z3, owner decision D5): 1280 DIP up to the setting 1
- * and 1280 × setting above it, so a smaller setting only shrinks the text and never the width it may use.
+ * Bootstrap width before a game client is known. The controller replaces it with the full available client width
+ * before showing the window; the scale only controls text size and reserved rows in the placed strip.
  */
-const stripMaxWidth = (scale: number) => STRIP_MAX_WIDTH_DIP * Math.max(1, scale);
+const stripInitialWidth = (scale: number) => STRIP_INITIAL_WIDTH_DIP * Math.max(1, scale);
 
 /**
  * The window size of a layout at this scale setting in this client area, or undefined when it does not fit inside the
  * margins. With zoom = overlayZoom(scale), the card, cluster and HUD are round(nominal width × zoom) wide and
  * max(round(nominal height × zoom), ceil(content × zoom + 2 × border × max(1, zoom))) high, where `content` is the CSS
  * height the reserved rows of their enabled sections need inside the outer border (overlay-rows.ts). The strip is
- * floor(min(1280 × max(1, scale), client width − 32)) wide, at least round(480 × zoom), and
+ * floor(client width − 32) wide at every scale, at least round(480 × zoom), and
  * ceil(STRIP_ROW_HEIGHT_CSS × rows × zoom + 2 × max(1, zoom)) high, where `rows` is what its enabled sections need at its
  * CSS width floor(width / zoom) and that zoom (overlay-strip.ts). The client width is the game's client area, never the
  * display's. Nothing shrinks automatically: a layout that does not fit hides as a whole. `sections` defaults to every
@@ -92,7 +92,7 @@ export function overlaySize(layout: OverlayLayout, client: DipRect, scale: numbe
   if (!(zoom > 0)) return undefined;
   const margin = overlayMargins(layout);
   if (layout === 'strip') {
-    const width = Math.floor(Math.min(stripMaxWidth(scale), client.width - 2 * margin.x));
+    const width = Math.floor(client.width - 2 * margin.x);
     if (width < Math.round(STRIP_MIN_WIDTH_CSS * zoom)) return undefined;
     const rows = stripRowCount(sections, Math.floor(width / zoom), zoom);
     if (rows === undefined) return undefined;
@@ -115,7 +115,7 @@ export function overlaySize(layout: OverlayLayout, client: DipRect, scale: numbe
 export function overlayWindowSize(layout: OverlayLayout, scale: number, sections: OverlaySections = DEFAULT_OVERLAY_SECTIONS): {width: number; height: number} {
   const zoom = overlayZoom(scale);
   if (layout !== 'strip') return rowLayoutSize(layout, zoom, sections);
-  const width = Math.round(stripMaxWidth(scale));
+  const width = Math.round(stripInitialWidth(scale));
   // The CSS width is at least floor(1280 / 0.7) = 1828 at every setting in [0.5, 3], wider than every strip item
   // (overlay-strip.ts), so the row count is always defined here.
   return {width, height: stripHeight(stripRowCount(sections, Math.floor(width / zoom), zoom) ?? 1, zoom)};
@@ -125,8 +125,8 @@ export function overlayWindowSize(layout: OverlayLayout, scale: number, sections
  * The overlay's bounds for a placement: `x` and `y` are fractions of the free space between the margins once the
  * window is taken away, so left = round(client.x + margin + x × free width) and the same for the top. The default
  * placements (the setting 1, zoom 0.7) reproduce the ET-012a anchors:
- * strip: top centre, width min(1280, client width − 32), 8 below the top edge, 82 high with every section (three rows at
- * 1280); the height follows the enabled sections and the width, and the strip needs width ≥ 336 + 32 and height ≥ its
+ * strip: full available client width (client width − 32), 8 below the top edge; the height follows the enabled sections
+ * and the width (56 high with every section in a 1920 DIP client), and the strip needs width ≥ 336 + 32 and height ≥ its
  * own height + 16.
  * card: top right with 16 margins; 210 × 337 with every section (never below 210 × 252), so it needs 242 × 369.
  * cluster: bottom left with 16 margins; 308 × 232 with every section (never below 308 × 154), so it needs 340 × 264.

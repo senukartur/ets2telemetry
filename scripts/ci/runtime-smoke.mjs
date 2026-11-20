@@ -198,8 +198,8 @@ try {
   application = await launch(config.diagnostics);
   launcher = application.process();
   phase('launch-returned');
-  // As in the seeded Journal smoke, the Journal shard keeps its explicit PNGs and action/DOM trace without the screencast.
-  await application.context().tracing.start({screenshots: !(config.scenario === 'ui' && config.uiCase === 'journal'), snapshots: true});
+  // UI shards keep their explicit PNG matrix and action/DOM trace without duplicating frames in a continuous screencast.
+  await application.context().tracing.start({screenshots: config.scenario !== 'ui', snapshots: true});
   tracing = true;
   phase('tracing-started');
   let {dashboard: window, overlay} = await rendererPages(application).catch(error => {
@@ -542,7 +542,7 @@ try {
       await writeFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'), settingsBytes);
       phase('ui-readonly-launch-requested');
       application = await launch(config.diagnosticsRestart); launcher = application.process();
-      await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;
+      await application.context().tracing.start({screenshots: false, snapshots: true}); tracing = true;
       ({dashboard: window, overlay} = await rendererPages(application)); await waitForStartup(window);
       uiProgress('ui-readonly-journey-started');
       await runUiReadOnly({application, dashboard: window, config, record: result.ui, settingsBytes, progress: uiProgress});

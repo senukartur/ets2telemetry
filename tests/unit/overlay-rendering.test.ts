@@ -232,7 +232,7 @@ it.each(['strip', 'card', 'cluster', 'hud'] as const)('renders exactly one Hard 
     const struck = expected.state === 'lost' && (layout === 'strip' || layout === 'hud');
     expect(element.includes('overlay-hm-struck'), label).toBe(struck);
     if (layout === 'strip') {
-      expect(element, label).toMatch(/^<span class="overlay-item( overlay-group-start)? overlay-hard-mode" [^>]*style="max-width:140px">/);
+      expect(element, label).toMatch(/^<span class="overlay-item( overlay-group-start)? overlay-hard-mode" [^>]*style="max-width:160px">/);
       // A group divider precedes the indicator only when a section precedes it.
       expect(element.startsWith('<span class="overlay-item overlay-group-start'), label).toBe(ids.length > 0);
       expect(element, label).toContain(`<span class="overlay-value overlay-hm-text${struck ? ' overlay-hm-struck' : ''}">HM</span>`);

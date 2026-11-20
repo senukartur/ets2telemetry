@@ -42,10 +42,10 @@ export const STRIP_FIXED_WIDTH_SECTIONS: ReadonlySet<OverlaySectionId> = new Set
 
 /**
  * ET-070 (owner decisions D2, D3): the fixed Hard Mode indicator is the strip's last item after every enabled section. Its
- * cap holds the group divider's 15 px padding, the icon, "HM", a fixed 14 px cue slot and the qualification medal's
- * additional 40 px reserve, so a state change never resizes it or moves a section.
+ * cap holds the group divider's 15 px padding, the icon, "HM", a fixed 14 px cue slot and a 60 px reserve for the
+ * qualification divider, medal and matching cue, so a state change never resizes it or moves a section.
  */
-export const STRIP_HARD_MODE_MAX_WIDTH_CSS = 140;
+export const STRIP_HARD_MODE_MAX_WIDTH_CSS = 160;
 
 /**
  * The surface border's width in CSS px at this zoom. Chromium snaps a nonzero border thinner than one device pixel up to
