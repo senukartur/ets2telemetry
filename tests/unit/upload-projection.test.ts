@@ -165,6 +165,12 @@ describe('pooled trailers and stored whole-trip rule context',()=>{
     expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
     expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
   });
+  it('keeps the lead body type one member session recorded when a later record of the slot has none',()=>{
+    const f=recorded(config('2',0,known('trailer-a'),known('curtainsider')),config('5',0,known('trailer-a'),absent,ETS2_B)),summary=mapped(f).summary.snapshot;
+    expect(summary.trailers).toEqual({complete:true,items:[leadItem]});
+    expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
+    expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
+  });
   it('reports no trailer and the fixed reason when no configuration is linked',()=>{
     const f=recorded(),summary=mapped(f).summary.snapshot;
     expect(summary.trailers).toEqual({complete:false,items:[]});

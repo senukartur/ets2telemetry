@@ -166,10 +166,10 @@ type UploadTrailer = UploadSummary['snapshot']['trailers']['items'][number];
 export const usable = (v: Available<string>) => v.available && v.value.trim().length > 0;
 /** The lead trailer's body type is the whole rule input; the other slots are provenance. */
 export const leadTrailerKnown = (items: readonly Pick<UploadTrailer, 'index' | 'bodyType'>[]) => items.some(item => item.index === 0 && usable(item.bodyType));
-/** Pools every member session's records: one per slot, where a later configuration replaces an earlier one. */
+/** Pools every member session's records, one per slot. A later record replaces an earlier one unless that would lose a known body type. */
 function poolTrailer(items: UploadTrailer[], c: UploadConfiguration): void {
   const item = {index: c.index, id: c.idValue, bodyType: c.bodyType, chainType: c.chainType}, at = items.findIndex(i => i.index === c.index);
-  if (at < 0) items.push(item); else items[at] = item;
+  if (at < 0) items.push(item); else if (usable(item.bodyType) || !usable(items[at].bodyType)) items[at] = item;
 }
 
 /** Complete private pages are required. This result still needs a transactional root/owner freeze before publication. */
