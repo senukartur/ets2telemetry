@@ -35,7 +35,7 @@ function unsupported(): never {
 }
 
 function tokensIn(source: string) {
-  const matcher = /\s+|\/\/[^\r\n]*|#[^\r\n]*|\/\*[\s\S]*?\*\/|"(?:[^"\\\r\n]|\\[^\r\n])*"|@include|[{}:[\]]|[^\s{}:[\]"#]+/y;
+  const matcher = /\s+|\/\/[^\r\n]*|#[^\r\n]*|\/\*[\s\S]*?\*\/|"(?:[^"\\\r\n]|\\[^\r\n])*"|@include|[{}:[\]]|(?:[^\s{}:[\]"#/]|\/(?![/*]))+/y;
   const tokens: string[] = [];
   while (matcher.lastIndex < source.length) {
     const token = matcher.exec(source)?.[0];

@@ -19,6 +19,8 @@ describe('official cargo catalog (REG-009)', () => {
       'synthetic_heavy', 'synthetic_official_extra', 'synthetic_plain', 'synthetic_same', 'synthetic_sensitive',
     ]);
     expect(conflicts).toEqual(new Set(['synthetic_conflict']));
+    // The Packer fixtures put a line comment against the valuable flag's
+    // value and a block comment against the heavy cargo's fragility value.
     expect(definitions.get('synthetic_sensitive')).toEqual({
       fragility: 0.75,
       valuable: true,
@@ -28,7 +30,7 @@ describe('official cargo catalog (REG-009)', () => {
       groups: ['construction', 'fragile'],
     });
     expect(definitions.get('synthetic_heavy')).toEqual({
-      fragility: 0.65, valuable: false, adrClass: null, overweight: true, oversize: true, groups: ['gooseneck'],
+      fragility: 0.75, valuable: false, adrClass: null, overweight: true, oversize: true, groups: ['gooseneck'],
     });
     expect(definitions.get('synthetic_official_extra')?.groups).toEqual(['inloader']);
     expect(definitions.get('synthetic_plain')).toEqual({
