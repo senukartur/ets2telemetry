@@ -273,7 +273,7 @@ void failure_cleanup() {
     host.throw_event = 0; host.fail_event = 0;
     require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_ok, "failed init allows retry");
     host.throw_cleanup = true; adapter->shutdown(); auto stopped = read(*adapter);
-    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 20, "throwing unregister isolates all fourteen channel and six event cleanup operations");
+    require(host.events.empty() && host.channels.empty() && stopped->continuity.callback_failures == 21, "throwing unregister isolates all fifteen channel and six event cleanup operations");
   }
   auto adapter = std::make_unique<Adapter>(); Host host; auto params = host.params(); host.erroneous = "truck.engine.rpm";
   require(adapter->initialize(SCS_TELEMETRY_VERSION_1_01, &params) == SCS_RESULT_generic_error && host.channels.empty() && host.events.empty(), "unexpected channel registration errors fail closed");
