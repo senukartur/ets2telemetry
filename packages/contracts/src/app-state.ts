@@ -14,7 +14,7 @@ export type RecordingTarget = 'history' | 'synthetic' | 'replay';
  * failure is being retried; the selected source is not recorded; this plugin session continues live-only (the database
  * is behind the plugin); or recording stopped for the service lifetime.
  */
-export type RecordingState = 'opening' | 'waiting' | 'recording' | 'paused' | 'interrupted' | 'retrying' | 'not-recorded-source' | 'live-only' | 'stopped';
+export type RecordingState = 'opening' | 'waiting' | 'recording' | 'paused' | 'interrupted' | 'retrying' | 'buffering' | 'not-recorded-source' | 'live-only' | 'stopped';
 /**
  * The closed set of recording codes: the storage error codes, the trip recorder's codes and the ACK pipeline's own
  * failure codes. apps/desktop/src/recording-status.ts asserts at compile time that it equals them.

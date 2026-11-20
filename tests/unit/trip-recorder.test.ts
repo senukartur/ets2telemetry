@@ -903,6 +903,25 @@ describe('ET-112b2b resolving closed pending memberships from a later proof', ()
   const context = {receivedUtcMs: RECEIVED_UTC};
   const proofOf = (s: Script, scope = 'a'.repeat(64)): ProfileObservation => ({version: 1, scope, binding: 'b'.repeat(64), game: 'ets2', pluginSessionId: s.session,
     processInstanceId: s.welcome().source.processInstanceId, sourceClockId: s.clockId, afterMonotonicNs: '0', loadGeneration: 1});
+
+  it('does not use current profile or Hard Mode evidence for an archived event or reading', async () => {
+    const s = new Script(ETS2_A), storage = new ModelStorage();
+    const profileEvidence = vi.fn(() => proofOf(s));
+    const hardModeEvidence = vi.fn(() => ({assessment: unknownHardMode(1), binding: null, pluginSessionId: null, sourceMonotonicNs: null}));
+    const recorder = new TripRecorderSink(storage, {profileEvidence, hardModeEvidence});
+    expect((await recorder.openSession(s.welcome())).ok).toBe(true);
+    const archived = {...context, historyReplay: true};
+    expect(recorder.observe(s.checkpoint(null), archived).ok).toBe(true);
+    expect((await recorder.commit(s.event(r.jobConfigured()), archived)).ok).toBe(true);
+    expect(recorder.observe(s.snapshot(), archived).ok).toBe(true);
+    expect(profileEvidence).not.toHaveBeenCalled();
+    expect(hardModeEvidence).not.toHaveBeenCalled();
+    expect(recorder.observe(s.snapshot(), context).ok).toBe(true);
+    expect((await recorder.commit(s.event(r.delivered()), context)).ok).toBe(true);
+    expect(profileEvidence).toHaveBeenCalled();
+    expect(hardModeEvidence).toHaveBeenCalled();
+  });
+
   /** A trip opened and delivered as eventSeq 1 and 2 while no proof exists; the proof then appears with the next reading. */
   async function deliveredWithoutProof(storage: ModelStorage) {
     const s = new Script(ETS2_A), evidence: {profile?: ProfileObservation} = {};

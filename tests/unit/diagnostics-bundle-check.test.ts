@@ -106,7 +106,7 @@ describe('names outside the runtime strings', () => {
     const unions: Record<keyof typeof ENUMS, Record<string, true>> = {
       serviceHealth: {starting: true, ready: true, restarting: true, failed: true, stopping: true} satisfies Record<ServiceHealth, true>,
       storageHealth: {pending: true, verified: true, failed: true} satisfies Record<StorageHealth, true>,
-      recordingState: {disabled: true, unknown: true, opening: true, waiting: true, recording: true, paused: true, interrupted: true, retrying: true, 'not-recorded-source': true,
+      recordingState: {disabled: true, unknown: true, opening: true, waiting: true, recording: true, paused: true, interrupted: true, retrying: true, buffering: true, 'not-recorded-source': true,
         'live-only': true, stopped: true} satisfies Record<RecordingHealth['state'], true>,
       recordingTarget: {history: true, synthetic: true, replay: true} satisfies Record<RecordingTarget, true>,
       tripPhase: {idle: true, active: true, 'awaiting-outcome': true, 'reload-check': true} satisfies Record<RecordingTrip['phase'], true>,

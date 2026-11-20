@@ -3,10 +3,11 @@
 // it to main on its parent port through `RecordingStatusPublisher`, which coalesces changes. Main validates every report
 // with `parseRecordingHealth` before it reaches AppState.health.recording, never derives the status itself, and adds the
 // committed losses of every service process with `addLosses`. Fixed enums and counts only. Renderer-safe: type imports
-// only. See docs/telemetry-service-v1.md#recording-status-et-015c.
+// and storage error codes only. See docs/telemetry-service-v1.md#recording-status-et-015c.
 import type {RecordingCode, RecordingHealth, RecordingLosses, RecordingState, RecordingTarget, RecordingTrip, SourceSelection} from '../../../packages/contracts/src';
 import type {RecordingCompleteness, StorageErrorCode} from '../../../packages/storage/src/api';
 import type {TripView} from '../../../packages/telemetry-core/src/index';
+import {REOPEN_RETRYABLE_CODES} from '../../../packages/storage/src/errors';
 import type {SinkErrorCode} from './durable-sink';
 import type {HistoryState} from './history-storage';
 import type {DeliveryFailureCode} from './v1-durable-delivery';
@@ -31,7 +32,7 @@ const CODE_TABLE: Readonly<Record<RecordingCode, true>> = {
 };
 /** The closed set of codes a recording status may carry (G2). */
 export const RECORDING_CODES: readonly RecordingCode[] = Object.freeze(Object.keys(CODE_TABLE) as RecordingCode[]);
-const RECORDING_STATES: readonly RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped'];
+const RECORDING_STATES: readonly RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'buffering', 'not-recorded-source', 'live-only', 'stopped'];
 const TARGETS: readonly RecordingTarget[] = ['history', 'synthetic', 'replay'];
 const PHASES: readonly RecordingTrip['phase'][] = ['idle', 'active', 'awaiting-outcome', 'reload-check'];
 const COMPLETENESS: readonly RecordingTrip['completeness'][] = ['unknown', 'partial', 'complete', null];
@@ -58,12 +59,16 @@ export interface RecordingStatusInput {
   recorder: boolean;
   target: RecordingTarget;
   /** The database and the code of its failure, if any. */
-  history: {state: HistoryState; code: StorageErrorCode | null};
+  history: {state: HistoryState; code: StorageErrorCode | null; recovering?: boolean};
   /** The selections whose connections record (R3, R10). */
   durableSelections: readonly SourceSelection[];
   v1: Pick<V1SourceState, 'selection' | 'status' | 'durable'>;
   /** G9: the ACK pipeline's retry code, set by a retryable commit or sample failure and cleared by a successful write. */
   retryCode: string | null;
+  /** An independent on-disk queue holds data waiting for SQLite. */
+  buffered?: boolean;
+  /** The independent file writer is unavailable. */
+  journalFailure?: string;
   /**
    * Whether the current selection was recording or paused (durable delivery active with fresh, connected or paused v1 data)
    * since it was selected. A connection that has not recorded yet then reads `waiting`; one that has reads `interrupted`.
@@ -78,6 +83,7 @@ const recordingCode = (code: string | null | undefined): RecordingCode => isReco
 /**
  * G3: the recording status; the first matching rule wins.
  * 1. No trip recorder: `disabled`.
+ * The emergency writer's failure takes precedence. Pending files show `buffering` during automatic recovery.
  * 2. The database is not open yet (`idle`, `opening`): `opening`.
  * 3. The database is unavailable (or closed): `stopped` with its code (G10).
  * 4. Durable delivery failed: `live-only` for ACK_AHEAD_OF_STORAGE (this plugin session), otherwise `stopped` with the code.
@@ -93,7 +99,16 @@ export function deriveRecordingStatus(input: RecordingStatusInput): RecordingHea
   const status = (state: RecordingState, code: RecordingCode | null = null): RecordingHealth =>
     ({state, target: input.target, code, losses: {...input.losses}, trip: input.trip && {...input.trip}});
   const {history, v1} = input;
-  if (history.state === 'idle' || history.state === 'opening') return status('opening');
+  if (input.journalFailure) return status('stopped', recordingCode(input.journalFailure));
+  const opening = history.state === 'idle' || history.state === 'opening';
+  if (input.buffered && v1.durable.state !== 'failed') {
+    if (opening || history.recovering) return status('buffering');
+    if (history.state === 'open' && input.retryCode !== null) {
+      const code = recordingCode(input.retryCode);
+      return REOPEN_RETRYABLE_CODES.has(code as StorageErrorCode) ? status('buffering') : status('stopped', code);
+    }
+  }
+  if (opening) return status('opening');
   if (history.state !== 'open') return status('stopped', recordingCode(history.code ?? 'STORAGE_CLOSED'));
   if (v1.durable.state === 'failed') return v1.durable.code === 'ACK_AHEAD_OF_STORAGE' ? status('live-only', 'ACK_AHEAD_OF_STORAGE') : status('stopped', recordingCode(v1.durable.code));
   if (!input.durableSelections.includes(v1.selection)) return status('not-recorded-source');

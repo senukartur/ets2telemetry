@@ -50,7 +50,7 @@ const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 export const ENUMS = Object.freeze({
   serviceHealth: ['starting', 'ready', 'restarting', 'failed', 'stopping'],
   storageHealth: ['pending', 'verified', 'failed'],
-  recordingState: ['disabled', 'unknown', 'opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped'],
+  recordingState: ['disabled', 'unknown', 'opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'buffering', 'not-recorded-source', 'live-only', 'stopped'],
   recordingTarget: ['history', 'synthetic', 'replay'],
   tripPhase: ['idle', 'active', 'awaiting-outcome', 'reload-check'],
   tripCompleteness: ['unknown', 'partial', 'complete'],

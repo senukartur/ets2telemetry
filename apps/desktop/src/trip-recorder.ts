@@ -392,7 +392,7 @@ export class TripRecorderSink implements DurableSink {
 
   async commit(message: CoverageMessage, context: CommitContext): Promise<SinkResult<CommitResult>> {
     const key = this.evidenceKey(message);
-    const capture = this.capturedEvidence.get(key) ?? context.hardModeCapture ?? this.capture(message);
+    const capture = context.historyReplay ? undefined : this.capturedEvidence.get(key) ?? context.hardModeCapture ?? this.capture(message);
     if (capture) {this.capturedEvidence.clear(); this.capturedEvidence.set(key, capture); this.pendingCaptures.add(capture);}
     this.retireUnownedCheckOwner();
     if (capture) this.prepareCheckCapture(message, capture, false);
@@ -498,7 +498,7 @@ export class TripRecorderSink implements DurableSink {
       if (!hydrated.ok) return refused(RECORDER_CODE[hydrated.code]);
       next = hydrated.state;
     }
-    const profile=this.options.profileEvidence?.();
+    const profile=context.historyReplay?undefined:this.options.profileEvidence?.();
     const read = stepTrip(next, reading(message,profile));
     if (!read.ok) return refused(RECORDER_CODE[read.code]);
     this.state = read.state;
@@ -508,7 +508,7 @@ export class TripRecorderSink implements DurableSink {
     const view=tripView(this.state,message.source.game);
     this.pendingProfile=undefined;
     const normalizedBoundary=normalizeV1State(message.data.state,message.data.status);
-    const status=this.options.profileStatus?.(),retained=this.trustedPredecessor,point=session.lastReading;
+    const status=context.historyReplay?undefined:this.options.profileStatus?.(),retained=this.trustedPredecessor,point=session.lastReading;
     if(retained){
       const sameProfile=this.lastReadingProfile && this.lastReadingProfile.binding===retained.profile.binding && this.lastReadingProfile.scope===retained.profile.scope
         && this.lastReadingProfile.loadGeneration===retained.profile.loadGeneration && this.lastReadingProfile.pluginSessionId===retained.profile.pluginSessionId
@@ -564,7 +564,8 @@ export class TripRecorderSink implements DurableSink {
     this.pendingResolve=replayDrained && resolveKey!==undefined && !view.current && this.client.resolvePendingMemberships && this.state.games[message.source.game].pending.length===0
       && !session.profileChangePending && resolveKey!==this.resolvedProofKey ? {key:resolveKey,pluginSessionId:message.source.pluginSessionId} : undefined;
     // H2, H7: the sample sees the trip state that the commits before it in the FIFO left, and this reading.
-    const sampled = sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
+    const sampled = context.restoreCheckpoint ? {state: this.sampler, row: undefined}
+      : sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
     this.sampler = sampled.state;
     if (sampled.row) {
       if(!replayDrained)sampled.row.tripUuid=null;

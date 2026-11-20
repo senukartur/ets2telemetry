@@ -116,6 +116,7 @@ Columns:
 | `tests/unit/guarded-fs.test.ts` | Node unit (Vitest) | harness: REG-015 | T, V (et-017) | ET-017 (PR-2) | PR (tests job, `npm test`) | security |
 | `tests/unit/history-invariants.test.ts` | Node unit (Vitest) | REG-005, REG-006, REG-012 | F, T, V (et-019) | ET-019 (PR-1) | PR (tests job, `npm test`) | ACK, dedup, gap, trip completeness |
 | `tests/unit/history-samples.test.ts` | Node unit (Vitest) | REG-001, REG-002, REG-003, REG-009, REG-018 | R, F | ET-015b (#85) | PR (tests job, `npm test`) | gap |
+| `tests/unit/emergency-journal.test.ts` | Node unit (Vitest) | REG-006, REG-007, REG-010, REG-012 | R | ET-037 | PR (tests job, `npm test`) | durability, source validation |
 | `tests/unit/history-storage.test.ts` | Node unit (Vitest) | REG-007, REG-011 | R | ET-013 (#60); ET-038 | PR (tests job, `npm test`) | regression |
 | `tests/unit/installer-driver-provenance.test.ts` | Node unit (Vitest) | REG-017 (historical provenance) | T, V (et-001) | ET-001 (#5) | PR (tests job, `npm test`) | — |
 | `tests/unit/installer-guard.test.ts` | Node unit (Vitest) | REG-013, REG-017, REG-019 | T, V (et-018) | ET-018 (PR-1); ET-045g; ET-045h; ET-068 | PR (tests job, `npm test`) | security, regression |
