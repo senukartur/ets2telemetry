@@ -1,8 +1,12 @@
 import {readFileSync} from 'node:fs';
 import {describe,expect,it} from 'vitest';
-import {canonicalUpload,decodeUploadReceipt,encodeUploadEnvelope,uploadMaterialDigest,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
+import {canonicalUpload,decodeUploadReceipt,encodeUploadEnvelope,readUploadMaterialStamp,uploadMaterialDigest,uploadMaterialStamp,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
 import type {UploadSummary} from '../../packages/storage/src/upload-projection';
+import type {UploadEventMinor} from '../../packages/storage/src/upload-sync';
 const summary=JSON.parse(readFileSync('tests/fixtures/dashboard-upload/continued-summary.json','utf8')).expected as UploadSummary;
+// Unchanged synthetic VTC-167 server contract example. The desktop's audit maps unavailable evidence to not-qualified.
+const serverCargoFixture=JSON.parse(readFileSync('tests/fixtures/dashboard-upload/cargo-classification.json','utf8')) as Omit<UploadEnvelope,'snapshot'> &
+  {snapshot:Omit<UploadEnvelope['snapshot'],'hardModeResult'>&{hardModeResult:'unknown'}};
 const id='80000000-0000-4000-8000-000000000001';
 function envelope():UploadEnvelope {return {...structuredClone(summary),contract:{major:1,minor:0},producer:{application:'ets2telemetry',version:'test'},eventId:id,revision:1,installationId:id,bindingId:id,delivery:{mode:'backfill',syncRunId:id},type:'trip.completed',createdUtcMs:0};}
 const bytes=(v:unknown)=>new TextEncoder().encode(typeof v==='string'?v:JSON.stringify(v));
@@ -88,13 +92,66 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
     const e0=envelope();e0.snapshot.accounting={distance:'unknown',fuel:'unknown'};expect(validateUploadEnvelope(e0)).toBe(false);
     expect(validateUploadEnvelope({...structuredClone(e2),contract:{major:1,minor:3}})).toBe(false);
   });
-  it('accepts a receipt that echoes minor 2 and rejects minor 3',()=>{
-    const receipt={contract:{major:1,minor:2},eventId:id,receiptId:id,status:'stored',firstReceivedAtUtcMs:0};
-    expect(decodeUploadReceipt(bytes(receipt),202,id)).toEqual(receipt);
-    expect(decodeUploadReceipt(bytes({...receipt,contract:{major:1,minor:3}}),202,id)).toBeUndefined();
+  it.each([2,3] as const)('accepts a stored or duplicate receipt that echoes minor %s',minor=>{
+    const receipt={contract:{major:1,minor},eventId:id,receiptId:id,status:'stored',firstReceivedAtUtcMs:0};
+    expect(decodeUploadReceipt(bytes(receipt),202,id,minor)).toEqual(receipt);
+    const duplicate={...receipt,status:'duplicate'};
+    expect(decodeUploadReceipt(bytes(duplicate),200,id,minor)).toEqual(duplicate);
+    expect(decodeUploadReceipt(bytes({...receipt,contract:{major:1,minor:4}}),202,id)).toBeUndefined();
     // Bound to the frozen event's minor, only that minor is a receipt; null (an unreadable frozen version) accepts none.
-    expect([0,1,2].map(minor=>decodeUploadReceipt(bytes(receipt),202,id,minor as 0|1|2)!==undefined)).toEqual([false,false,true]);
+    const supported:UploadEventMinor[]=[0,1,2,3];
+    expect(supported.filter(expected=>decodeUploadReceipt(bytes(receipt),202,id,expected)!==undefined)).toEqual([minor]);
     expect(decodeUploadReceipt(bytes(receipt),202,id,null)).toBeUndefined();
+  });
+  it('freezes v1.3 with the server cargo shape and preserves the inherited snapshot fields',()=>{
+    const e:UploadEnvelope={...serverCargoFixture,snapshot:{...serverCargoFixture.snapshot,hardModeResult:'not-qualified'}};
+    expect(e.contract).toEqual({major:1,minor:3});
+    expect(JSON.parse(new TextDecoder().decode(encodeUploadEnvelope(e)))).toEqual(e);
+    expect(e.snapshot.accounting).toEqual({distance:'complete',fuel:'partial'});
+    expect(encodeUploadEnvelope({...e,snapshot:{...e.snapshot,cargoClassification:null}})).toBeDefined();
+    for(const key of ['hardModeResult','accounting','cargoClassification'] as const){
+      const incomplete=structuredClone(e);delete incomplete.snapshot[key];
+      expect(validateUploadEnvelope(incomplete)).toBe(false);
+    }
+    for(const minor of [0,1,2] as const){
+      const old=structuredClone(e);old.contract.minor=minor;
+      if(minor<2)delete old.snapshot.accounting;
+      if(minor===0)delete old.snapshot.hardModeResult;
+      expect(validateUploadEnvelope(old)).toBe(false);
+      delete old.snapshot.cargoClassification;
+      expect(validateUploadEnvelope(old)).toBe(true);
+    }
+    const cargo=e.snapshot.cargoClassification!;
+    for(const invalid of [{...cargo,cargoId:'extra'},{...cargo,fragile:false},{...cargo,groups:['liquid','adr']},{...cargo,adr:{state:'class',class:5}}]){
+      expect(validateUploadEnvelope({...e,snapshot:{...e.snapshot,cargoClassification:invalid}})).toBe(false);
+    }
+  });
+  it('keeps the legacy material digest and adds a strict independent stamp for known v1.3 cargo',()=>{
+    const known=structuredClone(summary),unknown=structuredClone(summary);
+    known.snapshot.cargoClassification=serverCargoFixture.snapshot.cargoClassification;
+    unknown.snapshot.cargoClassification=null;
+    const base=uploadMaterialDigest(summary),stamp=uploadMaterialStamp(known,3);
+    expect(uploadMaterialDigest(known)).toBe(base);
+    expect(([0,1,2] as const).map(minor=>uploadMaterialStamp(known,minor))).toEqual([base,base,base]);
+    expect(uploadMaterialStamp(unknown,3)).toBe(base);
+    expect(readUploadMaterialStamp(base)).toEqual({base,cargo:null});
+    expect(readUploadMaterialStamp(stamp)).toEqual({base,cargo:expect.stringMatching(/^[0-9a-f]{64}$/)});
+    for(const invalid of [stamp+'\n',base+':cargo-v2:'+base,base+':',base.toUpperCase()]){
+      expect(readUploadMaterialStamp(invalid)).toBeUndefined();
+    }
+  });
+  it('preserves legal cargo fragility and refuses magnitudes beyond the Dashboard JSON number bound',()=>{
+    const {snapshot}=serverCargoFixture;
+    const e:UploadEnvelope={...serverCargoFixture,snapshot:{...snapshot,hardModeResult:'not-qualified'}};
+    const withFragility=(fragility:number):UploadEnvelope=>({...e,snapshot:{
+      ...e.snapshot,cargoClassification:{...e.snapshot.cargoClassification!,fragility,fragile:true},
+    }});
+    const legal=withFragility(Number.MAX_SAFE_INTEGER),encoded=encodeUploadEnvelope(legal);
+    expect(encoded).toBeDefined();
+    expect(JSON.parse(new TextDecoder().decode(encoded))).toEqual(legal);
+    const tooLarge=withFragility(Number.MAX_SAFE_INTEGER+1);
+    expect(validateUploadEnvelope(tooLarge)).toBe(false);
+    expect(encodeUploadEnvelope(tooLarge)).toBeUndefined();
   });
   it('keeps the accounting status out of the material comparison',()=>{
     const base=structuredClone(summary),complete=structuredClone(summary),partial=structuredClone(summary);

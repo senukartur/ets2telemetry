@@ -6,6 +6,7 @@ import type Database from 'better-sqlite3';
 import type {Available, Money} from '../../../contracts/src/protocol-v1';
 import {fromAvailability, fromU64Key, toReal, toSafeNumber, u64Key} from '../codec';
 import {fail} from '../errors';
+import {readCargoClassification} from '../cargo-classification';
 import {MAX_UPLOAD_PROJECTION_PINS,isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, uploadSnapshotParts,
   type QualifiedOccurrence, type UploadConfiguration, type UploadFacts, type UploadInterval, type UploadMember,
   type UploadProjection, type UploadProjectionBegin, type UploadProjectionPreparation, type UploadProjectionPage, type UploadProjectionPageQuery, type UploadReadiness, type UploadVersions} from '../upload-projection';
@@ -86,7 +87,8 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
       && !!get(db,`${ACCOUNTING_PATH} SELECT 1 FROM path WHERE cut_odometer_m IS NOT NULL OR depth=256 AND prefix_ref IS NOT NULL LIMIT 1`,{head:snap.head}) || quantitiesIncomplete(db,snap.head),
     clockAnomaly: opening?.utcMs !== null && opening?.utcMs !== undefined && opening.utcMs !== n(row.started_utc_ms)
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms),
-    hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n), accounting: {...accounting, fuel: diesel ? accounting.fuel : 'unknown'}};
+    hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n), accounting: {...accounting, fuel: diesel ? accounting.fuel : 'unknown'},
+    cargoClassification: readCargoClassification(row.cargo_classification) ?? null};
 }
 
 const unproven=(recordingLoss=false):RuleContext=>({version:2,status:'unproven',items:[],recordingLoss});

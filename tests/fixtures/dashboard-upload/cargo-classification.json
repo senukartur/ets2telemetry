@@ -1,0 +1,266 @@
+{
+  "contract": {
+    "major": 1,
+    "minor": 3
+  },
+  "producer": {
+    "application": "ets2telemetry",
+    "version": "0.0.0-contract-fixture"
+  },
+  "eventId": "00000106-0000-0000-0000-000000000001",
+  "revision": 2,
+  "installationId": "00000200-0000-0000-0000-000000000001",
+  "bindingId": "00000300-0000-0000-0000-000000000001",
+  "source": {
+    "provider": "ets2telemetry",
+    "game": "ets2",
+    "tripId": "00000404-0000-0000-0000-000000000001",
+    "pluginSessionId": "00000500-0000-0000-0000-000000000001",
+    "databaseUuid": "00000600-0000-0000-0000-000000000001",
+    "origin": "game"
+  },
+  "delivery": {
+    "mode": "live",
+    "syncRunId": "00000700-0000-0000-0000-000000000001"
+  },
+  "type": "trip.completed",
+  "createdUtcMs": 1792231200000,
+  "snapshot": {
+    "outcome": "delivered",
+    "closeReason": "outcome",
+    "recordingCompleteness": "partial",
+    "start": {
+      "utcMs": 1792227600000,
+      "basis": "event",
+      "eventSeq": "9007199254740993"
+    },
+    "end": {
+      "utcMs": 1792231200000,
+      "basis": "event",
+      "eventSeq": "9007199254740999"
+    },
+    "openedBy": "event",
+    "openedEventSeq": "9007199254740993",
+    "checkpointNextEventSeq": null,
+    "outcomeEventSeq": "9007199254740999",
+    "context": {
+      "gameBuild": {
+        "available": false,
+        "reason": "not-observed"
+      },
+      "sourceLocale": {
+        "available": false,
+        "reason": "not-observed"
+      },
+      "mapId": {
+        "available": true,
+        "value": "official"
+      },
+      "dlcIds": {
+        "available": false,
+        "reason": "not-observed"
+      },
+      "versions": {
+        "nativeProtocol": {
+          "major": 1,
+          "minor": 0
+        },
+        "sdkArchive": {
+          "available": true,
+          "value": "scs-sdk-1.15"
+        },
+        "telemetryApi": {
+          "available": true,
+          "value": {
+            "major": 1,
+            "minor": 0
+          }
+        },
+        "gameTelemetryApi": {
+          "available": true,
+          "value": {
+            "major": 1,
+            "minor": 0
+          }
+        }
+      }
+    },
+    "gameMode": {
+      "mode": "unknown",
+      "method": "none",
+      "confidence": "none",
+      "ambiguous": false
+    },
+    "job": {
+      "origin": {
+        "cityId": {
+          "available": true,
+          "value": "fixture_north"
+        },
+        "cityName": {
+          "available": true,
+          "value": "Example North"
+        },
+        "companyId": {
+          "available": true,
+          "value": "fixture_depot_a"
+        },
+        "companyName": {
+          "available": true,
+          "value": "Example Depot A"
+        }
+      },
+      "destination": {
+        "cityId": {
+          "available": true,
+          "value": "fixture_south"
+        },
+        "cityName": {
+          "available": true,
+          "value": "Example South"
+        },
+        "companyId": {
+          "available": true,
+          "value": "fixture_depot_b"
+        },
+        "companyName": {
+          "available": true,
+          "value": "Example Depot B"
+        }
+      },
+      "cargoId": {
+        "available": true,
+        "value": "fixture_crates"
+      },
+      "cargoName": {
+        "available": true,
+        "value": "Example Crates"
+      },
+      "cargoMass": {
+        "available": true,
+        "value": 18000,
+        "unit": "kg"
+      },
+      "cargoUnitMass": {
+        "available": true,
+        "value": 900,
+        "unit": "kg"
+      },
+      "cargoUnitCount": {
+        "available": true,
+        "value": 20
+      },
+      "market": {
+        "available": true,
+        "value": "fixture_market"
+      },
+      "isSpecialJob": {
+        "available": true,
+        "value": false
+      },
+      "cargoLoaded": {
+        "available": true,
+        "value": true
+      }
+    },
+    "trailers": {
+      "complete": false,
+      "items": [
+        {
+          "index": 0,
+          "id": {
+            "available": true,
+            "value": "fixture_trailer"
+          },
+          "bodyType": {
+            "available": true,
+            "value": "fixture_box"
+          },
+          "chainType": {
+            "available": true,
+            "value": "fixture_single"
+          }
+        }
+      ]
+    },
+    "plannedDistance": {
+      "available": true,
+      "value": 120000,
+      "unit": "m"
+    },
+    "observedDistance": {
+      "available": true,
+      "value": 123400,
+      "unit": "m"
+    },
+    "deliveredDistance": {
+      "available": true,
+      "value": 123400,
+      "unit": "m"
+    },
+    "fuelUsed": {
+      "available": true,
+      "value": 38.5,
+      "unit": "L"
+    },
+    "cargoDamage": {
+      "available": true,
+      "value": 0,
+      "unit": "fraction"
+    },
+    "expectedIncome": {
+      "available": true,
+      "value": {
+        "raw": "10000",
+        "sdkType": "u64",
+        "currency": {
+          "status": "unknown"
+        }
+      }
+    },
+    "revenue": {
+      "available": true,
+      "value": {
+        "raw": "9800",
+        "sdkType": "s64",
+        "currency": {
+          "status": "unknown"
+        }
+      }
+    },
+    "penalty": {
+      "available": false,
+      "reason": "not-observed"
+    },
+    "evidence": {
+      "startObserved": true,
+      "endObserved": true,
+      "ruleContextComplete": false,
+      "clockAnomaly": false,
+      "reasons": [
+        "game-restart"
+      ]
+    },
+    "hardModeResult": "unknown",
+    "accounting": {
+      "distance": "complete",
+      "fuel": "partial"
+    },
+    "cargoClassification": {
+      "version": 1,
+      "fragility": 0.85,
+      "fragile": true,
+      "valuable": true,
+      "adr": {
+        "state": "class",
+        "class": 3
+      },
+      "overweight": false,
+      "oversize": null,
+      "groups": [
+        "adr",
+        "liquid"
+      ]
+    }
+  }
+}

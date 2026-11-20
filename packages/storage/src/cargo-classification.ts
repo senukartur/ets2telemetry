@@ -2,6 +2,17 @@ import {isCargoClassification, isCargoId} from '../../contracts/src/cargo-classi
 import {isUint64} from '../../contracts/src/protocol-v0';
 import type {CargoOpening, FillCargoClassification} from './api';
 import {isUuid} from './codec';
+import {fail} from './errors';
+
+/** Both Journal and upload projections read the opening evidence from the selected logical revision. */
+export function readCargoClassification(value: unknown) {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length > 1024) fail('DATABASE_CORRUPT');
+  let classification: unknown;
+  try {classification = JSON.parse(value);} catch {fail('DATABASE_CORRUPT');}
+  if (!isCargoClassification(classification)) fail('DATABASE_CORRUPT');
+  return classification;
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

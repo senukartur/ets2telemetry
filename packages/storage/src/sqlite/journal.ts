@@ -16,7 +16,7 @@ import {
 } from '../../../contracts/src/journal';
 import type {EventOccurrence, EventRecord, JobConfiguration, TrailerConfiguration, TruckConfiguration, UnavailableReason} from '../../../contracts/src/protocol-v1';
 import type {Purpose} from '../api';
-import {isCargoClassification} from '../../../contracts/src/cargo-classification';
+import {readCargoClassification} from '../cargo-classification';
 import {fromAvailability, fromU64Key, isUuid, JOB_FIELDS, moneyFromColumns, specRecord, toReal, toSafeNumber, u64Key, type AvailabilityState} from '../codec';
 import {fail} from '../errors';
 import {readHardModeDetails} from './hard-mode';
@@ -146,15 +146,6 @@ export function jobValues(job: Row): JobConfiguration {
  * for want of a verified profile (`profile-unverified`) is marked `membership: 'pending'` at this read; its logical id is
  * its own raw trip id. A pending `job-evidence-incomplete` decision already had a verified profile and is not marked.
  */
-function readCargoClassification(value: unknown) {
-  if (value === null || value === undefined) return undefined;
-  if (typeof value !== 'string' || value.length > 1024) fail('DATABASE_CORRUPT');
-  let classification: unknown;
-  try {classification = JSON.parse(value);} catch {fail('DATABASE_CORRUPT');}
-  if (!isCargoClassification(classification)) fail('DATABASE_CORRUPT');
-  return classification;
-}
-
 export function listItem(db: Database.Database, r: Row, progress?: {logical: unknown; head: unknown}): JournalTripListItem {
   const job = get(db, JOURNAL_QUERIES.job, r.job_configuration_ref);
   if (!job) fail('DATABASE_CORRUPT');
