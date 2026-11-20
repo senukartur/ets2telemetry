@@ -200,7 +200,7 @@ it('REG-013 freezes schema9 with a rebased delivered singleton, a live and retro
   const upgraded=await ws.open({path:copy});
   expect(upgraded.summary).toMatchObject({schemaVersion:12,migratedFrom:9,databaseUuid:expected.databaseUuid});
   expect(journal(upgraded)).toEqual(expected.journal);upgraded.close();
-  meaning(copy,11);
+  meaning(copy,12);
   expect(readOnly(copy,db=>[db.prepare('SELECT DISTINCT accounting_engine FROM logical_trips').pluck().all(),db.prepare('SELECT count(*) FROM logical_progress WHERE quantity_flags IS NOT NULL').pluck().get()]))
     .toEqual([[0],0]);
 });
