@@ -47,8 +47,10 @@ export function TripTable({rows, sync, language, onOpen, sort, onSort, busy}: {
         <TableCell data-testid="journal-row-started"><time title={row.started}>{row.startedLabel}</time></TableCell>
         <TableCell data-testid="journal-row-game"><Badge variant={row.gameId} data-testid="journal-row-game-name">{row.game}</Badge>
           <div className="yu-journal-mode-line"><ModeBadge mode={row.mode} testId="journal-row-mode" /></div></TableCell>
-        <TableCell><div data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={language} /></> : null}</div>
-          <CargoBadges value={row.cargoClassification} language={language} /></TableCell>
+        <TableCell><div data-testid="journal-row-cargo"><span>{row.cargo}</span>
+          <CargoBadges value={row.cargoClassification} language={language} compact />
+          {row.isHardMode ? <HardModeBadge short language={language} /> : null}
+        </div></TableCell>
         <TableCell><JobTypeBadge job={row.jobType} language={language} testId="journal-row-job-type" noteTestId="journal-row-job-sub" />
           {row.specialTransport ? <div className="yu-journal-mode-line"><SpecialTransportBadge text={row.specialTransport} testId="journal-row-special" /></div> : null}</TableCell>
         <TableCell><div data-testid="journal-row-route">{row.route}</div><small data-testid="journal-row-companies">{row.companies}</small></TableCell>

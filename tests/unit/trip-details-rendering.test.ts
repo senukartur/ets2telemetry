@@ -1,7 +1,7 @@
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it, vi} from 'vitest';
-import type {AppLanguage, JournalTripDetail} from '../../packages/contracts/src';
+import type {AppLanguage, CargoClassification, JournalTripDetail} from '../../packages/contracts/src';
 import {TripCompleteness, TripFields, TripHeading, TripKpis, TripSide, TripSite, TripTimelineList} from '../../apps/desktop/src/trip-details';
 import {journalCompletenessText, journalDetailText, journalTripSideText, type JournalTimelineItem} from '../../apps/desktop/src/journal-view';
 import {journalTileValues} from '../../apps/desktop/src/screens/journal-tiles';
@@ -70,6 +70,32 @@ describe('compact trip page (ET-077)', () => {
     expect(html).toMatch(/<p class="sr-only" data-testid="journal-detail-title">ETS2: /);
     expect(html).not.toContain('journal-delete');
   });
+
+  it.each([['en', 'Heavy', 'Fragile', 'Valuable', 'Corrosive substances', 'Cargo characteristics: unknown'],
+    ['ru', 'Тяжёлый', 'Хрупкий', 'Ценный', 'Едкие вещества', 'Характеристики: неизвестно']] as const)(
+    'shows full cargo badges and an ADR caption on the trip heading in %s', (language, heavy, fragile, valuable, caption, unknown) => {
+      const heading = (cargoClassification?: CargoClassification) => renderToStaticMarkup(React.createElement(TripHeading, {
+        game: 'ets2', outcome: 'delivered', isHardMode: false, cargo: 'Synthetic Cargo', cargoClassification,
+        text: journalDetailText(DELIVERED, {language}), side: journalTripSideText(DELIVERED, {language}), language,
+      }));
+      const value: CargoClassification = {version: 1, fragility: 0.8, fragile: true, valuable: true, adr: {state: 'class', class: 8},
+        overweight: false, oversize: null, groups: ['machinery', 'oversize']};
+      const html = heading(value);
+      const titleline = html.match(/class="yu-trip-titleline"><h1[^>]*>Synthetic Cargo<\/h1>(.*?)<\/div>/)?.[1] ?? '';
+      expect(titleline).toContain('data-layout="full"');
+      expect([...titleline.matchAll(/data-cargo-classification="([^"]+)"/g)].map(match => match[1])).toEqual(['adr', 'heavy', 'fragile', 'valuable']);
+      for (const [label, icon] of [['ADR 8', 'diamond'], [heavy, 'weight'], [fragile, 'wine'], [valuable, 'gem']]) {
+        expect(titleline).toMatch(new RegExp(`lucide-${icon}.*?</svg><span>${label}</span>`));
+      }
+      expect(titleline).not.toContain(caption);
+      expect(html).toContain(`data-testid="trip.header.cargo-adr">${caption}</p>`);
+      expect(html).not.toContain('cargo-unknown');
+      const ordinary = heading({...value, fragility: 0.2, fragile: false, valuable: false, adr: {state: 'none'}, groups: ['machinery']});
+      expect(ordinary).not.toMatch(/cargo-badges|cargo-adr|cargo-unknown/);
+      const missing = heading();
+      expect(missing).toContain(`data-testid="trip.header.cargo-unknown">${unknown}</p>`);
+      expect(missing).not.toMatch(/cargo-badges|cargo-adr/);
+    });
 
   it.each([['en', 'Site', 'Saved by the site', '"Sent" means the site saved the trip. The company decides on the site.'], ['ru', 'Сайт', 'Сохранено сайтом', 'Решение компании принимается на сайте.']] as const)('shows the site card only with a site row, never as company acceptance, in %s', (language, title, saved, note) => {
     expect(side(OPEN, language)).not.toContain('trip.site');

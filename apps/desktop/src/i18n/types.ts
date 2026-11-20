@@ -1,4 +1,4 @@
-import type {AppLanguage} from '../../../../packages/contracts/src';
+import type {AdrClass, AppLanguage} from '../../../../packages/contracts/src';
 
 export type {AppLanguage};
 
@@ -591,8 +591,7 @@ export type I18nKey =
   | 'hm.c.truckstab' | 'hm.c.trailerstab' | 'hm.c.parking' | 'hm.c.rain' | 'hm.c.events' | 'hm.c.brake' | 'hm.c.traffic'
   | 'val.on' | 'val.off' | 'val.expert' | 'val.simple'
   | 'j.title' | 'j.all' | 'j.outcome' | 'j.recording' | 'j.anyOutcome' | 'j.anyRecording' | 'j.search' | 'j.otherJobType' | 'j.unknownJobType' | 'j.export' | 'j.refresh'
-  | 'cargo.fragile' | 'cargo.valuable' | 'cargo.adr' | 'cargo.overweight' | 'cargo.oversize' | 'cargo.bulk' | 'cargo.construction'
-  | 'cargo.containers' | 'cargo.gooseneck' | 'cargo.inloader' | 'cargo.liquid' | 'cargo.livestock' | 'cargo.machinery' | 'cargo.refrigerated'
+  | 'cargo.fragile' | 'cargo.valuable' | 'cargo.adr' | 'cargo.heavy' | 'cargo.unknown' | `cargo.adrClass.${AdrClass}`
   | 'col.started' | 'col.game' | 'col.cargo' | 'col.route' | 'col.distance' | 'col.money' | 'col.outcome' | 'col.recording' | 'col.sync'
   | 'col.gameMode' | 'col.jobType' | 'col.open' | 'col.income' | 'j.filters' | 'j.tripsTable' | 'j.mode' | 'j.anyMode' | 'j.anyJobType' | 'j.jobOther' | 'j.modeUnknown'
   | 'j.openTrip' | 'j.showing' | 'j.syncNote' | 'j.trips.one' | 'j.trips.few' | 'j.trips.many' | 'j.trips.other' | 'j.hours'

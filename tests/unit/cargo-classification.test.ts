@@ -36,21 +36,25 @@ describe('cargo classification and badges (REG-009/010/014)', () => {
     expect(classifyCargo({...definition, adrClass: 77})).toMatchObject({adr: {state: 'unsupported'}});
   });
 
-  it('rejects contradictory or oversized metadata and presents simultaneous localized badges', () => {
+  it('rejects contradictory or oversized classification metadata', () => {
     const value = classifyCargo(definition)!;
     expect(isCargoClassification(value)).toBe(true);
     for (const invalid of [{...value, fragile: false}, {...value, fragility: Infinity}, {...value, groups: ['machinery', 'fragile']},
       {...value, groups: ['fragile', 'fragile']}, {...value, adr: {state: 'none', class: 8}}, {...value, oversize: 'true'}]) {
       expect(isCargoClassification(invalid)).toBe(false);
     }
-    const en = renderToStaticMarkup(createElement(CargoBadges, {value, language: 'en'}));
-    const ru = renderToStaticMarkup(createElement(CargoBadges, {value, language: 'ru'}));
-    for (const label of ['Fragile', 'High value', 'ADR 8', 'Machinery']) expect(en).toContain(label);
-    for (const label of ['Хрупкий', 'Ценный', 'ADR 8', 'Техника']) expect(ru).toContain(label);
-    expect(en.match(/data-cargo-classification="fragile"/g)).toHaveLength(1);
+  });
+
+  it('uses one Heavy badge for overweight or positive oversize evidence', () => {
+    const ordinary = classifyCargo({fragility: 0.2, adrClass: null, valuable: null, overweight: null, oversize: null, groups: ['machinery']})!;
+    const render = (value: typeof ordinary) => renderToStaticMarkup(createElement(CargoBadges, {value, language: 'en'}));
+    for (const value of [{...ordinary, overweight: true}, {...ordinary, oversize: true}, {...ordinary, groups: [...ordinary.groups, 'oversize' as const]}]) {
+      const html = render(value);
+      expect(html.match(/data-cargo-classification="[^"]+"/g)).toEqual(['data-cargo-classification="heavy"']);
+      expect(html).toContain('<span>Heavy</span>');
+    }
     expect(renderToStaticMarkup(createElement(CargoBadges, {language: 'en'}))).toBe('');
-    const ordinary = classifyCargo({fragility: 0.2, adrClass: null, valuable: null, overweight: null, oversize: null, groups: []})!;
-    expect(renderToStaticMarkup(createElement(CargoBadges, {value: ordinary, language: 'en'}))).toBe('');
+    expect(render(ordinary)).toBe('');
   });
 });
 

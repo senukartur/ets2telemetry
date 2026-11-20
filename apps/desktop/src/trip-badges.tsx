@@ -1,26 +1,33 @@
 import React from 'react';
-import {Check, Circle, CircleHelp, Construction, Globe, Package, TriangleAlert, Truck, UserRound, UsersRound, X, Zap} from 'lucide-react';
-import type {AppLanguage, CargoClassification, JournalOutcome} from '../../../packages/contracts/src';
+import {Check, Circle, CircleHelp, Construction, Diamond, Gem, Globe, Package, TriangleAlert, Truck, UserRound, UsersRound, Weight, Wine, X, Zap} from 'lucide-react';
+import type {AdrClass, AppLanguage, CargoClassification, JournalOutcome} from '../../../packages/contracts/src';
 import {Badge} from './components/ui/badge';
 import {t} from './i18n';
 import type {JournalBadge, JournalJobBadge, JournalJobLine, JournalModeBadge} from './journal-view';
 
-export function CargoBadges({value, language}: {value?: CargoClassification; language: AppLanguage}) {
+export function cargoAdrClassName(adrClass: AdrClass, language: AppLanguage): string {
+  return t(`cargo.adrClass.${adrClass}`, undefined, language);
+}
+
+export function CargoBadges({value, language, compact = false}: {value?: CargoClassification; language: AppLanguage; compact?: boolean}) {
   if (!value) return null;
-  const badges: {id: string; text: string; variant: 'warn' | 'info' | 'neutral'}[] = [];
-  if (value.fragile) badges.push({id: 'fragile', text: t('cargo.fragile', undefined, language), variant: 'warn'});
-  if (value.valuable) badges.push({id: 'valuable', text: t('cargo.valuable', undefined, language), variant: 'info'});
-  if (value.adr.state === 'class') badges.push({id: 'adr', text: t('cargo.adr', {v: String(value.adr.class)}, language), variant: 'warn'});
-  if (value.overweight) badges.push({id: 'overweight', text: t('cargo.overweight', undefined, language), variant: 'neutral'});
-  if (value.oversize || value.groups.includes('oversize')) badges.push({id: 'oversize', text: t('cargo.oversize', undefined, language), variant: 'neutral'});
-  for (const group of value.groups) {
-    // Game-market groups do not override the dedicated fragile and ADR evidence.
-    if (group === 'adr' || group === 'fragile' || group === 'oversize') continue;
-    badges.push({id: group, text: t(`cargo.${group}`, undefined, language), variant: 'neutral'});
+  const badges: {id: 'adr' | 'heavy' | 'fragile' | 'valuable'; text: string; Icon: typeof Diamond; adrClass?: AdrClass}[] = [];
+  if (value.adr.state === 'class') {
+    const adrClass = value.adr.class;
+    badges.push({id: 'adr', text: t('cargo.adr', {v: String(adrClass)}, language), Icon: Diamond, adrClass});
   }
-  return badges.length ? <div className="yu-cargo-badges" data-testid="cargo-badges">
-    {badges.map(badge => <Badge key={badge.id} variant={badge.variant} data-cargo-classification={badge.id}>{badge.text}</Badge>)}
-  </div> : null;
+  if (value.overweight || value.oversize || value.groups.includes('oversize')) badges.push({id: 'heavy', text: t('cargo.heavy', undefined, language), Icon: Weight});
+  if (value.fragile) badges.push({id: 'fragile', text: t('cargo.fragile', undefined, language), Icon: Wine});
+  if (value.valuable) badges.push({id: 'valuable', text: t('cargo.valuable', undefined, language), Icon: Gem});
+  return badges.length ? <span className="yu-cargo-badges" data-testid="cargo-badges" data-layout={compact ? 'compact' : 'full'}>
+    {badges.map(({id, text, Icon, adrClass}) => {
+      const label = adrClass ? `${text}: ${cargoAdrClassName(adrClass, language)}` : text;
+      return <Badge key={id} variant={id === 'adr' ? 'warn' : 'neutral'} data-cargo-classification={id}
+        {...(compact ? {role: 'img', 'aria-label': label, title: label} : {})}>
+        <Icon aria-hidden="true" />{compact ? adrClass && <span>{adrClass}</span> : <span>{text}</span>}
+      </Badge>;
+    })}
+  </span> : null;
 }
 
 /** One presentation in the Journal, trip header and Live. Explanations stay outside the fixed-height badge. */

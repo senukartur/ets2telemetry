@@ -12,7 +12,7 @@ import {t} from './i18n';
 import {InfoHint} from './info-hint';
 import {journalSiteSaved, type JournalCompletenessText, type JournalDetailText, type JournalSection, type JournalTextOptions, type JournalTimelineItem, type JournalTripSideText} from './journal-view';
 import type {journalTileValues} from './screens/journal-tiles';
-import {CargoBadges, CompletenessBadge, JobTypeBadge, ModeBadge, OutcomeBadge, ProfileBadge, SpecialTransportBadge} from './trip-badges';
+import {cargoAdrClassName, CargoBadges, CompletenessBadge, JobTypeBadge, ModeBadge, OutcomeBadge, ProfileBadge, SpecialTransportBadge} from './trip-badges';
 
 /**
  * The compact trip page (ET-077, mockup T4). These components only present text that journal-view.ts and journal-tiles.ts
@@ -24,9 +24,11 @@ type Tiles = ReturnType<typeof journalTileValues>;
 
 /** The cargo, the chips and the route line. The accessible trip title stays for readers that name the trip by its cities. */
 export function TripHeading({game, isHardMode, cargo, cargoClassification, text, side, language}: {game: JournalGame; outcome: JournalOutcome; isHardMode: boolean; cargo: string; cargoClassification?: CargoClassification; text: JournalDetailText; side: JournalTripSideText; language: AppLanguage}) {
+  const adr = cargoClassification?.adr;
   return <div className="yu-trip-heading">
     <div className="yu-trip-titleline">
       <h1 data-testid="trip.header.cargo">{cargo}</h1>
+      <CargoBadges value={cargoClassification} language={language} />
       <Badge variant={game}>{game.toUpperCase()}</Badge>
       <ModeBadge mode={text.mode} testId="journal-detail-mode" />
       <JobTypeBadge job={text.jobType} language={language} testId="journal-detail-job-type" />
@@ -39,7 +41,8 @@ export function TripHeading({game, isHardMode, cargo, cargoClassification, text,
         <InfoHint testId="journal-detail-membership-hint" label={t('ui.moreAbout', {v: text.membership}, language)}>{t('j.membershipPendingHint', undefined, language)}</InfoHint>
       </> : null}
     </div>
-    <CargoBadges value={cargoClassification} language={language} />
+    {adr?.state === 'class' ? <p className="yu-trip-cargo-note" data-testid="trip.header.cargo-adr">{cargoAdrClassName(adr.class, language)}</p> : null}
+    {!cargoClassification ? <p className="yu-trip-cargo-note" data-testid="trip.header.cargo-unknown">{t('cargo.unknown', undefined, language)}</p> : null}
     <p className="yu-trip-route" data-testid="trip.header.route">{side.route}</p>
     <p className="sr-only" data-testid="journal-detail-title">{text.title}</p>
   </div>;

@@ -70,7 +70,7 @@ Mode detection checks one known TruckersMP module inside the game process when t
 
 Each trip row and detail header also shows the trip's job type: **Cargo market**, **Freight market**, **Quick job**, or **World of Trucks** (external contracts and the external market), with a **Special transport** badge for special transport jobs. This includes trips recorded by earlier versions.
 
-The Journal also shows recorded cargo badges, such as **Fragile**, **High value** and the **ADR** class, next to the cargo name in the list and details. The application reads them from the installed base game and official DLC. Trips without captured classification show the cargo name by itself.
+The Journal shows icons next to the cargo name for **ADR**, **Heavy**, **Fragile** and **Valuable**. Trip details show labeled badges and name the ADR class when available. The application reads these characteristics from the installed base game and official DLC. Details show **Cargo characteristics: unknown** for trips without captured classification.
 
 ### My qualification
 
