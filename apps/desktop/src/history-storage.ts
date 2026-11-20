@@ -56,7 +56,7 @@ export interface HistoryStorageOptions {
   onRuntimeTimeout?: () => void;
   /** The emergency intake can safely keep recording while an exited worker is replaced. */
   reopenAfterWorkerFailure?: boolean;
-  /** ET-015c (G3): called after every change of `state`, for the recording status. */
+  /** ET-015c (G3): called after a change in state, failure code or recovery status. */
   onStateChange?: (state: HistoryState) => void;
   /** Tests only. */
   timers?: ClientTimers;
@@ -87,6 +87,7 @@ export function historyWorker(directory: string): StorageWorkerHandle {
  */
 export class HistoryStorage {
   #state: HistoryState = 'idle';
+  #recovering = false;
   #client: StorageClient | undefined;
   #opening: Promise<void> | undefined;
   #reported = false;
@@ -104,8 +105,9 @@ export class HistoryStorage {
   constructor(private readonly options: HistoryStorageOptions) {}
 
   get state(): HistoryState { return this.#state; }
-  /** ET-015c (G10): the code that made the database unavailable (the first one, as logged); null before any failure. */
+  /** The first failure of this outage, or the failure that halted recovery. Null while healthy. */
   get failureCode(): StorageErrorCode | null { return this.#failure; }
+  get recovering(): boolean { return this.#recovering; }
   /** The storage client while the database is open; undefined before the open finished, after a failure and after close. */
   get client(): StorageClient | undefined { return this.#state === 'open' ? this.#client : undefined; }
   /** ET-016 (J3): the open database's purpose and schema version, from its open summary; undefined while it is not open. */
@@ -153,16 +155,18 @@ export class HistoryStorage {
         return;
       }
       if (!result.ok) {
-        this.#unavailable(result.error.code);
+        const recover = !this.#closing && isReopenRetryable(result.error);
+        this.#unavailable(result.error.code, undefined, recover);
         // The worker has nothing left to serve; end its thread now rather than at shutdown.
         void client.close();
-        if (isReopenRetryable(result.error)) this.#retryAfterExit(client, result.error);
+        if (recover) this.#retryAfterExit(client, result.error);
         return;
       }
       const summary = result.value;
       this.#database = {purpose: summary.purpose, schemaVersion: summary.schemaVersion};
       this.#databaseUuid = summary.databaseUuid;
       this.#failure = null;
+      this.#recovering = false;
       this.#attempts = 0;
       this.#reported = false;
       if (this.#state === 'opening') this.#set('open');
@@ -176,7 +180,7 @@ export class HistoryStorage {
   #workerFailed(client: StorageClient, error: StorageError, command?: CommandName): void {
     const recover = !this.#closing && this.#state === 'open'
       && (error.code === 'TIMEOUT' || error.code === 'WORKER_FAILED' && this.options.reopenAfterWorkerFailure === true);
-    this.#unavailable(error.code, command);
+    this.#unavailable(error.code, command, recover);
     if (!recover) return;
     if (error.code === 'TIMEOUT') this.options.onRuntimeTimeout?.();
     this.#retryAfterExit(client, error);
@@ -207,6 +211,7 @@ export class HistoryStorage {
     const maxAttempts = this.options.maxReopenAttempts ?? MAX_HISTORY_REOPEN_ATTEMPTS;
     if (this.#attempts >= maxAttempts) {
       this.options.log('HISTORY_STORAGE_REOPEN_EXHAUSTED', undefined, {attempts: this.#attempts, code: error.code});
+      this.#unavailable(error.code);
       return;
     }
     const backoffs = this.options.reopenBackoffMs ?? HISTORY_REOPEN_BACKOFF_MS;
@@ -236,6 +241,7 @@ export class HistoryStorage {
    */
   async close(graceMs?: number): Promise<void> {
     this.#closing = true;
+    this.#recovering = false;
     this.#clearRetryTimer();
     this.#clearRetirementTimer();
     const client = this.#client;
@@ -256,9 +262,14 @@ export class HistoryStorage {
     this.options.onStateChange?.(state);
   }
 
-  #unavailable(code: StorageErrorCode, command?: CommandName): void {
-    this.#failure ??= code;
-    if (this.#state !== 'closed') this.#set('unavailable');
+  #unavailable(code: StorageErrorCode, command?: CommandName, recover = false): void {
+    const previousFailure = this.#failure, wasRecovering = this.#recovering;
+    if (!recover) this.#failure = code;
+    else this.#failure ??= code;
+    this.#recovering = recover;
+    if (this.#state === 'unavailable') {
+      if (wasRecovering !== recover || previousFailure !== this.#failure) this.options.onStateChange?.(this.#state);
+    } else if (this.#state !== 'closed') this.#set('unavailable');
     if (this.#reported) return;
     this.#reported = true;
     this.options.log('HISTORY_STORAGE_UNAVAILABLE', undefined, {code, ...(command ? {command} : {})});

@@ -564,7 +564,8 @@ export class TripRecorderSink implements DurableSink {
     this.pendingResolve=replayDrained && resolveKey!==undefined && !view.current && this.client.resolvePendingMemberships && this.state.games[message.source.game].pending.length===0
       && !session.profileChangePending && resolveKey!==this.resolvedProofKey ? {key:resolveKey,pluginSessionId:message.source.pluginSessionId} : undefined;
     // H2, H7: the sample sees the trip state that the commits before it in the FIFO left, and this reading.
-    const sampled = sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
+    const sampled = context.restoreCheckpoint ? {state: this.sampler, row: undefined}
+      : sampleReading(this.sampler, {message, receivedUtcMs: context.receivedUtcMs, view: tripView(this.state, message.source.game)});
     this.sampler = sampled.state;
     if (sampled.row) {
       if(!replayDrained)sampled.row.tripUuid=null;

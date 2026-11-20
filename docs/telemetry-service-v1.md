@@ -104,7 +104,7 @@ After each checkpoint the ingestion sends one `clock.probe`, then at most one pe
 
 ### Emergency journal for game history
 
-The real-game recording runtime stages validated checkpoints, events, gaps and one reading per source-clock second in `emergency-journal/history` under the channel's data directory. Source boundaries can retain an additional reading without producing an extra sample. Each entry retains its source, checkpoint, preceding event sequence and receipt time. A separate serial writer syncs a checksummed file before publishing it. The intake holds at most 512 frames in memory and the disk queue holds at most 24,000 entries or 128 MiB. It stops and reports an error if a file cannot be published. Intake can resume when a full queue has enough room again. Pauses do not add route samples.
+The real-game recording runtime stages validated checkpoints, events, gaps and one reading per source-clock second in `emergency-journal/history` under the channel's data directory. Source boundaries can retain an additional reading without producing an extra sample. Each entry retains its source, checkpoint, preceding event sequence and receipt time. A separate serial writer syncs a checksummed file before publishing it. The intake holds at most 512 frames in memory and the disk queue holds at most 24,000 entries or 128 MiB. It stops and reports an error if a file cannot be published. Intake resumes when a full queue has room or after a bounded write probe succeeds. If a pending file fails validation, the service preserves it and the remaining files, stops replay and stops acknowledging events. Pauses do not add route samples.
 
 The game may be acknowledged when the entry is published and the preceding coverage is trusted. An ACK already reported by the producer at the first checkpoint needs a matching receipt from this process or confirmation from SQLite before the journal can advance it. The ordinary fixture path still acknowledges after SQLite commit. The journal keeps one ordered SQLite reader. It initializes the recorder from committed state, applies events and samples using the existing identifiers, and removes an entry only after the applicable writes succeed. After a lost reply it re-applies the same entry, using the existing duplicate handling for event sequences and source-clock seconds. It can replay with the game closed. Archived frames do not use the current profile to backfill historical checks. If an older database is missing coverage already acknowledged to the producer, the matching files remain as `.held` and that source session is blocked. Other sessions can continue.
 
@@ -267,6 +267,9 @@ PR-3 (G2–G7, G9, G10, G12) makes the service report what its recording is doin
 | # | Condition | State | Code |
 | --- | --- | --- | --- |
 | 1 | No trip recorder: a plan with no durable selection. Production no longer has this state since October 25, 2026, because the history plan makes `ets2` and `ats` durable | `disabled` | — |
+| 1a | The emergency journal cannot accept new entries | `stopped` | `IO_ERROR` or `STORAGE_BUSY` |
+| 1b | Pending emergency files during automatic database recovery, opening or a retryable replay failure | `buffering` | null |
+| 1c | Pending emergency files with an open database and a non-retryable replay failure | `stopped` | The replay failure code |
 | 2 | The database is `idle` or `opening` | `opening` | null |
 | 3 | The database is unavailable (a refused open, a worker failure) or closed | `stopped` | The database's failure code, `STORAGE_CLOSED` without one |
 | 4 | Durable delivery failed with `ACK_AHEAD_OF_STORAGE` | `live-only`: this plugin session continues live-only; a new plugin session ends it | `ACK_AHEAD_OF_STORAGE` |

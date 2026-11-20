@@ -38,7 +38,14 @@ export type SinkResult<T> = {ok: true; value: T} | {ok: false; error: SinkError}
 export interface HardModeCheckTarget {game: 'ets2' | 'ats'; session: string; batch: HardModeCheckBatch; lastCheck?: string; ready: boolean}
 /** Bounded per-coverage intake evidence and the scheduled-check interval owned by a job boundary. */
 export interface HardModeCapture {game: 'ets2' | 'ats'; pluginSessionId?: string; observation: HardModeObservation; fresh: boolean; firstUnsafe: HardModeObservation | null; checks?: HardModeCounts & {lastCheck?: string}; checkBoundary?: 'job' | 'terminal'; openingCheck?: boolean; checkTarget?: HardModeCheckTarget}
-export interface CommitContext {receivedUtcMs: number; hardModeCapture?: HardModeCapture; historyReplay?: boolean}
+export interface CommitContext {
+  receivedUtcMs: number;
+  hardModeCapture?: HardModeCapture;
+  /** The file queue no longer owns contemporaneous profile or Hard Mode evidence. */
+  historyReplay?: boolean;
+  /** Rebuild recorder state from a checkpoint whose file was already applied and removed. */
+  restoreCheckpoint?: boolean;
+}
 
 /**
  * ET-015b (H2, H8, H11, H12): the sink's pending one-second samples, written only by DurableDelivery's `samples` op and

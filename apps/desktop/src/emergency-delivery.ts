@@ -2,14 +2,18 @@ import {randomUUID} from 'node:crypto';
 import {encodeFrame} from '../../../packages/contracts/src/protocol-v1';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import type {DiagnosticFacts} from './diagnostics';
-import type {CommitContext, DurableSink, ReadingMessage, SinkResult, WelcomeMessage} from './durable-sink';
-import {EmergencyJournal, EmergencyJournalFull, type EmergencyEntry, type JournalFrame} from './emergency-journal';
+import type {CommitContext, DurableSink, HardModeCapture, ReadingMessage, SinkResult, WelcomeMessage} from './durable-sink';
+import {EmergencyJournal, EmergencyJournalFull, EmergencyJournalIntegrityError, type EmergencyEntry, type JournalFrame} from './emergency-journal';
 import type {DurableLink, DurableStatus} from './v1-durable-delivery';
 import type {IngestionDelivery, IngestionConnection} from './v1-ingestion';
 
 const MAX_INTAKE = 512;
 const MIRROR_RETRY_MS = 1000;
+const WRITE_RETRY_MS = [250, 500, 1000, 2000, 4000];
+const MAX_WRITE_RETRIES = 60;
 type IntakeLink = {connection: string; welcome: WelcomeMessage; link: DurableLink; acknowledged: bigint; trusted: boolean};
+type ProjectionSink = {client: StorageClient; sink: DurableSink};
+type LiveEntry = {owner: ProjectionSink; capture?: HardModeCapture};
 
 class ProjectionError extends Error {
   constructor(readonly code: string) { super(code); }
@@ -29,17 +33,21 @@ export class EmergencyDelivery implements IngestionDelivery {
   private ready = false;
   private initialized = false;
   private full = false;
+  private invalid = false;
   private stopped = false;
   private accepting = Promise.resolve();
   private projected?: Promise<void>;
   private retry?: ReturnType<typeof setTimeout>;
+  private writeRetry?: ReturnType<typeof setTimeout>;
+  private probing?: Promise<void>;
   private queued = 0;
   private latest?: IntakeLink;
   private trusted?: {session: string; through: bigint};
   private blockedSession?: string;
-  private context?: {connection: string; client: StorageClient; sink: DurableSink};
+  private recorder?: ProjectionSink;
+  private context?: {connection: string; owner: ProjectionSink};
+  private readonly live = new Map<number, LiveEntry>();
   private reported?: string;
-  private historyReplayBefore = 0;
 
   constructor(
     private readonly journal: EmergencyJournal,
@@ -65,12 +73,16 @@ export class EmergencyDelivery implements IngestionDelivery {
   }
 
   async start(): Promise<void> {
-    try { await this.journal.initialize(); }
-    catch { this.failJournal('OPEN'); return; }
+    try {
+      await this.journal.initialize();
+      await this.journal.head();
+    } catch (error) {
+      this.failJournal(error instanceof EmergencyJournalIntegrityError ? 'INTEGRITY' : 'OPEN');
+      return;
+    }
     if (this.stopped) return;
     this.initialized = true;
     this.ready = true;
-    this.historyReplayBefore = this.journal.nextSequence;
     this.log('EMERGENCY_JOURNAL_READY', {pending: this.journal.pending});
     this.changed();
     this.sourceReady();
@@ -81,8 +93,10 @@ export class EmergencyDelivery implements IngestionDelivery {
     const connection = randomUUID();
     const active = {connection, welcome, link, acknowledged: 0n, trusted: false};
     this.latest = active;
-    this.current = {state: 'pending'};
-    this.changed();
+    if (this.ready) {
+      this.current = {state: 'pending'};
+      this.changed();
+    }
     let checkpoint: Extract<ReadingMessage, {kind: 'checkpoint'}> | undefined;
     let checkpointReceivedUtcMs = 0;
     let before = '0';
@@ -109,18 +123,32 @@ export class EmergencyDelivery implements IngestionDelivery {
       const entry = {connection, welcome, checkpoint, checkpointReceivedUtcMs, before, message, receivedUtcMs};
       if (message.kind === 'event') before = message.data.eventSeq;
       if (message.kind === 'gap') before = message.data.lastEventSeq;
+      let live: LiveEntry | undefined;
+      const client = this.client();
+      if (client && !this.retrying && this.queued + this.live.size < MAX_INTAKE) {
+        const owner = this.recorderFor(client);
+        const capture = message.kind === 'event' || message.kind === 'gap' ? owner.sink.capture?.(message) : undefined;
+        live = {owner, capture};
+      }
       this.queued++;
       this.accepting = this.accepting.then(async () => {
         if (cannotPublish) return;
-        if (!this.ready) { cannotPublish = true; drop('IO_ERROR'); return; }
-        try { await this.journal.append(entry); }
+        if (!this.ready) { cannotPublish = true; if (!this.invalid) drop('IO_ERROR'); return; }
+        let sequence: number;
+        try { sequence = await this.journal.append(entry); }
         catch (error) {
           cannotPublish = true;
           this.full = error instanceof EmergencyJournalFull;
           const code = this.full ? 'STORAGE_BUSY' : 'IO_ERROR';
           this.failJournal(this.full ? 'LIMIT' : 'WRITE', code);
           drop(code);
+          if (!this.full) this.retryWrite(0);
           return;
+        }
+        if (!this.ready) return;
+        if (live && live.owner === this.recorder && this.client() === live.owner.client) {
+          this.live.set(sequence, live);
+          live = undefined;
         }
         if (message.kind === 'checkpoint') {
           const point = BigInt(entry.before), session = welcome.source.pluginSessionId;
@@ -135,8 +163,12 @@ export class EmergencyDelivery implements IngestionDelivery {
           if (message.kind === 'event') this.ack(active, message.data.eventSeq);
           if (message.kind === 'gap') this.ack(active, message.data.lastEventSeq);
         }
+        if (message.kind !== 'checkpoint' && this.buffered && !this.client()) this.changed();
         this.kick();
-      }).finally(() => { this.queued--; });
+      }).finally(() => {
+        this.releaseCapture(live);
+        this.queued--;
+      });
     };
     return {
       checkpoint: (frame, receivedUtcMs) => {
@@ -164,7 +196,7 @@ export class EmergencyDelivery implements IngestionDelivery {
 
   /** History opened or was replaced. A retired recorder cannot process the next entry on the new worker. */
   storageChanged(): void {
-    this.historyReplayBefore = this.journal.nextSequence;
+    this.releaseLiveEntries();
     clearTimeout(this.retry);
     this.retry = undefined;
     this.kick();
@@ -173,8 +205,11 @@ export class EmergencyDelivery implements IngestionDelivery {
   async stop(): Promise<void> {
     this.stopped = true;
     clearTimeout(this.retry);
+    clearTimeout(this.writeRetry);
     await this.accepting;
     await this.projected;
+    await this.probing;
+    this.releaseLiveEntries();
   }
 
   private failJournal(stage: string, code = 'IO_ERROR'): void {
@@ -184,9 +219,26 @@ export class EmergencyDelivery implements IngestionDelivery {
     this.changed();
   }
 
+  private retryWrite(attempt: number): void {
+    if (this.stopped || this.invalid || attempt >= MAX_WRITE_RETRIES) return;
+    this.writeRetry = setTimeout(() => {
+      this.probing = this.journal.probe().then(() => {
+        if (!this.stopped && !this.invalid) this.resumeIntake();
+      }, () => this.retryWrite(attempt + 1)).finally(() => { this.probing = undefined; });
+    }, WRITE_RETRY_MS[Math.min(attempt, WRITE_RETRY_MS.length - 1)]);
+  }
+
+  private resumeIntake(): void {
+    this.full = false;
+    this.ready = true;
+    this.current = {state: 'pending'};
+    this.changed();
+    this.sourceReady();
+  }
+
   private ack(active: IntakeLink, through: string): void {
     const point = BigInt(through);
-    if (!active.link.current() || point <= active.acknowledged) return;
+    if (this.invalid || !active.link.current() || point <= active.acknowledged) return;
     active.acknowledged = point;
     const {welcome} = active;
     this.trusted = {session: welcome.source.pluginSessionId, through: point};
@@ -197,7 +249,7 @@ export class EmergencyDelivery implements IngestionDelivery {
   }
 
   private kick(): void {
-    if (!this.initialized || this.stopped || this.projected || this.retry || this.journal.pending === 0 || !this.client()) return;
+    if (!this.initialized || this.invalid || this.stopped || this.projected || this.retry || this.journal.pending === 0 || !this.client()) return;
     this.projected = this.drain().finally(() => {
       this.projected = undefined;
       this.kick();
@@ -212,18 +264,14 @@ export class EmergencyDelivery implements IngestionDelivery {
         const pending = await this.journal.head();
         if (!pending || this.stopped) return;
         const session = pending.entry.welcome.source.pluginSessionId;
-        const through = session === this.blockedSession ? undefined : await this.apply(client, pending.entry, pending.sequence < this.historyReplayBefore);
+        const through = session === this.blockedSession ? undefined : await this.apply(client, pending.entry, pending.sequence);
         // A deadline may retire the client while an operation is finishing. Leave the entry for the new client.
         if (this.client() !== client) return;
+        this.releaseCapture(this.live.get(pending.sequence));
+        this.live.delete(pending.sequence);
         if (session === this.blockedSession) { await this.journal.hold(pending.name); continue; }
         await this.journal.consume(pending.name);
-        if (this.full && this.journal.hasRoom && !this.stopped) {
-          this.full = false;
-          this.ready = true;
-          this.current = {state: 'pending'};
-          this.changed();
-          this.sourceReady();
-        }
+        if (this.full && this.journal.hasRoom && !this.stopped) this.resumeIntake();
         this.setRetry(undefined);
         const current = this.latest;
         if (current?.connection === pending.entry.connection) {
@@ -233,11 +281,20 @@ export class EmergencyDelivery implements IngestionDelivery {
         }
       }
     } catch (error) {
+      if (error instanceof EmergencyJournalIntegrityError) {
+        this.invalid = true;
+        this.releaseLiveEntries();
+        clearTimeout(this.writeRetry);
+        this.failJournal('INTEGRITY');
+        this.latest?.link.close('unavailable', 'IO_ERROR');
+        return;
+      }
       const code = error instanceof ProjectionError ? error.code : 'IO_ERROR';
       if (code !== this.reported) this.log('EMERGENCY_JOURNAL_REPLAY_WAIT', {code});
       this.reported = code;
       this.context = undefined;
-      this.historyReplayBefore = this.journal.nextSequence;
+      this.recorder = undefined;
+      this.releaseLiveEntries();
       this.setRetry(code);
       if (this.client() && !this.stopped) this.retry = setTimeout(() => {
         this.retry = undefined;
@@ -253,13 +310,27 @@ export class EmergencyDelivery implements IngestionDelivery {
     this.changed();
   }
 
-  private async apply(client: StorageClient, entry: EmergencyEntry, archived: boolean): Promise<string | undefined> {
+  private recorderFor(client: StorageClient): ProjectionSink {
+    if (this.recorder?.client !== client) this.recorder = {client, sink: this.sink(client)};
+    return this.recorder;
+  }
+
+  private releaseCapture(live: LiveEntry | undefined): void {
+    if (live?.capture) live.owner.sink.releaseCapture?.(live.capture);
+  }
+
+  private releaseLiveEntries(): void {
+    for (const live of this.live.values()) this.releaseCapture(live);
+    this.live.clear();
+  }
+
+  private async apply(client: StorageClient, entry: EmergencyEntry, sequence: number): Promise<string | undefined> {
     const {checkpoint, checkpointReceivedUtcMs, welcome, message, receivedUtcMs} = entry;
-    const historyReplay = archived || this.latest?.connection !== entry.connection || !this.latest.link.current();
-    const input: CommitContext = {receivedUtcMs, historyReplay};
-    let sink = this.context?.connection === entry.connection && this.context.client === client ? this.context.sink : undefined;
-    if (!sink) {
-      sink = this.context?.client === client ? this.context.sink : this.sink(client);
+    const owner = this.recorderFor(client), {sink} = owner;
+    const live = this.live.get(sequence);
+    const historyReplay = live?.owner !== owner || this.latest?.connection !== entry.connection || !this.latest.link.current();
+    const input: CommitContext = {receivedUtcMs, historyReplay, hardModeCapture: historyReplay ? undefined : live?.capture};
+    if (this.context?.connection !== entry.connection || this.context.owner !== owner) {
       const {committedThroughEventSeq: through} = stored(await sink.openSession(welcome));
       if (BigInt(through) < BigInt(entry.before)) {
         const session = welcome.source.pluginSessionId;
@@ -267,15 +338,16 @@ export class EmergencyDelivery implements IngestionDelivery {
         this.blockSession(session);
         return;
       }
-      const baselineContext = {receivedUtcMs: checkpointReceivedUtcMs, historyReplay: historyReplay || message.kind !== 'checkpoint'};
+      const restoreCheckpoint = message.kind !== 'checkpoint';
+      const baselineContext = {receivedUtcMs: checkpointReceivedUtcMs, historyReplay: historyReplay || restoreCheckpoint, restoreCheckpoint};
       stored(await sink.checkpoint!(checkpoint, baselineContext));
       // The live prefix of the old checkpoint was already consumed. Hydrate without opening a trip from an old job.
-      const prefixConsumed = message.kind !== 'checkpoint' && BigInt(entry.before) >= BigInt(checkpoint.data.status.delivery.nextEventSeq) - 1n;
+      const prefixConsumed = restoreCheckpoint && BigInt(entry.before) >= BigInt(checkpoint.data.status.delivery.nextEventSeq) - 1n;
       const baseline = prefixConsumed ? {...checkpoint, data: {...checkpoint.data, state: {...checkpoint.data.state,
         configuration: {...checkpoint.data.state.configuration, job: {available: false as const, reason: 'not-observed' as const}}}}} : checkpoint;
       stored(sink.observe!(baseline, baselineContext));
       await this.flushSink(sink, baselineContext);
-      this.context = {connection: entry.connection, client, sink};
+      this.context = {connection: entry.connection, owner};
     }
     if (message.kind === 'checkpoint') return;
     if (message.kind === 'snapshot') {

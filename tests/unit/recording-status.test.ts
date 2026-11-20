@@ -24,6 +24,13 @@ describe('G3 ordered rules', () => {
   const failedLater = {durableSelections: [] as const, retryCode: 'DISK_FULL', v1: {status: 'stale' as const, durable: {state: 'failed' as const, code: 'PERMISSION_DENIED'}}};
   it.each<[string, RecordingStatusInput, unknown]>([
     ['1 no recorder', input({...failedLater, recorder: false, history: {state: 'unavailable', code: 'PERMISSION_DENIED'}}), {state: 'disabled'}],
+    ['journal failed during a database outage', input({journalFailure: 'IO_ERROR', buffered: true, history: {state: 'unavailable', code: 'TIMEOUT', recovering: true}}), status('stopped', 'IO_ERROR')],
+    ['journal buffers during a database open', input({buffered: true, history: {state: 'opening', code: null}}), status('buffering')],
+    ['journal buffers while a worker is replaced', input({buffered: true, history: {state: 'unavailable', code: 'WORKER_FAILED', recovering: true}}), status('buffering')],
+    ['journal buffers during transient replay failure', input({buffered: true, retryCode: 'DATABASE_LOCKED'}), status('buffering')],
+    ['journal with a persistent replay failure', input({buffered: true, retryCode: 'SESSION_CONFLICT'}), status('stopped', 'SESSION_CONFLICT')],
+    ['journal with a permanent database refusal', input({buffered: true, history: {state: 'unavailable', code: 'SCHEMA_NEWER', recovering: false}}), status('stopped', 'SCHEMA_NEWER')],
+    ['journal with recovery attempts exhausted', input({buffered: true, history: {state: 'unavailable', code: 'DATABASE_LOCKED', recovering: false}}), status('stopped', 'DATABASE_LOCKED')],
     ['2 idle database', input({...failedLater, history: {state: 'idle', code: null}}), status('opening')],
     ['2 opening database', input({...failedLater, history: {state: 'opening', code: null}}), status('opening')],
     ['3 unavailable database', input({...failedLater, history: {state: 'unavailable', code: 'PERMISSION_DENIED'}}), status('stopped', 'PERMISSION_DENIED')],

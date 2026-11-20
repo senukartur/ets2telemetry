@@ -21,12 +21,20 @@ export interface EmergencyEntry {
 const PREFIX = /^([0-9]{12})\.frame$/;
 const HELD = /^([0-9]{12})\.held$/;
 const TEMP = /^([0-9]{12})\.partial$/;
+const PROBE = '.write-probe';
+const PROBE_PARTIAL = `${PROBE}.partial`;
 const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/;
 const MAX_FILES = 24_000;
 const MAX_BYTES = 128 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 3 * MAX_FRAME_BYTES + 512;
 type PendingFile = {name: string; bytes: number};
 export class EmergencyJournalFull extends Error {}
+export class EmergencyJournalIntegrityError extends Error {}
+
+function checkMissing(error: unknown): never {
+  if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new EmergencyJournalIntegrityError('Missing journal file');
+  throw error;
+}
 
 function decode(raw: string, origin: WelcomeMessage['source']['origin']): EmergencyEntry {
   const value = JSON.parse(raw) as Record<string, unknown>;
@@ -70,7 +78,6 @@ export class EmergencyJournal {
   constructor(private readonly directory: string, private readonly origin: WelcomeMessage['source']['origin']) {}
 
   get pending(): number { return this.files.size; }
-  get nextSequence(): number { return this.next; }
   get hasRoom(): boolean {
     return this.files.size + this.held < MAX_FILES && this.bytes + MAX_ENTRY_BYTES <= MAX_BYTES;
   }
@@ -80,12 +87,12 @@ export class EmergencyJournal {
     const directory = await lstat(this.directory);
     if (!directory.isDirectory() || directory.isSymbolicLink()) throw new Error('Invalid emergency journal directory');
     const entries = await readdir(this.directory, {withFileTypes: true});
-    if (entries.length > MAX_FILES + 1) throw new Error('Emergency journal contains too many files');
+    if (entries.length > MAX_FILES + 2) throw new Error('Emergency journal contains too many files');
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const pending = PREFIX.exec(entry.name);
       const match = pending ?? HELD.exec(entry.name);
-      if (!match && !TEMP.test(entry.name)) continue;
-      if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('Invalid journal file');
+      if (!match && !TEMP.test(entry.name) && entry.name !== PROBE && entry.name !== PROBE_PARTIAL) continue;
+      if (!entry.isFile() || entry.isSymbolicLink()) throw new EmergencyJournalIntegrityError('Invalid journal file');
       const location = path.join(this.directory, entry.name);
       if (!match) { await unlink(location); continue; }
       const {size} = await lstat(location);
@@ -106,41 +113,53 @@ export class EmergencyJournal {
   }
 
   private checkCapacity(bytes: number): void {
-    if (bytes <= 0 || bytes > MAX_ENTRY_BYTES) throw new Error('Invalid emergency journal entry size');
+    if (bytes <= 0 || bytes > MAX_ENTRY_BYTES) throw new EmergencyJournalIntegrityError('Invalid emergency journal entry size');
     if (this.files.size + this.held >= MAX_FILES || this.bytes + bytes > MAX_BYTES) throw new EmergencyJournalFull('Emergency journal limit');
   }
 
-  async append(entry: EmergencyEntry): Promise<void> {
+  async append(entry: EmergencyEntry): Promise<number> {
     const raw = JSON.stringify({version: 1, ...entry});
     const checksum = createHash('sha256').update(raw, 'utf8').digest('hex');
     const body = Buffer.from(`${checksum}\n${raw}`);
     this.checkCapacity(body.length);
     decode(raw, this.origin);
     if (this.next >= 1e12) throw new Error('Emergency journal sequence exhausted');
-    const number = String(this.next++).padStart(12, '0');
+    const sequence = this.next++;
+    const number = String(sequence).padStart(12, '0');
     const file = {name: `${number}.frame`, bytes: body.length};
-    const partial = path.join(this.directory, `${number}.partial`);
+    await this.publish(body, `${number}.partial`, file.name);
+    this.add(file);
+    return sequence;
+  }
+
+  /** Only retry durable ingestion once sync and publication work again. This never publishes a replay entry. */
+  async probe(): Promise<void> {
+    await this.publish(Buffer.from('1'), PROBE_PARTIAL, PROBE);
+    await unlink(path.join(this.directory, PROBE));
+  }
+
+  private async publish(body: Buffer, temporary: string, name: string): Promise<void> {
+    const partial = path.join(this.directory, temporary);
     const handle = await open(partial, 'wx');
     try {
       try {
         await handle.writeFile(body);
         await handle.sync();
       } finally { await handle.close(); }
-      await rename(partial, path.join(this.directory, file.name));
+      await rename(partial, path.join(this.directory, name));
     } catch (error) {
       await unlink(partial).catch(() => undefined);
       throw error;
     }
-    this.add(file);
   }
 
   async head(): Promise<{name: string; sequence: number; entry: EmergencyEntry} | undefined> {
     const file = this.files.values().next().value;
     if (!file) return undefined;
     const location = path.join(this.directory, file.name);
-    const info = await lstat(location);
-    if (!info.isFile() || info.isSymbolicLink() || info.size !== file.bytes) throw new Error('Invalid journal file');
-    const handle = await open(location, 'r');
+    const info = await lstat(location).catch(checkMissing);
+    if (!info.isFile() || info.isSymbolicLink() || info.size !== file.bytes) throw new EmergencyJournalIntegrityError('Invalid journal file');
+    const handle = await open(location, 'r').catch(checkMissing);
     const raw = Buffer.alloc(file.bytes + 1);
     try {
       let offset = 0;
@@ -149,11 +168,14 @@ export class EmergencyJournal {
         if (bytesRead === 0) break;
         offset += bytesRead;
       }
-      if (offset !== file.bytes) throw new Error('Invalid journal file length');
+      if (offset !== file.bytes) throw new EmergencyJournalIntegrityError('Invalid journal file length');
     } finally { await handle.close(); }
     const checksum = raw.subarray(0, 64).toString('ascii'), body = raw.subarray(65, file.bytes);
-    if (raw[64] !== 10 || checksum !== createHash('sha256').update(body).digest('hex')) throw new Error('Invalid journal checksum');
-    return {name: file.name, sequence: Number(file.name.slice(0, 12)), entry: decode(new TextDecoder('utf-8', {fatal: true}).decode(body), this.origin)};
+    if (raw[64] !== 10 || checksum !== createHash('sha256').update(body).digest('hex')) throw new EmergencyJournalIntegrityError('Invalid journal checksum');
+    let entry: EmergencyEntry;
+    try { entry = decode(new TextDecoder('utf-8', {fatal: true}).decode(body), this.origin); }
+    catch (error) { throw new EmergencyJournalIntegrityError('Invalid journal entry', {cause: error}); }
+    return {name: file.name, sequence: Number(file.name.slice(0, 12)), entry};
   }
 
   async consume(name: string): Promise<void> {

@@ -154,9 +154,11 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   const recordingStatus = (): RecordingHealth => {
     if (!recorder) return {state: 'disabled'};
     const current = v1.current, game = current.observation?.source.game;
-    return deriveRecordingStatus({recorder: true, target: plan.database.purpose, history: {state: history.state, code: history.failureCode},
+    const delivery = emergency?.status;
+    return deriveRecordingStatus({recorder: true, target: plan.database.purpose,
+      history: {state: history.state, code: history.failureCode, recovering: history.recovering},
       durableSelections: plan.durableSelections, v1: current, retryCode: v1.durableRetryCode ?? null, recorded: recorded === current.selection,
-      buffered: emergency?.buffered,
+      buffered: emergency?.buffered, journalFailure: delivery?.state === 'failed' && delivery.code !== 'ACK_AHEAD_OF_STORAGE' ? delivery.code : undefined,
       losses: addLosses(retiredLosses, recorder.losses()), trip: game ? recorder.tripSummary(game) : null});
   };
   const status = new RecordingStatusPublisher(recordingStatus, next => options.onRecordingStatus?.(next), options.statusOverrides);
