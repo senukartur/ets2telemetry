@@ -18,14 +18,13 @@ function hold(db:ReturnType<StorageConnection['writer']>,work:Row,reason:UploadW
   return workStatus({...work,state:status,hold_reason:reason,examined:0});
 }
 /** Refresh the existing root when a pending upload needs a new pin without a recorder revision. */
-function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row,refreshReplay=false):UploadWork {
+function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row,refreshPin=false):UploadWork {
   const head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref);
   const member=get(db,'SELECT logical_ref FROM logical_memberships WHERE trip_ref=?',work.root_ref);
   if(head&&head.material_version===work.material_version&&head.dirty===0n&&member?.logical_ref===work.root_ref){
-    // Private replay invalidation only replaces this unfinished upload, without changing other roots' material keys.
-    if(refreshReplay){
+    // Refresh only this unfinished upload, preserving its original delivery class and scan run.
+    if(refreshPin){
       db.prepare('UPDATE upload_change_heads SET dirty=1 WHERE root_ref=?').run(work.root_ref);
-      // This is the same pending upload, including its original delivery class and scan run.
       discoverRevision(db,work.root_ref as bigint,head.revision_ref,{mode:work.mode==='backfill'?'backfill':'live',runId:String(work.run_ref)});
     }else discoverRevision(db,work.root_ref as bigint,head.revision_ref);
   }
@@ -97,7 +96,10 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     if(last?.revision!==bound.http_revision && (last!==undefined||bound.http_revision!==0n) || bound.http_revision!==0n&&!prior)return hold(db,work,'reconciliation-required');
     const mapping=finishUploadFold(pin,JSON.parse(String(work.fold_json)) as UploadFold);
     if(mapping.status==='hold')return hold(db,work,'projection-invalid');
-    const minor=input.contractMinor??0, digest=uploadMaterialStamp(mapping.summary,minor);
+    const minor=input.contractMinor??0;
+    // A pre-1.3 pin omitted cargo even if the pinned trip already had saved opening evidence.
+    if(minor===3&&!Object.hasOwn(pin.facts,'cargoClassification'))return staleMaterial(db,work,true);
+    const digest=uploadMaterialStamp(mapping.summary,minor);
     if(digest===(minor===3?bound.material_digest:prior?.base)){
       db.prepare("UPDATE upload_materializations SET state='equal',examined=0 WHERE work_id=?").run(input.workId);
       db.prepare('UPDATE upload_source_bindings SET compared_version=?,pending=0,held=0,hold_reason=NULL WHERE root_ref=?').run(work.material_version,work.root_ref);
@@ -113,9 +115,7 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     if (minor < 2) {
       delete summary.snapshot.accounting;
     }
-    if (minor === 3) {
-      summary.snapshot.cargoClassification ??= null;
-    } else {
+    if (minor < 3) {
       delete summary.snapshot.cargoClassification;
     }
     const envelope:UploadEnvelope={...summary,contract:{major:1,minor},producer:{application:'ets2telemetry',version:input.producerVersion},eventId:randomUUID(),revision:Number(bound.http_revision)+1,

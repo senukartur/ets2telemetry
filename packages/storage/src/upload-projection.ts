@@ -30,8 +30,8 @@ export interface UploadFacts {
   hardModeResult: 'qualified' | 'not-qualified';
   /** Engine-1 accounting at the snapshot ledger head. Absent in pins prepared before it existed, which map to unknown. */
   accounting?: UploadAccounting;
-  /** Opening evidence of the pinned logical root. Older and unclassified pins omit it. */
-  cargoClassification?: CargoClassification;
+  /** Opening evidence of the pinned logical root. Only pins prepared before cargo support omit it. */
+  cargoClassification?: CargoClassification | null;
 }
 export interface UploadProjection {
   requestedTripUuid: string; rootTripUuid: string; readiness: UploadReadiness | 'redirected'; rootReadiness: UploadReadiness;
@@ -98,7 +98,7 @@ const facts: Check = v => {
   if (!record(v)) return false;
   const {accounting, cargoClassification, ...rest} = v;
   return (!Object.hasOwn(v, 'accounting') || accountingCheck(accounting))
-    && (!Object.hasOwn(v, 'cargoClassification') || isCargoClassification(cargoClassification)) && factsShape(rest);
+    && (!Object.hasOwn(v, 'cargoClassification') || nullable(isCargoClassification)(cargoClassification)) && factsShape(rest);
 };
 const totals = shape({members: count, configurations: count, intervals: count});
 const readiness = one('ready','identity-pending');
@@ -249,7 +249,7 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
       ruleContextComplete: reasons.size===0, clockAnomaly, reasons: [...reasons].sort()},
     hardModeResult: f.hardModeResult,
     accounting: f.accounting ?? {distance: 'unknown', fuel: 'unknown'},
-    ...(f.cargoClassification ? {cargoClassification: f.cargoClassification} : {})
+    ...(f.cargoClassification === undefined ? {} : {cargoClassification: f.cargoClassification})
   }};
   // Validate the exact allowlisted wire subset, including Dashboard's UTF-8, numeric and money limits.
   if (!wireValuesFit(summary)) return hold('unrepresentable');

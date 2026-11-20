@@ -10,6 +10,7 @@ import {UploadScheduler,type UploadStorage,type UploadClock} from '../../apps/de
 import type {UploadHttpResult} from '../../apps/desktop/src/dashboard-upload/http';
 import type {UploadEventMinor,UploadWork} from '../../packages/storage/src/upload-sync';
 import {encodeUploadEnvelope,readUploadMaterialStamp,uploadDigest,validateUploadEnvelope,type UploadEnvelope} from '../../packages/storage/src/upload-envelope';
+import type {UploadProjection} from '../../packages/storage/src/upload-projection';
 import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS} from '../../packages/storage/src/upload-sync';
 import {recheckUploadProjection} from '../../packages/storage/src/sqlite/upload-projection';
 import {discoverRevision} from '../../packages/storage/src/sqlite/upload-discovery';
@@ -806,6 +807,58 @@ it.each([2,3] as const)('REG-005/010 compares a deferred cargo fill using event 
     }
   }
 });
+
+it.each([[3,true],[2,true],[3,false]] as const)(
+  'REG-005/010 resumes minor %s work from a pre-cargo pin (%s) or a new pin with unknown cargo',
+  async (minor,legacy)=>{
+    const options=ws.options({purpose:'history'}),first=await openConnection(options),storage=new Storage(first);opened.push(storage);
+    const known=(JSON.parse(readFileSync('tests/fixtures/dashboard-upload/cargo-classification.json','utf8')) as UploadEnvelope).snapshot.cargoClassification!;
+    const classification=legacy?known:null,source={...await recordOpening(storage,false,{cargoId:'synthetic_cargo',generation:randomUUID(),classification}),
+      ...await connectOwner(storage)};
+    expect(ok(storage.advanceUploadScan({runId:source.runId,registrationId:source.registrationId})).phase).toBe('complete');
+    const oldWorkId=await complete(storage,source),db=first.writer();
+    const pin=JSON.parse(db.prepare('SELECT pin_json FROM upload_materializations WHERE work_id=?').pluck().get(oldWorkId) as string) as UploadProjection;
+    expect(pin.facts.cargoClassification).toEqual(classification);
+    if(legacy){
+      // The pre-cargo serializer left this key out of both persisted copies of the otherwise ready pin.
+      delete pin.facts.cargoClassification;
+      const oldMetadata=JSON.stringify(pin);
+      db.prepare('UPDATE upload_projection_pins SET metadata_json=? WHERE pin_id=?').run(oldMetadata,oldWorkId);
+      db.prepare('UPDATE upload_materializations SET pin_json=? WHERE work_id=?').run(oldMetadata,oldWorkId);
+    }
+    ok(storage.close());
+    const conn=await openConnection(options),resumed=new Storage(conn);opened.push(resumed);
+    const writer=conn.writer(),freeze=(workId:string,contractMinor:UploadEventMinor)=>ok(resumed.freezeUploadMaterialization({workId,
+      producerVersion:'test',createdUtcMs:1000,contractMinor}));
+    expect(ok(resumed.readRetainedUploadMaterializations()).items).toEqual([{workId:oldWorkId,registrationId:source.registrationId,state:'complete'}]);
+    let workId=oldWorkId;
+    if(minor===3&&legacy){
+      const before=writer.prepare('SELECT count(*) FROM logical_revisions').pluck().get();
+      expect(freeze(oldWorkId,minor)).toMatchObject({status:'stale',reason:'material-changed',eventId:null});
+      expect(writer.prepare('SELECT count(*) FROM upload_envelopes').pluck().get()).toBe(0n);
+      expect(writer.prepare('SELECT count(*) FROM logical_revisions').pluck().get()).toBe(before);
+      expect(ok(resumed.releaseUploadMaterialization({workId:oldWorkId})).status).toBe('released');
+      workId=await complete(resumed,source);
+    }
+    expect(freeze(workId,minor).status).toBe('frozen');
+    expect(ok(resumed.releaseUploadMaterialization({workId})).status).toBe('released');
+    const payload=(id:string)=>writer.prepare('SELECT payload FROM upload_envelopes WHERE work_ref=?').pluck().get(id) as Buffer;
+    const frozen=payload(workId),envelope=JSON.parse(frozen.toString()) as UploadEnvelope;
+    expect(envelope).toMatchObject({contract:{major:1,minor},revision:1,source:{tripId:source.tripUuid},
+      delivery:{mode:'backfill',syncRunId:source.runId}});
+    expect(envelope.snapshot.cargoClassification).toEqual(minor===3?classification:undefined);
+    expect(ok(resumed.readRetainedUploadMaterializations()).items).toEqual([]);
+    expect(ok(resumed.getUploadStoreStatus({registrationId:source.registrationId})).pendingSources).toBe(0);
+    if(minor===2){
+      delivered(resumed,source);
+      const updated=await complete(resumed,source);
+      expect(freeze(updated,3).status).toBe('frozen');
+      expect(JSON.parse(payload(updated).toString())).toMatchObject({contract:{major:1,minor:3},revision:2,source:envelope.source,
+        snapshot:{cargoClassification:known}});
+      expect(payload(workId)).toEqual(frozen);
+    }
+  }
+);
 // ET-113: an upgrade to v1.2 never re-encodes queued v1.0/v1.1 bytes. Without a material change the next comparison is
 // equal, so no revision is minted for the new version alone; the next material change freezes a v1.2 revision.
 it.each([0,1] as const)('REG-005/010 keeps a queued minor %s envelope byte-identical when the Dashboard later advertises minor 2',async minor=>{

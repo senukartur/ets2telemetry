@@ -76,7 +76,6 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
   const game = row.game as 'ets2' | 'ats';
   const diesel = tripEnergyPowertrain(db, game, row.truck_configuration_ref, snap.head, snap.logical, row.opened_event_ref, snap.events) === 'diesel';
   const accounting = uploadAccounting(db, snap.head);
-  const cargoClassification = readCargoClassification(row.cargo_classification);
   return {game, pluginSessionId: String(openingSession.plugin_session_uuid), outcome: row.outcome as UploadFacts['outcome'],
     closeReason: row.close_reason as UploadFacts['closeReason'], recordingCompleteness: row.recording_completeness as UploadFacts['recordingCompleteness'],
     openedBy: row.opened_by as 'event'|'checkpoint', checkpointNextEventSeq: job.source === 'checkpoint' ? fromU64Key(job.checkpoint_next_event_seq) : null,
@@ -89,7 +88,7 @@ function facts(db: Database.Database, snap: LogicalSnapshot, pin: LogicalRow): U
     clockAnomaly: opening?.utcMs !== null && opening?.utcMs !== undefined && opening.utcMs !== n(row.started_utc_ms)
       || outcome?.utcMs !== null && outcome?.utcMs !== undefined && row.ended_utc_ms !== null && outcome.utcMs !== n(row.ended_utc_ms),
     hardModeResult: deriveTripHardModeResult(row.is_hard_mode === 1n), accounting: {...accounting, fuel: diesel ? accounting.fuel : 'unknown'},
-    ...(cargoClassification ? {cargoClassification} : {})};
+    cargoClassification: readCargoClassification(row.cargo_classification) ?? null};
 }
 
 const unproven=(recordingLoss=false):RuleContext=>({version:2,status:'unproven',items:[],recordingLoss});
