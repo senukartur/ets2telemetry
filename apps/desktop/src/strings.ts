@@ -280,6 +280,7 @@ export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], str
   'paused': 'Game paused; recording continues when it resumes',
   'interrupted': 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap',
   'retrying': 'Retrying: {cause}. Nothing is acknowledged until storage commits; events while reconnecting are recorded as a gap',
+  'buffering': 'Saving to the emergency journal while the history database catches up',
   'stopped': 'Stopped: {cause}. Restart Yukon Union Telemetry after fixing it',
   'live-only': 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
   'not-recorded-source': 'Not recording the selected source'
@@ -293,6 +294,7 @@ export const RECORDING_STATE_TEXT_RU: Readonly<Record<RecordingHealth['state'], 
   'paused': 'Игра на паузе; запись продолжится после снятия с паузы',
   'interrupted': 'Соединение потеряно; запись возобновится при повторном подключении, а пропущенное время запишется как пропуск',
   'retrying': 'Повторная попытка: {cause}. Данные не подтверждаются до фиксации в хранилище; события во время переподключения записываются как пропуск',
+  'buffering': 'Данные сохраняются в аварийный журнал до переноса в историю',
   'stopped': 'Остановлено: {cause}. Перезапустите Yukon Union Telemetry после устранения причины',
   'live-only': 'Эта игровая сессия не записывается: база данных отстаёт от плагина (восстановленная база данных); запись возобновится со следующей игровой сессии',
   'not-recorded-source': 'Выбранный источник не записывается'
@@ -311,6 +313,7 @@ export const RECORDING_STATE_SHORT_TEXT: Readonly<Record<RecordingHealth['state'
   'paused': 'game paused',
   'interrupted': 'connection lost',
   'retrying': 'retrying, {cause}',
+  'buffering': 'emergency journal',
   'stopped': 'stopped, {cause}',
   'live-only': 'not this game session',
   'not-recorded-source': 'not this source'
@@ -324,6 +327,7 @@ export const RECORDING_STATE_SHORT_TEXT_RU: Readonly<Record<RecordingHealth['sta
   'paused': 'игра на паузе',
   'interrupted': 'соединение потеряно',
   'retrying': 'повтор, {cause}',
+  'buffering': 'аварийный журнал',
   'stopped': 'остановлено, {cause}',
   'live-only': 'не эта игровая сессия',
   'not-recorded-source': 'не этот источник'
@@ -342,6 +346,7 @@ export const RECORDING_STATE_LABEL_TEXT: Readonly<Record<RecordingHealth['state'
   'paused': 'Paused',
   'interrupted': 'Connection lost',
   'retrying': 'Error, retrying',
+  'buffering': 'Emergency journal',
   'stopped': 'Recording stopped',
   'live-only': 'Session not recorded',
   'not-recorded-source': 'Source not recorded'
@@ -355,6 +360,7 @@ export const RECORDING_STATE_LABEL_TEXT_RU: Readonly<Record<RecordingHealth['sta
   'paused': 'Пауза',
   'interrupted': 'Нет связи',
   'retrying': 'Ошибка, повтор',
+  'buffering': 'Аварийный журнал',
   'stopped': 'Запись остановлена',
   'live-only': 'Сессия не пишется',
   'not-recorded-source': 'Источник не пишется'

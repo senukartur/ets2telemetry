@@ -54,6 +54,8 @@ export interface HistoryStorageOptions {
   onOpened?: () => void;
   /** The open worker missed a command deadline. Stop recording work while keeping the source connected for replay. */
   onRuntimeTimeout?: () => void;
+  /** The emergency intake can safely keep recording while an exited worker is replaced. */
+  reopenAfterWorkerFailure?: boolean;
   /** ET-015c (G3): called after every change of `state`, for the recording status. */
   onStateChange?: (state: HistoryState) => void;
   /** Tests only. */
@@ -172,10 +174,11 @@ export class HistoryStorage {
   }
 
   #workerFailed(client: StorageClient, error: StorageError, command?: CommandName): void {
-    const recover = !this.#closing && this.#state === 'open' && error.code === 'TIMEOUT';
+    const recover = !this.#closing && this.#state === 'open'
+      && (error.code === 'TIMEOUT' || error.code === 'WORKER_FAILED' && this.options.reopenAfterWorkerFailure === true);
     this.#unavailable(error.code, command);
     if (!recover) return;
-    this.options.onRuntimeTimeout?.();
+    if (error.code === 'TIMEOUT') this.options.onRuntimeTimeout?.();
     this.#retryAfterExit(client, error);
   }
 

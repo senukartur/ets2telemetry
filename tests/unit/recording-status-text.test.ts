@@ -30,9 +30,10 @@ it('gives every reported state its headline, short form, sidebar label and alert
       'Recording stopped', 'Recording stopped until the telemetry service starts again. Live telemetry and the overlay keep working.'],
     ['live-only', 'ACK_AHEAD_OF_STORAGE', 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
       'not this game session', 'Session not recorded', 'Live telemetry and the overlay keep working; this game session is not recorded.'],
-    ['not-recorded-source', null, 'Not recording the selected source', 'not this source', 'Source not recorded', null]
+    ['not-recorded-source', null, 'Not recording the selected source', 'not this source', 'Source not recorded', null],
+    ['buffering', null, 'Saving to the emergency journal while the history database catches up', 'emergency journal', 'Emergency journal', null]
   ];
-  expect(rows.map(row => row[0]).sort()).toEqual(['interrupted', 'live-only', 'not-recorded-source', 'opening', 'paused', 'recording', 'retrying', 'stopped', 'waiting']);
+  expect(rows.map(row => row[0]).sort()).toEqual(['buffering', 'interrupted', 'live-only', 'not-recorded-source', 'opening', 'paused', 'recording', 'retrying', 'stopped', 'waiting']);
   for (const [state, code, headline, short, label, alert] of rows)
     expect(recordingStatusText(status(state, {code})), state).toEqual({headline, short, label, testBadge: null, detail: [], losses: [], alert, notice: HISTORY_NOTICE});
 });
@@ -40,7 +41,7 @@ it('gives every reported state its headline, short form, sidebar label and alert
 it('gives every state a Russian sidebar label and a test badge', () => {
   const labels: Record<RecordingHealth['state'], string> = {
     'disabled': 'Запись выключена', 'unknown': 'Статус неизвестен', 'opening': 'Подготовка', 'waiting': 'Ждём игру', 'recording': 'Идёт запись',
-    'paused': 'Пауза', 'interrupted': 'Нет связи', 'retrying': 'Ошибка, повтор', 'stopped': 'Запись остановлена',
+    'paused': 'Пауза', 'interrupted': 'Нет связи', 'retrying': 'Ошибка, повтор', 'buffering': 'Аварийный журнал', 'stopped': 'Запись остановлена',
     'live-only': 'Сессия не пишется', 'not-recorded-source': 'Источник не пишется'
   };
   for (const [state, label] of Object.entries(labels) as [RecordingHealth['state'], string][]) {

@@ -31,7 +31,7 @@ const CODE_TABLE: Readonly<Record<RecordingCode, true>> = {
 };
 /** The closed set of codes a recording status may carry (G2). */
 export const RECORDING_CODES: readonly RecordingCode[] = Object.freeze(Object.keys(CODE_TABLE) as RecordingCode[]);
-const RECORDING_STATES: readonly RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped'];
+const RECORDING_STATES: readonly RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'buffering', 'not-recorded-source', 'live-only', 'stopped'];
 const TARGETS: readonly RecordingTarget[] = ['history', 'synthetic', 'replay'];
 const PHASES: readonly RecordingTrip['phase'][] = ['idle', 'active', 'awaiting-outcome', 'reload-check'];
 const COMPLETENESS: readonly RecordingTrip['completeness'][] = ['unknown', 'partial', 'complete', null];
@@ -64,6 +64,8 @@ export interface RecordingStatusInput {
   v1: Pick<V1SourceState, 'selection' | 'status' | 'durable'>;
   /** G9: the ACK pipeline's retry code, set by a retryable commit or sample failure and cleared by a successful write. */
   retryCode: string | null;
+  /** An independent on-disk queue holds data waiting for SQLite. */
+  buffered?: boolean;
   /**
    * Whether the current selection was recording or paused (durable delivery active with fresh, connected or paused v1 data)
    * since it was selected. A connection that has not recorded yet then reads `waiting`; one that has reads `interrupted`.
@@ -93,6 +95,7 @@ export function deriveRecordingStatus(input: RecordingStatusInput): RecordingHea
   const status = (state: RecordingState, code: RecordingCode | null = null): RecordingHealth =>
     ({state, target: input.target, code, losses: {...input.losses}, trip: input.trip && {...input.trip}});
   const {history, v1} = input;
+  if (input.buffered && v1.durable.state !== 'failed' && (history.state !== 'open' || input.retryCode !== null)) return status('buffering');
   if (history.state === 'idle' || history.state === 'opening') return status('opening');
   if (history.state !== 'open') return status('stopped', recordingCode(history.code ?? 'STORAGE_CLOSED'));
   if (v1.durable.state === 'failed') return v1.durable.code === 'ACK_AHEAD_OF_STORAGE' ? status('live-only', 'ACK_AHEAD_OF_STORAGE') : status('stopped', recordingCode(v1.durable.code));

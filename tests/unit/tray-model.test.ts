@@ -66,7 +66,7 @@ it('shows the recording status as the second status line', () => {
   expect(trayModel(withRecording({state: 'unknown'})).tooltip).toBe('Yukon Union Telemetry\nService ready · Source: ETS2 (connected)');
 });
 it('keeps every recording line within the notification-area limit', () => {
-  const states: RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped'];
+  const states: RecordingState[] = ['opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'buffering', 'not-recorded-source', 'live-only', 'stopped'];
   for (const state of states) for (const target of ['history', 'synthetic', 'replay'] as const) for (const code of [null, ...RECORDING_CODES]) {
     const label = recordingLine(withRecording({state, target, code, losses: NO_LOSSES, trip: null}));
     expect(label.kind === 'status' && label.label.startsWith('Recording: ') && label.label.length <= TRAY_TOOLTIP_LIMIT).toBe(true);

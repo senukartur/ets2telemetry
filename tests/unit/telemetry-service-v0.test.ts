@@ -464,7 +464,7 @@ it('runs protocol v1 beside v0 with the history recorder, following each selecti
     // E2, amended by the game recording enablement of October 25, 2026: the default plan gives the ETS2 and ATS selections
     // the history recorder, so their hello asks for durable delivery; the synthetic and replay selections stay live-only.
     expect(f.v1.options).toHaveLength(1);
-    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
+    expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'delivery', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState']);
     expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
     expect(f.v1.select).not.toHaveBeenCalled();
     const executable = 'C:\\fixed\\telemetry-pipe-client.exe';
@@ -545,21 +545,18 @@ it('bounds the v1 ingestion stop by its 1,000 ms intake budget and reports a lat
 describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
   const stopProbe = (report: ProbeDependencies['report']) => {report({type: 'stopped'}); return Promise.resolve();};
   const v1Endpoint = '\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-123-' + randomUUID();
-  it('builds the default plan: the history database with a trip recorder for ETS2 and ATS only, once the database is open (E2)', async () => {
+  it('uses the emergency journal for game history while keeping the database target isolated from fixtures', async () => {
     const f = await stoppedService(stopProbe);
     try {
       const options = f.v1.options[0];
-      expect(Object.keys(options).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
       expect(options.durableSelections).toEqual(['ets2', 'ats']);
-      expect(options.sink?.constructor.name).toBe('TripRecorderSink');
+      expect(options.delivery).toBeTypeOf('function');
+      expect(options.sink).toBeUndefined();
       expect(f.history.options).toHaveLength(1);
       expect(f.history.options[0].target).toEqual({purpose: 'history'});
-      // R10: durable only while the database is open; its open lets a live-only connection reconnect durable.
-      for (const [state, ready] of [['idle', false], ['opening', false], ['open', true], ['unavailable', false], ['closed', false]] as const) {
-        f.history.state = state; expect(options.durableReady!()).toBe(ready);
-      }
-      f.history.options[0].onOpened!();
-      expect(f.v1.durableAvailabilityChanged).toHaveBeenCalledOnce();
+      // The journal checks its own readiness. SQLite availability does not gate game intake.
+      f.history.state = 'unavailable';
+      expect(options.durableReady!()).toBe(true);
       expect(f.log.mock.calls.map(call => call[0])).not.toContain('RECORDING_TARGET_REJECTED');
     } finally {f.stop(); await vi.advanceTimersByTimeAsync(0); f.restore();}
   });
@@ -588,7 +585,8 @@ describe('ET-015a recording gate in the service (R3, R10, R14)', () => {
     const f = await stoppedService(stopProbe);
     try {
       expect(f.log.mock.calls.filter(call => call[0] === 'RECORDING_TARGET_REJECTED')).toEqual([['RECORDING_TARGET_REJECTED']]);
-      expect(Object.keys(f.v1.options[0]).sort()).toEqual(['connectGame', 'diagnose', 'durableReady', 'durableSelections', 'onHealthy', 'onState', 'sink']);
+      expect(f.v1.options[0].delivery).toBeTypeOf('function');
+      expect(f.v1.options[0].sink).toBeUndefined();
       expect(f.v1.options[0].durableSelections).toEqual(['ets2', 'ats']);
       expect(f.history.options[0].target).toEqual({purpose: 'history'});
       expect(f.history.options[0].onOpened).toBeTypeOf('function');

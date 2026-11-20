@@ -172,6 +172,7 @@ function onV1State(state: V1SourceState): void {
 // orderly stop begins; a service whose plan has no durable selection builds no recorder and reports {state: 'disabled'} once,
 // which production no longer does.
 const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HISTORY_RECORDING, localAppData: process.env.LOCALAPPDATA, log,
+  emergencyJournal: 'game',
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game, target) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1', target),
   profileEvidence: () => profileObserver.evidence(), profileStatus: () => profileObserver.status(), hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
   onV1State, onV1Healthy: target => coordinator.healthy(target), onRecordingStatus: status => port.postMessage({type: 'recording', status})});

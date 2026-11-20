@@ -9,7 +9,7 @@ import {Script, ETS2_A, ETS2_B, ATS_A, r} from '../shared/trip-messages';
 // and the reactive v1 simulator on actual Windows pipes. Every case records `synthetic:<name>` under a temporary
 // LOCALAPPDATA and must never create its history database. Waits count held requests, commits and ACKs; real-time bounds
 // are named hang guards only. Expected values are written by hand from R10, R14, H11 and the simulator scenarios.
-import {existsSync, readFileSync} from 'node:fs';
+import {existsSync, readFileSync, readdirSync} from 'node:fs';
 import {EventEmitter, once} from 'node:events';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -58,11 +58,12 @@ const TIMELINE_CODES = /^(HISTORY_STORAGE_OPENED|HISTORY_STORAGE_CLOSED|V1_DURAB
  * factory. Only the worker, the fixture connect, the test close grace and ingestion test knobs are supplied.
  */
 function serviceRuntime(name: string, worker: StorageWorkerHandle | (() => StorageWorkerHandle), socket: ReturnType<typeof tracedConnect>, timeline: string[],
-  options: {onState?: (state: V1SourceState) => void; ingestionOverrides?: RecordingIngestionOverrides; historyOverrides?: RecordingRuntimeOptions['historyOverrides']} = {}) {
+  options: {onState?: (state: V1SourceState) => void; ingestionOverrides?: RecordingIngestionOverrides; historyOverrides?: RecordingRuntimeOptions['historyOverrides']; emergencyJournal?: boolean} = {}) {
   const logs: [string, unknown][] = [], states: V1SourceState[] = [];
   const runtime = createRecordingRuntime({env: {ETS2TELEMETRY_RECORDING: `synthetic:${name}`}, gameHistory: GAME_HISTORY_RECORDING, localAppData: ws.directory,
     log: (event, _detail, facts) => { logs.push([event, facts]); if (TIMELINE_CODES.test(event)) timeline.push(event); },
     createWorker: typeof worker === 'function' ? worker : () => worker, connect: socket.connect, ingestionOverrides: options.ingestionOverrides,
+    emergencyJournal: options.emergencyJournal ? 'test' : undefined,
     historyOverrides: {appVersion: '0.1.0-test', closeGraceMs: TEST_CLOSE_GRACE_MS, ...options.historyOverrides},
     onV1State: state => { states.push(state); options.onState?.(state); }});
   return {runtime, logs, states};
@@ -92,6 +93,121 @@ function shutdownClock() {
 }
 
 describe('ET-015c recording runtime with the real storage worker and the real shutdown sequence', () => {
+  it('recovers a complete event stream and second-by-second samples after the game and application exit with SQLite unavailable', async () => {
+    const input = scenario('normal-delivery');
+    input.steps = input.steps.map(step => ({...step, atMs: Number(step.atMs) * 10, ...(step.action === 'frame' ? {
+      channels: {...step.channels as Json, 'world.placement': {x: Number(step.atMs), y: 42, z: 100, heading: 0, pitch: 0, roll: 0}}
+    } : {})}));
+    const replay = withTransport(input, 'emergency-delivery', [
+      connect(0, {durable: true, commit: 'each', ack: 'each'}), disconnect(11_000)
+    ]);
+    const server = await serveV1Reactive(replay, {scale: 0, awaitScriptedAcks: true});
+    const first = storageWorker(), timeline: string[] = [], traced = tracedHandle(first.handle, timeline, 'open');
+    const name = 'emergency-delivery';
+    const directory = path.join(ws.directory, 'ETS2Telemetry', 'emergency-journal', `synthetic-${name}`);
+    const before = serviceRuntime(name, traced.handle, tracedConnect(timeline), timeline, {emergencyJournal: true});
+    const after = serviceRuntime(name, () => storageWorker().handle, tracedConnect(timeline), timeline, {emergencyJournal: true});
+    try {
+      before.runtime.start();
+      await guarded(traced.held, 'blocked SQLite open', HANG_GUARD_MS);
+      await until(() => before.logs.some(([event]) => event === 'EMERGENCY_JOURNAL_READY'), 'emergency journal open', HANG_GUARD_MS);
+      before.runtime.v1.select('synthetic', server.endpoint);
+      const report = await guarded(server.done, 'delivery before SQLite opens', HANG_GUARD_MS);
+      expect(servedAcks(report, 0)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+      await before.runtime.v1.stop();
+      expect(existsSync(target(name))).toBe(false);
+      expect(readdirSync(directory).filter(file => file.endsWith('.frame')).length).toBeGreaterThan(9);
+      // The application exits without having written any SQLite history. No source reconnects in the next process.
+      await first.handle.terminate();
+      await guarded(first.exit, 'first worker exit', HANG_GUARD_MS);
+      after.runtime.start();
+      await until(() => readdirSync(directory).length === 0, 'emergency journal drained', HANG_GUARD_MS);
+      await after.runtime.v1.stop();
+      await after.runtime.history.close();
+      const storage = await reader(name).open();
+      try {
+        const session = sessionOf(replay);
+        expect(ok(storage.listEvents(session)).map(event => event.eventSeq)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+        expect(ok(storage.listTrips()).trips).toMatchObject([{openedEventSeq: '3', outcome: 'delivered', outcomeEventSeq: '8'}]);
+      } finally { storage.close(); }
+      const samples = await storedSamples(reader(name), input.seed, sessionOf(replay));
+      expect(samples).toEqual(expect.arrayContaining([
+        expect.objectContaining({trip: 'trip@3', position: {available: true, value: {x: 100, y: 42, z: 100}}}),
+        expect.objectContaining({trip: 'trip@3', position: {available: true, value: {x: 200, y: 42, z: 100}}})
+      ]));
+      const seconds = (samples as {monotonicNs: string}[]).map(sample => BigInt(sample.monotonicNs) / 1_000_000_000n);
+      expect(new Set(seconds).size).toBe(samples.length);
+    } finally {
+      before.runtime.stopStatus();
+      after.runtime.stopStatus();
+      await before.runtime.v1.stop();
+      await after.runtime.v1.stop();
+      await server.stop();
+    }
+  }, 90_000);
+
+  it.each(['commitEvent', 'appendSamples'] as const)('replays %s without duplicates when SQLite committed before losing its response', async command => {
+    const input = scenario('normal-delivery');
+    input.steps = input.steps.map(step => ({...step, atMs: Number(step.atMs) * 10}));
+    const replay = withTransport(input, 'emergency-ambiguous-write', [
+      connect(0, {durable: true, commit: 'each', ack: 'each'}), disconnect(11_000)
+    ]);
+    const server = await serveV1Reactive(replay, {scale: 0, awaitScriptedAcks: true});
+    const first = storageWorker(), timeline: string[] = [], clock = shutdownClock();
+    let withheld: number | undefined, signal!: () => void;
+    const committed = new Promise<void>(resolve => { signal = resolve; });
+    const handle: StorageWorkerHandle = {
+      ...first.handle,
+      postMessage: request => {
+        if (withheld === undefined && request.command.name === command
+          && (request.command.name === 'appendSamples' || (request.command.input.message as {data: {eventSeq: string}}).data.eventSeq === '8')) {
+          withheld = request.id;
+        }
+        first.handle.postMessage(request);
+      },
+      onMessage: listener => first.handle.onMessage(message => {
+        const reply = message as {id: number; result: {ok: boolean}};
+        if (reply.id === withheld && reply.result.ok) signal();
+        else listener(message);
+      })
+    };
+    const name = 'emergency-ambiguous-write';
+    const directory = path.join(ws.directory, 'ETS2Telemetry', 'emergency-journal', `synthetic-${name}`);
+    let workers = 0;
+    const {runtime, logs} = serviceRuntime(name, () => ++workers === 1 ? handle : storageWorker().handle, tracedConnect(timeline), timeline,
+      {emergencyJournal: true, historyOverrides: {timers: clock.timers}});
+    try {
+      runtime.start();
+      await until(() => runtime.history.state === 'open' && logs.some(([event]) => event === 'EMERGENCY_JOURNAL_READY'), 'history and journal open', HANG_GUARD_MS);
+      runtime.v1.select('synthetic', server.endpoint);
+      await guarded(committed, 'the committed response withheld from the storage client', HANG_GUARD_MS);
+      const report = await guarded(server.done, 'delivery while SQLite is stalled', HANG_GUARD_MS);
+      expect(servedAcks(report, 0).at(-1)).toBe('9');
+      clock.advanceTo(COMMAND_DEADLINE_MS);
+      expect(runtime.recordingStatus().state).toBe('buffering');
+      await guarded(first.exit, 'timed-out worker exit', HANG_GUARD_MS);
+      await Promise.resolve();
+      clock.advanceTo(COMMAND_DEADLINE_MS + HISTORY_REOPEN_BACKOFF_MS[0]);
+      await until(() => readdirSync(directory).length === 0, 'journal replay through replacement SQLite worker', HANG_GUARD_MS);
+      expect(workers).toBe(2);
+      await runtime.v1.stop();
+      await runtime.history.close();
+      const storage = await reader(name).open();
+      try {
+        expect(ok(storage.listEvents(sessionOf(replay))).map(event => event.eventSeq)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+        expect(ok(storage.listTrips()).trips).toMatchObject([{openedEventSeq: '3', outcome: 'delivered', outcomeEventSeq: '8'}]);
+      } finally { storage.close(); }
+      const samples = await storedSamples(reader(name), input.seed, sessionOf(replay));
+      const seconds = (samples as {monotonicNs: string}[]).map(sample => BigInt(sample.monotonicNs) / 1_000_000_000n);
+      expect(samples.length).toBeGreaterThan(1);
+      expect(new Set(seconds).size).toBe(samples.length);
+    } finally {
+      runtime.stopStatus();
+      await runtime.v1.stop();
+      await server.stop();
+    }
+  }, 90_000);
+
   it.each(['before commit', 'after commit'])('recovers a delivery timed out %s without an early ACK or a duplicate trip', async stage => {
     const input = scenario('normal-delivery');
     // The delivery is event 8. Run the final clear on the replacement connection.
