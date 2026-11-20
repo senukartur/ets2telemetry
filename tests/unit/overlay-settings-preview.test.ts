@@ -13,7 +13,7 @@ vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHea
 const escaped = (text: string) => renderToStaticMarkup(React.createElement(React.Fragment, null, text));
 const driving: OverlaySectionId[] = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range'];
 
-it.each(['en', 'ru'] as const)('shares enabled order, localized values and the fixed Hard Mode footer in every layout (%s)', language => {
+it.each(['en', 'ru'] as const)('shares enabled order, localized values, Hard Mode and qualification in every layout (%s)', language => {
   for (const layout of OVERLAY_LAYOUTS) {
     const settings = {...DEFAULT_OVERLAY_SETTINGS, layout, sections: OVERLAY_PRESETS['driving-only']};
     const example = overlayExample(settings, language, 'active'), view = overlayView(example);
@@ -28,6 +28,9 @@ it.each(['en', 'ru'] as const)('shares enabled order, localized values and the f
     for (const id of driving) expect(html.match(new RegExp(`data-testid="overlay-section-${id}"`, 'g')), id).toHaveLength(1);
     expect(html).not.toContain('data-testid="overlay-section-cargo"');
     expect(html.match(/data-testid="overlay-hard-mode"/g)).toHaveLength(1);
+    expect(html.match(/class="qualification-medal /g)).toHaveLength(1);
+    expect(html).toContain('data-state="pass" role="img"');
+    expect(html).toContain(escaped(language === 'ru' ? 'Предварительная квалификация: соответствует' : 'Provisional qualification: pass'));
     expect(html.indexOf('data-testid="overlay-hard-mode"')).toBeGreaterThan(html.indexOf('data-testid="overlay-section-range"'));
     expect(html).toContain(escaped(language === 'ru' ? 'Пример данных · не текущая телеметрия' : 'Example data · not live telemetry'));
     expect(html).not.toMatch(/overlay-root|overlay-body|is-editing|latency-marker/);

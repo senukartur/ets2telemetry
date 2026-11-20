@@ -27,9 +27,9 @@ html:has(.overlay-body) { background: transparent; }
 .overlay.is-dim .overlay-value, .overlay.is-dim .overlay-unit, .overlay.is-dim .overlay-icon, .overlay.is-dim .overlay-ring, .overlay.is-dim .overlay-sign, .overlay.is-dim .overlay-sign-glyph { opacity: .5; }
 .overlay.is-dim .overlay-tag .overlay-icon { opacity: 1; }
 
-/* Strip (ET-012c): full-width surface with centred items in 38 px rows inside a window sized for the enabled sections (overlay-strip.ts, whose
+/* Strip (ET-012c): content-sized surface with centred items in 38 px rows inside a window sized for the enabled sections (overlay-strip.ts, whose
    constants these rules must match). Items wrap whole onto as many rows as they need; each is capped by an inline
-   max-width, and a longer value ends in an ellipsis. The surface fills the window width and takes its content height at the saved vertical anchor; the
+   max-width, and a longer value ends in an ellipsis. The surface fits its content within the available window width and takes its content height at the saved vertical anchor; the
    unused reserved rows stay transparent. */
 .overlay-strip { justify-content: center; align-items: flex-start; }
 .overlay-visually-hidden {
@@ -40,7 +40,7 @@ html:has(.overlay-body) { background: transparent; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; width: 100%; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
+.overlay-strip-row { display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; column-gap: 14px; width: fit-content; max-width: 100%; max-height: 100%; padding: 0 12px; overflow: hidden; }
 .overlay-strip-row > * { height: 38px; }
 .overlay-strip-row > .overlay-tag { flex: none; align-self: center; }
 .overlay-strip .overlay-item { min-width: 0; overflow: hidden; }

@@ -33,7 +33,7 @@ export function overlayExample(settings: OverlaySettings, language: AppLanguage,
   };
   return {source: 'ETS2', origin: 'none', status: 'connected', freshness: 'current', paused: false, editing: false,
     language, layout: settings.layout, backgroundOpacity: settings.backgroundOpacity, contentAnchorY: 0,
-    speed: '84', speedUnit: 'km/h', fuel: '620', fuelUnit: 'L', hardMode: {state: 'active'},
+    speed: '84', speedUnit: 'km/h', fuel: '620', fuelUnit: 'L', hardMode: {state: 'active'}, qualification: 'pass',
     sections: OVERLAY_SECTION_IDS.filter(id => settings.sections[id]).map(id => examples[id])};
 }
 
