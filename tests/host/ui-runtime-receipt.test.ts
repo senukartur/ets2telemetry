@@ -15,7 +15,7 @@ const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmo
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
 const previewScreens = ['settings-preview-strip', 'settings-preview-card', 'settings-preview-cluster', 'settings-preview-hud', 'settings-preview-narrow'];
 const previewNames = ['strip', 'card', 'cluster', 'hud', 'narrow-strip', 'large-strip', 'large-card'];
-const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state'];
+const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'cargo-damage', 'game-time', 'mandatory-break', 'rest-state'];
 const previewSectionsStrip = ['speed', 'speed-limit', ...previewSections.filter(id => !['speed', 'speed-limit'].includes(id))];
 // ET-084: the card and the cluster draw the speed limit sign with speed, gear and RPM, so it comes before cruise control in their DOM.
 const previewSectionsHero = ['speed', 'gear', 'rpm', 'speed-limit', ...previewSections.filter(id => !['speed', 'gear', 'rpm', 'speed-limit'].includes(id))];
@@ -43,7 +43,7 @@ function fixture(uiCase: Case) {
     overlayPreview: uiCase === 'overlay' ? ['en', 'ru'].flatMap(language => previewNames.map(name => ({language, viewportWidth: 1280, viewportHeight: 800, name,
       layout: name.endsWith('strip') ? 'strip' : name.endsWith('card') ? 'card' : name, scale: name.startsWith('large-') ? '3' : '1',
       width: 210, height: 320, outside: [] as string[], fitsScene: true, sections: name.endsWith('card') || name === 'cluster' ? [...previewSectionsHero] : name.includes('strip') ? [...previewSectionsStrip] : [...previewSections],
-      cardRows: name.endsWith('card') ? {count: 15, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
+      cardRows: name.endsWith('card') ? {count: 16, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
       ...size, screen, imageWidth: size.width, imageHeight: size.height, bytes: 600})))).concat(uiCase === 'settings' ? sizes.map(size => ({file: `ui-settings-read-only-en-${size.width}x${size.height}.png`, language: 'en', ...size, screen: 'read-only', imageWidth: size.width, imageHeight: size.height, bytes: 600})) : [])
       .concat(uiCase === 'overlay' ? references.map(screen => ({file: `ui-overlay-${screen}-en-1280x800.png`, language: 'en', ...sizes[0], screen, imageWidth: 1280, imageHeight: 56, bytes: 600})) : [])
@@ -111,6 +111,7 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'preview observation wrong layout', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].layout = 'card';}},
     {name: 'large preview uses saved scale', uiCase: 'overlay', change: value => {value.ui.overlayPreview.find(row => row.name === 'large-card')!.scale = '1';}},
     {name: 'preview sections omitted', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections.pop();}},
+    {name: 'preview cargo damage omitted', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections = value.ui.overlayPreview[0].sections.filter(id => id !== 'cargo-damage');}},
     {name: 'preview sections reordered', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections.reverse();}},
     {name: 'Strip preview puts the limit after cruise control', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections = [...previewSections];}},
     {name: 'preview has escaped rows', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].outside = ['overlay-section-cargo'];}},
@@ -118,8 +119,8 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'preview has no visible bounds', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].height = 0;}},
     {name: 'preview width exceeds viewport', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].width = 1281;}},
     {name: 'preview bounds invalid', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].height = Number.NaN;}},
-    {name: 'Card preview loses fixed footer row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 14;}},
-    {name: 'Card preview has an extra row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 16;}},
+    {name: 'Card preview loses fixed footer row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 15;}},
+    {name: 'Card preview has an extra row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 17;}},
     {name: 'Card preview has block icons', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.display = ['block'];}},
     {name: 'Card preview has mismatched vertical alignment', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.verticalAlign = ['baseline'];}},
     {name: 'Card preview label breaks line', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.sameLine = false;}},

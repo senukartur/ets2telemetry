@@ -47,9 +47,9 @@ export function overlayTagObservation() {
   });
 }
 
-// ET-012c strip containment. The synthetic checkpoint fixture (tests/fixtures/protocol-v0/checkpoint.json) carries
-// current values for these sections, in canonical order; range stays hidden because its estimate is not observed.
-export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+// ET-012c strip containment. The synthetic v0 checkpoint shows these sections in canonical order. Cargo damage
+// shows a dash on its active job. Range stays hidden because its estimate is not observed.
+export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time']);
 // The hidden overlay window is created at the strip's reserved size for every section at the scale setting 1, 1280 x 82
 // DIP at zoom 0.7 (overlay-geometry.ts, ET-045e; ET-052's fifteenth section needs a third row, 56 DIP with two), so its
 // CSS viewport is 82 / 0.7 = 117.14 high, within one CSS px of rounding, and up to 1280 / 0.7 = 1828.57 wide. Without a game window main never places it, and Windows limits a window
@@ -455,6 +455,7 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
   // ET-012c (REG-016): every enabled strip section with data lies inside the overlay window. The observation is stored
   // before it is verified, so a failed receipt keeps it. Recorded for review; RuntimeReceipt.ps1 does not validate it.
   verifyStripLayout(result.stripLayout = await waitForStripLayout(overlay, {sections: STRIP_SMOKE_SECTIONS}));
+  assert.equal(await overlay.getByTestId('overlay-cargo-damage').textContent(), '—');
   source.setReading(20, 71); await observe('changed', {speed: '72', fuel: '71'}); await dashboardReading('72', '71.0');
   result.changedReading = {speedKmh: 72, fuelL: 71};
   source.setUnavailable(); await observe('missing', {speed: '—', fuel: '—'});

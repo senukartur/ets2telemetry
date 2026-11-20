@@ -147,7 +147,7 @@ describe('ET-012c strip containment observation', () => {
     expect(await observeStrip({sections: canonical}, canonical)).toBe(false);
   });
   // Hand-derived from tests/fixtures/protocol-v0/checkpoint.json: range stays hidden because its estimate is not observed.
-  const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time'];
+  const EXPECTED = ['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time'];
   type Box = {left: number; top: number; width: number; height: number};
   interface Layout {sections?: string[]; roots?: number; indicators?: number; layout?: string; freshness?: string; viewport?: {innerWidth: number; innerHeight: number};
     root?: Box; row?: Box; item?: Record<string, Box>; maxWidth?: Record<string, string>; truncated?: string[]}
