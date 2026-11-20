@@ -11,7 +11,7 @@ import {confineAtomicToRoot, confineToRoot, TEST_ROOT_MARKER, testRootRegistryDi
 import {pluginBundleDirectory, readPluginBundle, type LoadedPluginBundle, type PluginBundleResult} from './plugin-bundle';
 import {nodeInstallerFs, PluginInstaller, type InstallerFileSystem, type PluginActionResult, type PluginTarget, type RunningCheck} from './plugin-installer';
 import {failureFor, installRecordFor, PluginRegistry, sameRoot, type PluginBlockReason} from './plugin-registry';
-import {canonicalDirectory, discoverSteamGames, isInsideOrEqual, PLUGIN_GAMES, validateGameLayout, type SteamDiscovery, type SteamRootResult} from './steam-discovery';
+import {canonicalDirectory, discoverSteamGames, GAME_IDENTITY, isDrivePath, isInsideOrEqual, PLUGIN_GAMES, validateGameLayout, type SteamDiscovery, type SteamRootResult} from './steam-discovery';
 import {readSteamRoot} from './steam-registry';
 
 // Silent plugin setup in main (ET-017 P13, P14; docs/plugin-setup.md, "Setup run"). It combines discovery (PR-2), the
@@ -119,6 +119,7 @@ export class PluginSetup {
   private registryLoading: Promise<PluginRegistry> | undefined;
   private bundle: LoadedPluginBundle | undefined;
   private discovery: SteamDiscovery | undefined;
+  private cargoDiscovery: Promise<SteamDiscovery> | undefined;
   private current: Promise<void> | undefined;
   private followUp: Promise<void> | undefined;
   /** Registry writes of an exclusion change or a folder choice; the exit's idle waits for them. */
@@ -303,6 +304,33 @@ export class PluginSetup {
   /** The id of the listed target for a game folder (`<game>:<source>:<ordinal>`), or undefined when it is not listed. */
   targetIdFor(game: PluginGame, root: string): string | undefined {
     return this.games[game].targets.find(target => sameRoot(target.root, root))?.id;
+  }
+
+  /** The authenticated game's install root, admitted only through the read-only discovery and layout checks. */
+  async cargoInstallation(game: PluginGame, executable: string, signal: AbortSignal): Promise<string | undefined> {
+    if (!this.fs || !isDrivePath(executable) || this.closed || this.suspended || !await this.allowed()) return;
+    signal.throwIfAborted();
+    const fs = this.fs;
+    const registry = await this.ensureRegistry();
+    if (registry.state === 'unreadable' || registry.document.games[game].excluded) return;
+    // A job can already be open when Electron starts, before the delayed installer run lists its targets.
+    const discovery = this.discovery ?? await (this.cargoDiscovery ??= discoverSteamGames({steamRoot: this.steamRoot, fs, signal, log: this.log})
+      .finally(() => {this.cargoDiscovery = undefined;}));
+    signal.throwIfAborted();
+    const roots = discovery.games[game].roots.map(candidate => candidate.root);
+    const manual = registry.document.games[game].manualRoot;
+    if (manual !== null && sameRoot(path.win32.join(manual, 'bin', 'win_x64', GAME_IDENTITY[game].executable), executable)) {
+      const validated = await validateManualFolder(manual, game, this.folderContext(game));
+      if (validated.ok) roots.push(validated.root);
+    }
+    const root = roots.find(candidate => sameRoot(path.win32.join(candidate, 'bin', 'win_x64', GAME_IDENTITY[game].executable), executable));
+    if (!root || this.decision.mode === 'test-root' && !isInsideOrEqual(root, this.decision.root)) return;
+    const canonical = await canonicalDirectory(fs, root);
+    if (!canonical || !sameRoot(canonical.path, root)) return;
+    signal.throwIfAborted();
+    const layout = await validateGameLayout(fs, root, game);
+    return !this.closed && !this.suspended && !this.games[game].excluded && !signal.aborted && layout.status === 'ready'
+      && sameRoot(layout.executable, executable) ? layout.root : undefined;
   }
 
   /** The exit's `begin`: no further run, poll, trigger or registry write; the run in flight stops after its current folder. */

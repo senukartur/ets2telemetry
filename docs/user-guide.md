@@ -70,6 +70,8 @@ Mode detection checks one known TruckersMP module inside the game process when t
 
 Each trip row and detail header also shows the trip's job type: **Cargo market**, **Freight market**, **Quick job**, or **World of Trucks** (external contracts and the external market), with a **Special transport** badge for special transport jobs. This includes trips recorded by earlier versions.
 
+The Journal also shows recorded cargo badges, such as **Fragile**, **High value** and the **ADR** class, next to the cargo name in the list and details. The application reads them from the installed base game and official DLC. Trips without captured classification show the cargo name by itself.
+
 ### My qualification
 
 After confirming a Dashboard account, **My qualification** appears in the sidebar. Choose ETS2 or ATS to see the server's current/next level, credited trips and actual distance, remaining conditions and five trip requirements. A token without companion rights needs explicit reissuance on Dashboard; upload-only tokens continue uploading normally. Temporary outages retain the same account's saved snapshots with their last update; disconnecting or switching owners removes the previous current view.

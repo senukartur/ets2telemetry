@@ -2,7 +2,7 @@ import path from 'node:path';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
-import {MIGRATIONS, openStorage, restoreBackup, type Migration} from '../../packages/storage/src';
+import {MIGRATIONS as LATEST_MIGRATIONS, openStorage, restoreBackup, type Migration} from '../../packages/storage/src';
 import {digestOf, failed, ok, readOnly, sha256, workspace, uploadTestSource, uploadTestOwner, uploadProof, uploadTestWork, uploadGame,uploadReceipt, TEST_CLOSE_GRACE_MS} from './helpers';
 import {StorageClient} from '../../packages/storage/src/client';
 import {openConnection} from '../../packages/storage/src/sqlite/connection';
@@ -20,6 +20,7 @@ beforeEach(async () => {ws = await workspace();});
 afterEach(async () => {await terminateWorkers();await ws.dispose();});
 const fixtures=JSON.parse(readFileSync('tests/fixtures/qualification/companion-v1.json','utf8')) as {schema:string;value:unknown}[];
 const scope='a'.repeat(43);
+const MIGRATIONS = LATEST_MIGRATIONS.slice(0, 11);
 
 describe('qualification schema 11 (REG-013/014)', () => {
   it('adds empty companion tables to the frozen schema10 fixture without changing existing rows', async () => {
@@ -28,7 +29,7 @@ describe('qualification schema 11 (REG-013/014)', () => {
       const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all() as string[];
       return tables.map(name => ({name, rows: db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all()}));
     });
-    const storage = await ws.open({path: file});
+    const storage = await ws.open({path: file, migrations: MIGRATIONS});
     expect(storage.summary).toMatchObject({schemaVersion: 11, migratedFrom: 10});
     const backup = storage.summary.backupFileName!;
     storage.close();
@@ -41,7 +42,7 @@ describe('qualification schema 11 (REG-013/014)', () => {
       expect(db.pragma('integrity_check', {simple: true})).toBe('ok');
     });
     expect(digestOf(path.join(ws.backups, backup))).toEqual(digestOf(path.join('tests/fixtures/storage/schema-v10-representative.sqlite')));
-    const restored = ok(await restoreBackup(path.join(ws.backups, backup.replace(/\.sqlite$/, '.json')), ws.options({path: path.join(ws.directory, 'restored.sqlite')})));
+    const restored = ok(await restoreBackup(path.join(ws.backups, backup.replace(/\.sqlite$/, '.json')), ws.options({path: path.join(ws.directory, 'restored.sqlite'), migrations: MIGRATIONS})));
     expect(restored.summary.schemaVersion).toBe(11);
     restored.close();
   });
@@ -50,7 +51,7 @@ describe('qualification schema 11 (REG-013/014)', () => {
     const failure: Migration = {version: 12, name: '0012-test-failure', up: () => {throw Error('injected');}};
     failed(await openStorage(ws.options({path: file, migrations: [...MIGRATIONS, failure]})), 'MIGRATION_FAILED');
     expect(digestOf(file)).toEqual(before);
-    (await ws.open({path: file})).close();
+    (await ws.open({path: file, migrations: MIGRATIONS})).close();
     const hash = sha256(file);
     failed(await openStorage(ws.options({path: file, migrations: MIGRATIONS.slice(0, 10)})), 'SCHEMA_NEWER');
     expect(sha256(file)).toBe(hash);

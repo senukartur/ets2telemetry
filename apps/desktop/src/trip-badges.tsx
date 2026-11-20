@@ -1,9 +1,27 @@
 import React from 'react';
 import {Check, Circle, CircleHelp, Construction, Globe, Package, TriangleAlert, Truck, UserRound, UsersRound, X, Zap} from 'lucide-react';
-import type {AppLanguage, JournalOutcome} from '../../../packages/contracts/src';
+import type {AppLanguage, CargoClassification, JournalOutcome} from '../../../packages/contracts/src';
 import {Badge} from './components/ui/badge';
 import {t} from './i18n';
 import type {JournalBadge, JournalJobBadge, JournalJobLine, JournalModeBadge} from './journal-view';
+
+export function CargoBadges({value, language}: {value?: CargoClassification; language: AppLanguage}) {
+  if (!value) return null;
+  const badges: {id: string; text: string; variant: 'warn' | 'info' | 'neutral'}[] = [];
+  if (value.fragile) badges.push({id: 'fragile', text: t('cargo.fragile', undefined, language), variant: 'warn'});
+  if (value.valuable) badges.push({id: 'valuable', text: t('cargo.valuable', undefined, language), variant: 'info'});
+  if (value.adr.state === 'class') badges.push({id: 'adr', text: t('cargo.adr', {v: String(value.adr.class)}, language), variant: 'warn'});
+  if (value.overweight) badges.push({id: 'overweight', text: t('cargo.overweight', undefined, language), variant: 'neutral'});
+  if (value.oversize || value.groups.includes('oversize')) badges.push({id: 'oversize', text: t('cargo.oversize', undefined, language), variant: 'neutral'});
+  for (const group of value.groups) {
+    // Game-market groups do not override the dedicated fragile and ADR evidence.
+    if (group === 'adr' || group === 'fragile' || group === 'oversize') continue;
+    badges.push({id: group, text: t(`cargo.${group}`, undefined, language), variant: 'neutral'});
+  }
+  return badges.length ? <div className="yu-cargo-badges" data-testid="cargo-badges">
+    {badges.map(badge => <Badge key={badge.id} variant={badge.variant} data-cargo-classification={badge.id}>{badge.text}</Badge>)}
+  </div> : null;
+}
 
 /** One presentation in the Journal, trip header and Live. Explanations stay outside the fixed-height badge. */
 function BadgeLabel({children, note, noteTestId}: {children: React.ReactNode; note?: string | null; noteTestId?: string}) {

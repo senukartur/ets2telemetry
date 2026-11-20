@@ -23,6 +23,8 @@ import {fail} from '../errors';
 import type {StorageConnection} from './connection';
 import {newHardModeDetails, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
 import {applyEventHardMode, checkHardModeObservation, recordGapHardMode, updateOpenHardMode} from './hard-mode';
+import {isCargoOpening, isFillCargoClassification} from '../cargo-classification';
+import type {CargoOpening, FillCargoClassification, FillCargoResult} from '../api';
 
 const cache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
 /** Prepared statements are cached per connection; SQL text is always a constant of this module. */
@@ -159,7 +161,7 @@ interface EffectContext {
   /** openAttachedTrip only (ET-016 PR-7, J9): the checkpoint job configuration the command stored for its trip.open. */
   attachJobRef?: bigint;
   /** openAttachedTrip only: the trip UUID the attach must open, attachTripUuidFor(session, nextEventSeq) (review round 1). */
-  attachTripUuid?: string;profileChange?:boolean;
+  attachTripUuid?: string;profileChange?:boolean; cargoOpening?: CargoOpening;
 }
 const enumValue = (value: unknown, options: readonly string[]) => { if (typeof value !== 'string' || !options.includes(value)) fail('INVALID_INPUT'); return value; };
 const utcMs = (value: unknown) => { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) fail('INVALID_INPUT'); return value; };
@@ -248,6 +250,13 @@ function applyEffects(c: EffectContext, effects: unknown): void {
             optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, attached ? null : c.eventRef, attached ? 'checkpoint' : 'event', 'open', enumValue(effect.recordingCompleteness, COMPLETENESS),
             utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
         statement(c.db, 'UPDATE trips SET hard_mode_details = ? WHERE id = ?').run(JSON.stringify(newHardModeDetails(unknownHardMode(effect.startedUtcMs, 'historical'), null)), id);
+        if (c.cargoOpening && c.session.origin === 'game' && effect.jobConfiguration === 'this-event'
+          && (attached || c.eventType === 'job.configured')
+          && statement(c.db, "SELECT cargo_id FROM job_configurations WHERE id = ? AND cargo_id_state = 'available'").pluck().get(job) === c.cargoOpening.cargoId) {
+          const value = c.cargoOpening.classification;
+          statement(c.db, 'UPDATE trips SET cargo_classification = ?, cargo_classification_generation = ? WHERE id = ?')
+            .run(value === null ? null : canonicalJson(value), value === null ? c.cargoOpening.generation : null, id);
+        }
         addTrailers(c, BigInt(id), effect.trailerConfigurations);
         break;
       }
@@ -328,9 +337,10 @@ function applyEffects(c: EffectContext, effects: unknown): void {
  * and advances coverage; an existing one is `duplicate` (same canonical payload) or `conflict` (the stored row is kept),
  * and neither writes anything.
  */
-export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options: CommitOptions = {}): CommitResult {
+export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation; cargoOpening?: CargoOpening}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'event');
   if (m.kind !== 'event') fail('INVALID_INPUT');
+  if (input.cargoOpening !== undefined && !isCargoOpening(input.cargoOpening)) fail('INVALID_INPUT');
   checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
   if (input.hardModeFresh !== undefined && typeof input.hardModeFresh !== 'boolean') fail('INVALID_INPUT');
   if (input.hardModeLoss?.assessment.state === 'pass') fail('INVALID_INPUT');
@@ -359,7 +369,8 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
     normalize(db, session.id, eventRef, record);
     if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
     if (input.hardMode) updateOpenHardMode(db, session.game, input.hardMode, now, input.hardModeFresh === true, 'frozen');
-    applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey}, input.effects);
+    applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey,
+      cargoOpening: redelivered ? undefined : input.cargoOpening}, input.effects);
     applyEventHardMode(db, m, input.effects, input.hardMode, now, input.hardModeLoss, input.hardModeFresh === true);
     projectEffects(db, input.effects, m.data.occurred.monotonicNs.available && !m.data.redelivered ? admittedProfile(input.profile, m.source, m.capture.clockId, m.data.occurred.monotonicNs.value) : undefined);
     if (record.type==='job.cancelled' || record.type==='job.delivered') retireObservedTerminal(db,session.id);
@@ -604,12 +615,13 @@ function attachTripUuid(pluginSessionId: string, nextEventSeq: string): string {
  */
 export function openAttachedTrip(conn: StorageConnection, input: AttachInput, options:CommitOptions = {}): AttachResult {
   if (!plainRecord(input)) fail('INVALID_INPUT');
+  if (input.cargoOpening !== undefined && !isCargoOpening(input.cargoOpening)) fail('INVALID_INPUT');
   if (input.endpoint !== undefined && !validCapturedEndpoint(input.endpoint)) fail('INVALID_INPUT');
   const nextKey = u64Key(input.nextEventSeq);
   if (BigInt(input.nextEventSeq) < 1n) fail('INVALID_INPUT');
   const values = checkpointJobValues(input.job), effects: unknown = input.effects;
   if(input.observeTripUuid!==undefined){
-    if(!isUuid(input.observeTripUuid)||!Array.isArray(effects)||effects.length!==0||!input.sourceClockId||!isUuid(input.sourceClockId)||!input.monotonicNs||input.profileChange!==undefined)fail('INVALID_INPUT');
+    if(!isUuid(input.observeTripUuid)||!Array.isArray(effects)||effects.length!==0||!input.sourceClockId||!isUuid(input.sourceClockId)||!input.monotonicNs||input.profileChange!==undefined||input.cargoOpening!==undefined)fail('INVALID_INPUT');
     sampleMonotonicNs(input.monotonicNs);
     return transact(conn,db=>{
       const session=sessionByUuid(db,input.pluginSessionId);
@@ -657,7 +669,7 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
       if(!proof)fail('INVALID_INPUT');
       for(const effect of input.effects)if(effect.kind==='trip.close'){const old=statement(db,'SELECT l.profile_scope FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id JOIN logical_trips l ON l.id=m.logical_ref WHERE t.trip_uuid=?').get(effect.tripUuid) as {profile_scope:string|null}|undefined;if(!old?.profile_scope || old.profile_scope===proof.scope)fail('INVALID_INPUT');}
     }
-    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey,profileChange:input.profileChange}, effects);
+    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey,profileChange:input.profileChange,cargoOpening:input.cargoOpening}, effects);
     projectEffects(db, input.effects, proof);
     if (input.profileChange) markProfileBoundary(db, session.id, nextKey);
     if (input.endpoint) {
@@ -667,6 +679,30 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
     }
     options.testHooks?.beforeCommit?.();
     return {status: 'committed'};
+  });
+}
+
+/** Enrich a still-open root only with the generation and job boundary recorded at its live opening. */
+export function fillCargoClassification(conn: StorageConnection, input: FillCargoClassification): FillCargoResult {
+  if (!isFillCargoClassification(input)) fail('INVALID_INPUT');
+  return transact(conn, db => {
+    const row = statement(db, `SELECT t.id, t.cargo_classification FROM trips t
+      JOIN plugin_sessions s ON s.id = t.plugin_session_ref JOIN job_configurations j ON j.id = t.job_configuration_ref
+      JOIN logical_memberships m ON m.trip_ref = t.id JOIN logical_trips l ON l.id = t.id
+      LEFT JOIN events ev ON ev.id = t.opened_event_ref
+      WHERE t.trip_uuid = ? AND t.game = ? AND s.plugin_session_uuid = ? AND s.origin = 'game'
+        AND s.id = (SELECT max(id) FROM plugin_sessions WHERE game = s.game AND origin = 'game')
+        AND t.outcome = 'open' AND m.logical_ref = t.id AND l.latest_trip_ref = t.id AND l.retired = 0
+        AND j.cargo_id_state = 'available' AND j.cargo_id = ? AND t.cargo_classification_generation = ?
+        AND t.opened_by = ? AND coalesce(ev.event_seq, j.checkpoint_next_event_seq) = ?`)
+      .get(input.tripUuid, input.game, input.pluginSessionId, input.cargoId, input.generation, input.opening, u64Key(input.boundary)) as
+      {id: bigint; cargo_classification: string | null} | undefined;
+    if (!row) return 'retired';
+    const value = canonicalJson(input.classification);
+    if (row.cargo_classification !== null) return row.cargo_classification === value ? 'unchanged' : 'retired';
+    statement(db, 'UPDATE trips SET cargo_classification = ? WHERE id = ?').run(value, row.id);
+    revise(db, row.id);
+    return 'filled';
   });
 }
 

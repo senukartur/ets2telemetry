@@ -16,6 +16,7 @@ import {
 } from '../../../contracts/src/journal';
 import type {EventOccurrence, EventRecord, JobConfiguration, TrailerConfiguration, TruckConfiguration, UnavailableReason} from '../../../contracts/src/protocol-v1';
 import type {Purpose} from '../api';
+import {isCargoClassification} from '../../../contracts/src/cargo-classification';
 import {fromAvailability, fromU64Key, isUuid, JOB_FIELDS, moneyFromColumns, specRecord, toReal, toSafeNumber, u64Key, type AvailabilityState} from '../codec';
 import {fail} from '../errors';
 import {readHardModeDetails} from './hard-mode';
@@ -145,15 +146,26 @@ export function jobValues(job: Row): JobConfiguration {
  * for want of a verified profile (`profile-unverified`) is marked `membership: 'pending'` at this read; its logical id is
  * its own raw trip id. A pending `job-evidence-incomplete` decision already had a verified profile and is not marked.
  */
+function readCargoClassification(value: unknown) {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length > 1024) fail('DATABASE_CORRUPT');
+  let classification: unknown;
+  try {classification = JSON.parse(value);} catch {fail('DATABASE_CORRUPT');}
+  if (!isCargoClassification(classification)) fail('DATABASE_CORRUPT');
+  return classification;
+}
+
 export function listItem(db: Database.Database, r: Row, progress?: {logical: unknown; head: unknown}): JournalTripListItem {
   const job = get(db, JOURNAL_QUERIES.job, r.job_configuration_ref);
   if (!job) fail('DATABASE_CORRUPT');
   const values = jobValues(job);
+  const cargoClassification = readCargoClassification(r.cargo_classification);
   const observedDistanceM = fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal), fuelUsedL = fromAvailability(r.fuel_used_l, r.fuel_used_l_state, toReal);
   const accounting = progress && journalAccounting(db, progress.logical, progress.head, observedDistanceM.available, fuelUsedL.available);
   const pending = decisionsEnabled(db) && get(db, `SELECT 1 AS pending FROM logical_membership_decisions WHERE trip_ref=? AND state='pending' AND reason='profile-unverified' AND raw_closed_event_seq IS NOT NULL`, r.id) !== undefined;
   return {
     isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
+    ...(cargoClassification ? {cargoClassification} : {}),
     tripUuid: String(r.trip_uuid), game: r.game as JournalTripListItem['game'],
     gameMode: {mode: r.game_mode, method: r.game_mode_method, confidence: r.game_mode_confidence} as JournalTripListItem['gameMode'],
     gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, outcome: r.outcome as JournalTripListItem['outcome'],

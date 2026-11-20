@@ -273,6 +273,7 @@ export type {LiveObservationV1, LiveStateV1} from './protocol-v1';
 export * from './truck-powertrain';
 export * from './journal';
 export * from './journal-export';
+export * from './cargo-classification';
 export * from './uninstall';
 
 export * from './hard-mode';

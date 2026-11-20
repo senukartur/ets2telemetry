@@ -4,6 +4,7 @@
 // and money stays exact decimal text with its SDK type and currency basis. Every response names the database purpose,
 // so synthetic and replay data are never shown as game history. See docs/journal.md.
 import {isHardModeDetails, type HardModeDetails} from './hard-mode';
+import {isCargoClassification, type CargoClassification} from './cargo-classification';
 import {isDashboardOwner, type DashboardOwner} from './dashboard-upload';
 import {isQualificationWire,isQualificationVerdict,isQualificationResultMetadata,QUALIFICATION_DETAIL_BYTES} from './qualification';
 import {validateServerMessage, type Available, type Currency, type EventOccurrence, type EventRecord, type GameMode, type JobConfiguration, type Money,
@@ -103,6 +104,7 @@ export interface JournalAccounting {
 /** One journal list row. Outcome and recording completeness are separate; neither is inferred from the other. */
 export interface JournalTripListItem {
   isHardMode: boolean; hardModeDetails: HardModeDetails | null;
+  cargoClassification?: CargoClassification;
   tripUuid: string; game: JournalGame; gameMode: JournalGameMode; gameModeAmbiguous: boolean;
   outcome: JournalOutcome; closeReason: JournalCloseReason | null; recordingCompleteness: JournalCompleteness;
   /** UTC labels in milliseconds; real durations come from monotonic time, never from these labels. */
@@ -359,8 +361,8 @@ function gameMode(value: unknown): void {
   oneOf(o.mode, ['single-player', 'truckersmp', 'haulmp', 'unknown', 'convoy']); oneOf(o.method, ['module-scan', 'process-scan', 'none']); oneOf(o.confidence, ['strong', 'weak', 'none']);
 }
 const LIST_KEYS = ['isHardMode', 'hardModeDetails', 'tripUuid', 'game', 'gameMode', 'gameModeAmbiguous', 'outcome', 'closeReason', 'recordingCompleteness', 'startedUtcMs', 'endedUtcMs', 'observedDistanceM', 'fuelUsedL', 'job'];
-/** The list row keys of `value`: the optional accounting and membership only when present. */
-const listKeys = (value: unknown) => [...LIST_KEYS, ...(['accounting', 'membership', 'netIncome'] as const).filter(key => isRecord(value) && Object.hasOwn(value, key))];
+/** Optional row keys participate in validation only when present. */
+const listKeys = (value: unknown) => [...LIST_KEYS, ...(['accounting', 'membership', 'netIncome', 'cargoClassification'] as const).filter(key => isRecord(value) && Object.hasOwn(value, key))];
 const CLOSE_REASONS: readonly unknown[] = ['outcome', 'configuration-cleared', 'different-job', 'restart', 'discontinuity', 'gap'];
 /** Known names, each once and in the order of `names`. */
 function ordered(value: unknown, names: readonly string[]): void {
@@ -382,6 +384,7 @@ function accounting(value: unknown, distance: unknown, fuel: unknown): void {
   provenance(o.fuel, isRecord(fuel) && fuel.available === true, JOURNAL_FUEL_BREAKS, JOURNAL_FUEL_QUALITY);
 }
 function listItem(o: Record<string, unknown>): void {
+  if (Object.hasOwn(o, 'cargoClassification') && !isCargoClassification(o.cargoClassification)) bad();
   boolean(o.isHardMode); if (o.hardModeDetails !== null && !isHardModeDetails(o.hardModeDetails)) bad();
   // Qualified audits retain legacy true or the current null compatibility value.
   const audit = o.hardModeDetails as HardModeDetails | null;

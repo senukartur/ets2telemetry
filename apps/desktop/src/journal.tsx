@@ -334,7 +334,7 @@ function TripDetail({trip, site, options, onDatabase, onBack, onDeleted}: {trip:
     <button type="button" className="yu-trip-back" onClick={onBack} data-testid="journal-back"><ChevronLeft aria-hidden="true" />{t('tr.back', undefined, language)}</button>
     <Status loaded={paged.loaded} testId="journal-summary" />
     <header className="yu-trip-header" data-testid="trip.header">
-      {detail && text && side ? <TripHeading game={trip.game} outcome={detail.trip.outcome} isHardMode={detail.trip.isHardMode} cargo={cargoTitle} text={text} side={side} language={language} /> : <div className="yu-trip-heading" />}
+      {detail && text && side ? <TripHeading game={trip.game} outcome={detail.trip.outcome} isHardMode={detail.trip.isHardMode} cargo={cargoTitle} cargoClassification={detail.trip.cargoClassification} text={text} side={side} language={language} /> : <div className="yu-trip-heading" />}
       <ExportTrip tripUuid={trip.tripUuid}><DeleteTrip tripUuid={trip.tripUuid} onDeleted={onDeleted} /></ExportTrip>
     </header>
     {detail && text && tiles && side ? <>

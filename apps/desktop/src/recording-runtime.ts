@@ -15,7 +15,7 @@ import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, HISTORY_STORAGE_STEP_NAME, reco
 import {recordingPlan, type RecordingPlan} from './recording-policy';
 import {addLosses, deriveRecordingStatus, RecordingStatusPublisher, ZERO_LOSSES, type RecordingStatusTimers} from './recording-status';
 import type {ShutdownSequence} from './shutdown-sequence';
-import {TripRecorderSink} from './trip-recorder';
+import {TripRecorderSink, type TripRecorderOptions} from './trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from './v1-ingestion';
 import type {ProfileObserverStatus} from './profile-observation';
 import path from 'node:path';
@@ -63,6 +63,7 @@ export interface RecordingRuntimeOptions {
   profileStatus?: () => ProfileObserverStatus;
   hardModeEvidence?: () => HardModeObservation;
   onHardModeTrip?: (details: HardModeDetails | null) => void;
+  cargoLookup?: TripRecorderOptions['cargoLookup'];
   statusOverrides?: {intervalMs?: number; timers?: RecordingStatusTimers};
 }
 
@@ -101,7 +102,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
     let bound = client;
     return new TripRecorderSink(recorderClient({get client() {return bound ??= history.client;}}), {
       onChange: changed, profileEvidence: options.profileEvidence, profileStatus: options.profileStatus,
-      hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip
+      hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip, cargoLookup: options.cargoLookup
     });
   };
   let recorder = plan.durableSelections.length ? createRecorder() : undefined;

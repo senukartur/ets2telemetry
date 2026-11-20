@@ -16,6 +16,8 @@ import type {
 } from '../api';
 import {JOURNAL_ANSWER_INVALID, MAX_RESOLVE_MEMBERSHIPS} from '../api';
 import {ERROR_MESSAGES} from '../errors';
+import type {CargoOpening, FillCargoClassification, FillCargoResult} from '../api';
+import {isCargoOpening, isFillCargoClassification} from '../cargo-classification';
 import {isUploadPageQuery, isUploadProjection, isUploadProjectionPage, isUploadUuid, isUploadProjectionBegin, isUploadPreparation,
   type UploadProjectionBegin, type UploadProjectionPreparation, type UploadProjectionPage, type UploadProjectionPageQuery} from '../upload-projection';
 
@@ -31,12 +33,13 @@ export interface StorageCommands extends UploadSyncCommands, QualificationComman
   open: {args: {options: WorkerOpenOptions}; value: OpenSummary};
   recordTrailerBaseline: {args: {input: {message: unknown}}; value: undefined};
   upsertSession: {args: {input: {message: unknown}}; value: {created: boolean; committedThroughEventSeq: Uint64}};
-  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
+  commitEvent: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation; cargoOpening?: CargoOpening}}; value: CommitResult};
   commitGap: {args: {input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}}; value: CommitResult};
   appendSamples: {args: {pluginSessionId: string; rows: SampleInput[]; options?: SampleAppendOptions}; value: SampleAppendResult};
   recordCompleteness: {args: {pluginSessionId: string; interval: CompletenessInterval; options?: CompletenessOptions}; value: undefined};
   /** ET-016 PR-7 (J9): a late-attach trip; never acknowledged and never a coverage change. */
   openAttachedTrip: {args: {input: AttachInput}; value: AttachResult};
+  fillCargoClassification: {args: {input: FillCargoClassification}; value: FillCargoResult};
   /** ET-112b2b: closed pending membership decisions resolved by a later in-process proof; never acknowledged. */
   resolvePendingMemberships: {args: {input: ResolveMembershipsInput}; value: ResolveMembershipsResult};
   observeHardMode: {args: {game: 'ets2' | 'ats'; observation: HardModeObservation; fresh: boolean}; value: undefined};
@@ -76,7 +79,7 @@ export type ParsedResponse = StorageResponse | {type: 'storage.response'; id: nu
 
 export const COMMAND_NAMES: readonly CommandName[] = Object.freeze([
   ...QUALIFICATION_COMMAND_NAMES,
-  ...UPLOAD_SYNC_NAMES, 'recordTrailerBaseline', 'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'resolvePendingMemberships', 'committedThrough', 'getSession', 'getEvent',
+  ...UPLOAD_SYNC_NAMES, 'recordTrailerBaseline', 'observeHardMode', 'open', 'upsertSession', 'commitEvent', 'commitGap', 'appendSamples', 'recordCompleteness', 'openAttachedTrip', 'fillCargoClassification', 'resolvePendingMemberships', 'committedThrough', 'getSession', 'getEvent',
   'listEvents', 'getTrip', 'deleteTrip', 'listTrips', 'listSamples', 'storageInfo', 'beginUploadProjection', 'advanceUploadProjection', 'getUploadProjectionPreparation', 'releaseUploadProjection', 'readUploadProjectionPage', 'journalTrips', 'journalTrip', 'journalEvents', 'journalIntervals', 'close'
 ] as const);
 
@@ -102,7 +105,7 @@ const TRIP_PAGE_ARGS = {cursor: (field: unknown) => typeof field === 'string', l
 const COMPLETENESS_OPTIONS_ARGS = {ifAbsent: (field: unknown) => typeof field === 'boolean'};
 /** ET-015b: the `appendSamples` options, checked strictly like the completeness options. */
 const SAMPLE_OPTIONS_ARGS = {uniqueSeconds: (field: unknown) => typeof field === 'boolean'};
-const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects', 'profile', 'sourceClockId', 'monotonicNs','profileChange','observeTripUuid','endpoint'];
+const ATTACH_INPUT_KEYS: readonly string[] = ['pluginSessionId', 'nextEventSeq', 'job', 'effects', 'profile', 'sourceClockId', 'monotonicNs','profileChange','observeTripUuid','endpoint','cargoOpening'];
 /** ET-112b2b: exactly these input fields of resolvePendingMemberships cross the boundary. */
 const RESOLVE_INPUT_KEYS: readonly string[] = ['monotonicNs', 'nextEventSeq', 'pluginSessionId', 'profile', 'sourceClockId'];
 const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -165,6 +168,9 @@ export function parseRequest(message: unknown): {ok: true; id: number; command: 
   }
   if ((name === 'upsertSession' || name === 'commitEvent' || name === 'commitGap') && !isRecord(command.input)) return {ok: false, id};
   if ((name === 'commitEvent' || name === 'commitGap') && isRecord(command.input) && command.input.hardModeFresh !== undefined && typeof command.input.hardModeFresh !== 'boolean') return {ok: false, id};
+  if ((name === 'commitEvent' || name === 'openAttachedTrip') && isRecord(command.input)
+    && command.input.cargoOpening !== undefined && !isCargoOpening(command.input.cargoOpening)) return {ok: false, id};
+  if (name === 'fillCargoClassification' && (Object.keys(command).sort().join(',') !== 'input,name' || !isFillCargoClassification(command.input))) return {ok: false, id};
   if (name === 'listSamples' && (!Object.keys(command).every(key => ['name', 'scope', 'page'].includes(key))
     || !isRecord(command.scope) || Object.keys(command.scope).length !== 1
     || !(isText(command.scope.tripUuid) || isText(command.scope.pluginSessionId))
@@ -209,6 +215,7 @@ function validValue(command: StorageCommand, value: unknown): boolean {
   case 'committedThrough': return isUint64(value);
   // ET-016 PR-7: the recorder adopts a late-attach trip only on one of these two statuses (T3).
   case 'openAttachedTrip': return isRecord(value) && Object.keys(value).length === 1 && (value.status === 'committed' || value.status === 'duplicate');
+  case 'fillCargoClassification': return value === 'filled' || value === 'unchanged' || value === 'retired';
   // ET-112b2b: the recorder re-sends while decisions remain, so the counts are checked exactly.
   case 'resolvePendingMemberships': return isRecord(value) && Object.keys(value).sort().join(',') === 'remaining,resolved,status' && (value.status === 'none' || value.status === 'resolved')
     && isCount(value.resolved) && value.resolved <= MAX_RESOLVE_MEMBERSHIPS && isCount(value.remaining) && (value.status === 'resolved') === (value.resolved > 0);

@@ -235,6 +235,19 @@ function deferred<T>() {
 }
 
 describe('launch run', () => {
+  it('admits cargo lookup for the matching executable in a validated, non-excluded installation', async () => {
+    const h = harness(), setup = h.create(), signal = new AbortController().signal;
+    const ets2 = path.join(h.ets2Root, 'bin', 'win_x64', 'eurotrucks2.exe');
+    const ats = path.join(h.atsRoot, 'bin', 'win_x64', 'amtrucks.exe');
+
+    await expect(setup.cargoInstallation('ets2', ets2, signal)).resolves.toBe(h.ets2Root);
+    await expect(setup.cargoInstallation('ats', ets2, signal)).resolves.toBeUndefined();
+    await expect(setup.cargoInstallation('ats', ats, signal)).resolves.toBe(h.atsRoot);
+    await setup.setExcluded('ats', true);
+    await expect(setup.cargoInstallation('ats', ats, signal)).resolves.toBeUndefined();
+    expect(h.readSteamRoot).not.toHaveBeenCalled();
+  });
+
   it('uses a fresh private fixture check only after test-root marker admission', async () => {
     const h = harness(), fixture = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: NOT_RUNNING}));
     const setup = h.create({}, h.decision(), fixture); await h.launch(setup);
