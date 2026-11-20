@@ -603,3 +603,16 @@ it.each([['a forward gap',1_000_100,true],['the same save point',1_000_040,false
   expect(snapshot.observedDistance).toEqual({available:true,value:60,unit:'m'});
   expect(snapshot.evidence.reasons.includes('accounting-unavailable')).toBe(unavailable);
 });
+
+it.each(['event-loss','restore-loss','storage-unavailable'] as const)('REG-003/007 revises an OPEN trip and replaces its pending upload when its session records an unassigned %s',async kind=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),workId=await complete(storage,source),db=conn.writer();
+  const version=()=>Number(db.prepare('SELECT material_version FROM upload_change_heads').pluck().get()),before=version();
+  ok(storage.recordCompleteness(source.s.session,{kind,firstEventSeq:source.s.next.toString(),lastEventSeq:source.s.next.toString()}));
+  expect(version()).toBe(before+1);
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('stale');
+  ok(storage.releaseUploadMaterialization({workId}));const replacement=await complete(storage,source);
+  expect(ok(storage.freezeUploadMaterialization({workId:replacement,producerVersion:'test',createdUtcMs:1001})).status).toBe('frozen');
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1001}));
+  expect(attempt.status).toBe('claimed');
+  expect((JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot.recordingCompleteness).toBe('partial');
+});

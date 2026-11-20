@@ -151,6 +151,8 @@ describe('pooled trailers and stored whole-trip rule context',()=>{
     f.pin.facts.job.cargoMass={available:true,value:0,unit:'kg'};
     const summary=mapped(f).summary.snapshot;
     expect(summary.trailers).toEqual({complete:true,items:coupling?[leadItem,{index:1,id:absent,bodyType:absent,chainType:absent}]:[leadItem]});
+    // The freeze boundary accepts the same shape: only the lead body type is required of complete trailers.
+    expect(isUploadSummary(mapped(f).summary,2)).toBe(true);
     expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[],clockAnomaly:true});
     expect(summary.gameMode.ambiguous).toBe(true);expect(summary.cargoDamage).toEqual(f.pin.facts.cargoDamage);
     expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
@@ -170,6 +172,11 @@ describe('pooled trailers and stored whole-trip rule context',()=>{
     expect(summary.trailers).toEqual({complete:true,items:[leadItem]});
     expect(summary.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
     expect(folded(f)).toEqual(mapUploadProjection(f.pin,f.pages));
+  });
+  it('accepts complete trailers with a gap between slot indexes at the freeze boundary',()=>{
+    const f=recorded(config('2',0,known('trailer-a'),known('curtainsider')),config('3',2,absent,absent)),mapping=mapped(f);
+    expect(mapping.summary.snapshot.trailers).toEqual({complete:true,items:[leadItem,{index:2,id:absent,bodyType:absent,chainType:absent}]});
+    expect(isUploadSummary(mapping.summary,2)).toBe(true);
   });
   it('reports no trailer and the fixed reason when no configuration is linked',()=>{
     const f=recorded(),summary=mapped(f).summary.snapshot;

@@ -697,7 +697,9 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
   if (typeof interval !== 'object' || interval === null) fail('INVALID_INPUT');
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
   const ifAbsent = options.ifAbsent === true;
-  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id)); });
+  transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id));
+    // A session-level loss counts against the session's open trip, so its recording completeness is revised here too.
+    else if(Number(db.pragma('user_version',{simple:true}))>=7&&['event-loss','restore-loss','storage-unavailable'].includes(interval.kind))projectSessionBounds(db,session.id); });
 }
 
 /**
