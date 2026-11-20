@@ -20,6 +20,7 @@ Columns:
 
 | Entry point | Layer | REG IDs | Source | Owning card (PR) | Runs in | Protected |
 | --- | --- | --- | --- | --- | --- | --- |
+| `tests/unit/cargo-catalog.test.ts` | Node unit, synthetic HashFS v2 archives (Vitest) | REG-009 | F, T | ET-120a | PR (`npm test`) | base and DLC registry reachability, exact SDK cargo IDs, explicit false versus absent flags, conflicts, invalid archive inventory and table layouts, oversized indexes and text payloads, include cycles and traversal |
 | `tests/unit/qualification-main.test.ts` | Node authority boundary (Vitest) | REG-010, REG-012, REG-014 | F, T | ET-119 | PR (`npm test`) | exact game-only arguments, owner/connection/document/utility retirement and delayed replies |
 | `tests/unit/qualification-preload.test.ts` | Node preload boundary (Vitest) | REG-010, REG-012 | F, T | ET-119 | PR (`npm test`) | argument/reply validation, event stripping and subscription cleanup |
 | `tests/unit/qualification-preview.test.ts` | Node extraction/lease (Vitest) | REG-003, REG-008, REG-009, REG-010 | F, T | ET-119 | PR (`npm test`) | exact SDK quantities, first coupling body versus physical double/triple constituents, missing slots, previous observations, issued-distance/context/rules/scope/expiry guards |
