@@ -26,8 +26,9 @@ export const HISTORY_CLOSE_GRACE_MS = 800;
 export const CLOSE_TERMINATE_RESERVE_MS = 200;
 /** Schedule of backoff delays for re-opening a database after a retryable open refusal. */
 export const HISTORY_REOPEN_BACKOFF_MS = [250, 500, 1000, 2000, 4000] as const;
-/** Maximum retry attempts before giving up re-opening. */
+/** Maximum fast retry attempts before stopping or waiting longer between emergency recovery attempts. */
 export const MAX_HISTORY_REOPEN_ATTEMPTS = 60;
+export const HISTORY_EMERGENCY_REOPEN_INTERVAL_MS = 60_000;
 /** Report once if a previous worker is still blocking replacement after this wait. */
 export const HISTORY_RETIREMENT_NOTICE_MS = 30_000;
 
@@ -54,8 +55,8 @@ export interface HistoryStorageOptions {
   onOpened?: () => void;
   /** The open worker missed a command deadline. Stop recording work while keeping the source connected for replay. */
   onRuntimeTimeout?: () => void;
-  /** The emergency intake can safely keep recording while an exited worker is replaced. */
-  reopenAfterWorkerFailure?: boolean;
+  /** The file queue can keep recording during worker replacement and extended database outages. */
+  emergencyRecovery?: boolean;
   /** ET-015c (G3): called after a change in state, failure code or recovery status. */
   onStateChange?: (state: HistoryState) => void;
   /** Tests only. */
@@ -98,6 +99,7 @@ export class HistoryStorage {
   #retryTimer: unknown = undefined;
   #retirementTimer: unknown = undefined;
   #attempts = 0;
+  #cooldownReported = false;
   #file: {path: string; backupsDirectory: string} | undefined;
   #target: RecordingDatabase | undefined;
   #closing = false;
@@ -155,7 +157,7 @@ export class HistoryStorage {
         return;
       }
       if (!result.ok) {
-        const recover = !this.#closing && isReopenRetryable(result.error);
+        const recover = !this.#closing && (isReopenRetryable(result.error) || this.options.emergencyRecovery === true && result.error.code === 'WORKER_FAILED');
         this.#unavailable(result.error.code, undefined, recover);
         // The worker has nothing left to serve; end its thread now rather than at shutdown.
         void client.close();
@@ -168,6 +170,7 @@ export class HistoryStorage {
       this.#failure = null;
       this.#recovering = false;
       this.#attempts = 0;
+      this.#cooldownReported = false;
       this.#reported = false;
       if (this.#state === 'opening') this.#set('open');
       this.options.log('HISTORY_STORAGE_OPENED', undefined, {schemaVersion: summary.schemaVersion, created: summary.created, migratedFrom: summary.migratedFrom ?? null});
@@ -179,7 +182,7 @@ export class HistoryStorage {
 
   #workerFailed(client: StorageClient, error: StorageError, command?: CommandName): void {
     const recover = !this.#closing && this.#state === 'open'
-      && (error.code === 'TIMEOUT' || error.code === 'WORKER_FAILED' && this.options.reopenAfterWorkerFailure === true);
+      && (error.code === 'TIMEOUT' || error.code === 'WORKER_FAILED' && this.options.emergencyRecovery === true);
     this.#unavailable(error.code, command, recover);
     if (!recover) return;
     if (error.code === 'TIMEOUT') this.options.onRuntimeTimeout?.();
@@ -209,14 +212,19 @@ export class HistoryStorage {
   #scheduleRetry(error: StorageError): void {
     if (this.#closing || this.#state === 'closed') return;
     const maxAttempts = this.options.maxReopenAttempts ?? MAX_HISTORY_REOPEN_ATTEMPTS;
-    if (this.#attempts >= maxAttempts) {
+    const exhausted = this.#attempts >= maxAttempts;
+    if (exhausted && !this.options.emergencyRecovery) {
       this.options.log('HISTORY_STORAGE_REOPEN_EXHAUSTED', undefined, {attempts: this.#attempts, code: error.code});
       this.#unavailable(error.code);
       return;
     }
+    if (exhausted && !this.#cooldownReported) {
+      this.#cooldownReported = true;
+      this.options.log('HISTORY_STORAGE_REOPEN_COOLDOWN', undefined, {attempts: this.#attempts, code: error.code});
+    }
     const backoffs = this.options.reopenBackoffMs ?? HISTORY_REOPEN_BACKOFF_MS;
-    const delay = backoffs[Math.min(this.#attempts, backoffs.length - 1)];
-    this.#attempts++;
+    const delay = exhausted ? HISTORY_EMERGENCY_REOPEN_INTERVAL_MS : backoffs[Math.min(this.#attempts, backoffs.length - 1)];
+    if (!exhausted) this.#attempts++;
     const timers = this.options.timers ?? systemTimers;
     this.#clearRetryTimer();
     this.#retryTimer = timers.setTimeout(() => {

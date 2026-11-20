@@ -136,7 +136,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   // The durable history database (ET-013, OD-2), or the recording target that replaces it.
   let recovering = false;
   const history: HistoryStorage = new HistoryStorage({localAppData: options.localAppData, log, createWorker: options.createWorker,
-    target: plan.database, reopenAfterWorkerFailure: Boolean(emergency), ...(recorder ? {
+    target: plan.database, emergencyRecovery: Boolean(emergency), ...(recorder ? {
       onOpened: () => {
         if (emergency) { emergency.storageChanged(); return; }
         if (!recovering) { v1.durableAvailabilityChanged(); return; }

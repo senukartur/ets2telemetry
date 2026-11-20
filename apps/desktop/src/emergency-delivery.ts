@@ -65,7 +65,7 @@ export class EmergencyDelivery implements IngestionDelivery {
     return this.ready && !this.stopped && (!this.blockedSession || pluginSessionId !== undefined && pluginSessionId !== this.blockedSession);
   }
   observeLiveOnly(pluginSessionId: string): boolean {
-    if (!this.blockedSession || this.blockedSession === pluginSessionId) return false;
+    if (!this.ready || this.stopped || !this.blockedSession || this.blockedSession === pluginSessionId) return false;
     this.blockedSession = undefined;
     this.current = {state: 'pending'};
     this.changed();
