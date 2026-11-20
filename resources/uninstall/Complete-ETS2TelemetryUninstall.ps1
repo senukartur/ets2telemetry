@@ -8,7 +8,7 @@ param(
     [ValidateSet('start', 'registered')][string]$TestFailAt,
     # Test root only: an allowlisted entry that appears after the registry step, as a writer would leave it, so the shared
     # case table can check that the last step removes it. A production run refuses it.
-    [ValidateSet('data', 'backups', 'settings', 'logs', 'synthetic', 'captures', 'transport')][string]$TestLateEntry,
+    [ValidateSet('data', 'backups', 'settings', 'logs', 'synthetic', 'captures', 'transport', 'emergency-journal')][string]$TestLateEntry,
     # Test root only: a folder inside the test root that stands in for Electron's Roaming userData, so the removal a
     # production run makes can be tested; without it a test root never removes anything there. A production run refuses it.
     [string]$TestRoamingFolder
@@ -62,7 +62,7 @@ $ProductionSubKey = 'Software\Microsoft\Windows\CurrentVersion\RunOnce'
 $TestKeyPattern = '^HKCU\\Software\\ETS2Telemetry-Test-[0-9a-f]{32}\\RunOnce$'
 $MaxAttempts = 10
 $MaxCommand = 260
-$Allowlist = @('data', 'backups', 'settings', 'logs', 'synthetic', 'plugins', 'captures', 'transport', 'uninstall', 'updates', 'credentials')
+$Allowlist = @('data', 'backups', 'settings', 'logs', 'synthetic', 'plugins', 'captures', 'transport', 'uninstall', 'updates', 'credentials', 'emergency-journal')
 $HashPattern = '^[0-9a-f]{64}$'
 $TempPattern = '^' + [regex]::Escape($Identity.pluginFile) + '\.[0-9a-f]{16}\.tmp$'
 $UtcPattern = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$'

@@ -111,7 +111,7 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   const journalEnabled = options.emergencyJournal === 'game' && plan.database.purpose === 'history'
     || options.emergencyJournal === 'test' && plan.database.purpose !== 'history';
   const journal = journalEnabled && recorder && local && path.isAbsolute(local)
-    ? new EmergencyJournal(path.join(dataPaths(local).root, 'emergency-journal',
+    ? new EmergencyJournal(path.join(dataPaths(local).emergencyJournal,
       plan.database.purpose === 'history' ? 'history' : `${plan.database.purpose}-${plan.database.name}`),
     plan.database.purpose === 'history' ? 'game' : plan.database.purpose) : undefined;
   // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.

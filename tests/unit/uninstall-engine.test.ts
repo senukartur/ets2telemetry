@@ -103,9 +103,13 @@ function counting(base: UninstallFileSystem, options: {killAfter?: number; befor
 describe('outcomes', () => {
   it('completes: removes the plugins, the created plugins folder, every data entry and the data root, and keeps the rest', async () => {
     const current = await scene();
+    const journal = path.win32.join(current.fixture.dataRoot, 'emergency-journal', 'history');
+    await fsp.mkdir(journal, {recursive: true});
+    await fsp.writeFile(path.win32.join(journal, '000000000001.frame'), 'pending frame');
+    await fsp.writeFile(path.win32.join(journal, '000000000002.held'), 'held frame');
     const result = await run(current.fixture);
     expect(result).toEqual({outcome: 'complete', code: null, plugins: {removed: 2, absent: 0, unrecognized: 0, notes: [], blocked: []},
-      data: {removed: 9, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable', executor: 'not-run'});
+      data: {removed: 10, kept: 0, failed: [], rootRemoved: true}, roaming: 'not-applicable', executor: 'not-run'});
     await expectCleaned(current);
     // The install itself is not the engine's: Squirrel removes the binaries.
     expect(await exists(current.fixture.executable)).toBe(true);
