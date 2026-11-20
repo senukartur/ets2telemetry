@@ -494,7 +494,7 @@ it('keeps the strip width of the setting 1 in smaller clients', () => {
   expect(overlaySize('strip', client(0, 0, 1024, 768), 1)).toEqual({width: 992, height: 109});
 });
 
-it('never makes the strip narrower than at the setting 1, nor wider than the client allows', () => {
+it('keeps the same full client width across all supported scale settings', () => {
   for (const area of [client(0, 0, 1920, 1080), OWNER_CLIENT, client(0, 0, 1280, 720), client(0, 0, 1024, 768)]) {
     const atOne = overlaySize('strip', area, 1);
     expect(atOne).toBeDefined();
