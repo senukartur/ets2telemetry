@@ -11,9 +11,9 @@ import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '..
 // The 18 sections and final Hard Mode row need card content 46 + 24 x 19 = 502 CSS px,
 // cluster panel content 36 + 21 x 15 = 351, and HUD content 20 + 24 x 19 = 476.
 // At zoom 0.7 their windows are 210 x 354, 308 x 248 and 224 x 334 DIP, including snapped borders.
-// Strip items use two 112 px tags, section maxima and the final 140 px Hard Mode/qualification item with 14 px gaps.
+// Strip items use two 112 px tags, section maxima and the final 160 px Hard Mode/qualification item with 14 px gaps.
 // At 1280 DIP its CSS width is 1828 and inner width 1801: rows end at cargo (1756), game time (1704),
-// and the fixed indicator after both breaks (468). Three 38 px rows need ceil(114 x 0.7 + 2) = 82 DIP.
+// and the fixed indicator after both breaks (488). Three 38 px rows need ceil(114 x 0.7 + 2) = 82 DIP.
 const client = (x: number, y: number, width: number, height: number): DipRect => ({x, y, width, height});
 /** All current sections except Rest State. */
 const WITHOUT_REST = {...DEFAULT_OVERLAY_SECTIONS, 'rest-state': false};
@@ -42,7 +42,7 @@ it.each([
 
 // Card x = cx + cw - 226; cluster y = cy + ch - 264.
 it.each([
-  // Strip: 1888 DIP, CSS 2697, inner 2670; rows end at distance driven (2548), then Hard Mode (1394): 56 DIP.
+  // Strip: 1888 DIP, CSS 2697, inner 2670; rows end at distance driven (2548), then Hard Mode (1414): 56 DIP.
   {name: '1920 x 1080 at the origin', area: client(0, 0, 1920, 1080), strip: {x: 16, y: 8, width: 1888, height: 56},
     card: {x: 1694, y: 16, width: 210, height: 354}, cluster: {x: 16, y: 816, width: 308, height: 248}, hud: {x: 16, y: 16, width: 224, height: 334}},
   // Strip: 1248 DIP, CSS 1782, inner 1755; rows end at consumption 1442, deadline 1490, Hard Mode 956: three rows.
@@ -89,7 +89,7 @@ it.each([
 });
 
 it('applies the fit threshold of a strip with speed only', () => {
-  // Speed only is 112 + 112 + 140 with two gaps = 392 of the minimum's 453 inner CSS px; the fixed indicator reaches 546, so
+  // Speed only is 112 + 112 + 140 with two gaps = 392 of the minimum's 453 inner CSS px; the fixed indicator reaches 566, so
   // it takes a second row: ceil(76 × 0.7 + 2) = ceil(55.2) = 56, plus 16 = 72 (one row, 29 and 45, before).
   const placement = DEFAULT_OVERLAY_PLACEMENTS.strip;
   expect(overlayBounds('strip', client(0, 0, 368, 72), placement, SPEED_ONLY)).toEqual({x: 16, y: 8, width: 336, height: 56});
@@ -207,7 +207,7 @@ it('renders the new 100% exactly as large as the earlier 70% for the card, clust
 
 it.each([
   // Every section in 1920 x 1080: 1888 DIP wide at every scale, rows at CSS width floor(width / zoom).
-  // 0.5: inner width 5364 holds the full 3956 CSS px line in one row: ceil(13.3 + 2) = 16 DIP.
+  // 0.5: inner width 5364 holds the full 3976 CSS px line in one row: ceil(13.3 + 2) = 16 DIP.
   {scale: 0.5, size: {width: 1888, height: 16}},
   // 1.1 (zoom 0.77): CSS width 2451, inner 2424; two rows need ceil(76 x 0.77 + 2) = 61 DIP.
   {scale: 1.1, size: {width: 1888, height: 61}},
@@ -258,14 +258,14 @@ it.each([
 });
 
 it.each([
-  // Driving-only: the base line is 998 CSS px, with Hard Mode/qualification 1152, cruise 1306, and the speed limit 1352.
-  // At zoom 0.7 a 966 DIP strip has CSS width 1380 and inner 1353, so one row fits. At 965 DIP, CSS 1378
-  // leaves inner 1351 and needs two rows. The 928/915/914/883/882 DIP cases below therefore all need two rows.
+  // Driving-only: the base line is 998 CSS px, with Hard Mode/qualification 1172, cruise 1326, and the speed limit 1372.
+  // At zoom 0.7 a 980 DIP strip has CSS width 1400 and inner 1373, so one row fits. At 979 DIP, CSS 1398
+  // leaves inner 1371 and needs two rows. The 928/915/914/883/882 DIP cases below therefore all need two rows.
   {name: 'driving-only in 800 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 800, 600), bounds: {x: 16, y: 8, width: 768, height: 56}},
   {name: 'driving-only in 960 x 540', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 960, 540), bounds: {x: 16, y: 8, width: 928, height: 56}},
   {name: 'driving-only in 1280 x 720', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1280, 720), bounds: {x: 16, y: 8, width: 1248, height: 29}},
-  {name: 'driving-only at the 966 DIP one-row threshold', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 998, 600), bounds: {x: 16, y: 8, width: 966, height: 29}},
-  {name: 'driving-only one DIP below the one-row threshold', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 997, 600), bounds: {x: 16, y: 8, width: 965, height: 56}},
+  {name: 'driving-only at the 980 DIP one-row threshold', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1012, 600), bounds: {x: 16, y: 8, width: 980, height: 29}},
+  {name: 'driving-only one DIP below the one-row threshold', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1011, 600), bounds: {x: 16, y: 8, width: 979, height: 56}},
   {name: 'driving-only in 947 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 947, 600), bounds: {x: 16, y: 8, width: 915, height: 56}},
   {name: 'driving-only in 946 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 946, 600), bounds: {x: 16, y: 8, width: 914, height: 56}},
   {name: 'driving-only in 915 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 915, 600), bounds: {x: 16, y: 8, width: 883, height: 56}},
@@ -459,7 +459,7 @@ it('round-trips a placement through its bounds within one DIP', () => {
 });
 
 // The strip fills floor(1706.67 - 32) = 1674 DIP at every scale in the owner's client.
-// At 50%, CSS width 4782 and inner width 4752 hold all 3956 CSS px in one row (16 DIP).
+// At 50%, CSS width 4782 and inner width 4752 hold all 3976 CSS px in one row (16 DIP).
 // At 100%, inner width 2364 needs two rows (56 DIP); larger zooms need three, four and six rows.
 it.each([
   {scale: 0.5, size: {width: 1674, height: 16}},

@@ -48,7 +48,7 @@ html:has(.overlay-body) { background: transparent; }
 .overlay-strip .overlay-tag { overflow: hidden; }
 .overlay-item { display: inline-flex; align-items: center; gap: 6px; }
 .overlay-group-start { position: relative; padding-left: 15px; }
-.overlay-group-start::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 1px; background: rgba(255, 255, 255, .3); }
+.overlay-group-start::before, .overlay-strip .qualification-medal::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 1px; background: rgba(255, 255, 255, .3); }
 .overlay-strip .overlay-value { font-size: 17px; font-weight: 500; }
 .overlay-strip [data-testid="overlay-speed"],
 .overlay-strip [data-testid="overlay-cruise-control"] { font-size: 19px; }
@@ -213,3 +213,9 @@ html:has(.overlay-body) { background: transparent; }
 .qualification-medal[data-state=fail] { color:var(--yu-ov-hm-lost); }
 .qualification-medal-mark { display:flex;position:absolute;right:0;bottom:0;width:10px; }
 .qualification-medal-mark>svg { width:10px;height:10px; }
+/* Overlay result cues sit beside the medal, matching Hard Mode's centred 14 px check/cross slot. */
+.overlay .qualification-medal { gap:4px;width:36px; }
+.overlay .qualification-medal-mark { position:static;align-items:center;justify-content:center;flex:none;width:14px;height:14px; }
+.overlay .qualification-medal-mark>svg { width:14px;height:14px; }
+/* Use the same 38 px row and divider inset as neighbouring Strip sections. */
+.overlay-strip .qualification-medal { width:51px;height:38px;padding-left:15px; }

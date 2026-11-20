@@ -99,13 +99,29 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
       const box = node.getBoundingClientRect();
       return box.width <= 0 || box.height <= 0 || box.left < bounds.left - 1 || box.right > bounds.right + 1 || box.top < bounds.top - 1 || box.bottom > bounds.bottom + 1;
     }).map(node => node.getAttribute('data-testid'));
-    return {layout: root.getAttribute('data-layout'), scale: root.getAttribute('data-scale'), outside,
+    let stripStatus = null;
+    if (root.getAttribute('data-layout') === 'strip') {
+      const footer = root.querySelector('[data-testid="overlay-hard-mode"]'), label = footer.querySelector('.overlay-hm-text');
+      const medal = footer.querySelector('.qualification-medal'), hmCue = footer.querySelector('.overlay-hm-cue>svg');
+      const qualificationCue = medal?.querySelector('.qualification-medal-mark>svg');
+      const hmBox = hmCue?.getBoundingClientRect(), qualificationBox = qualificationCue?.getBoundingClientRect();
+      const divider = medal && globalThis.getComputedStyle(medal, '::before');
+      const sectionDivider = globalThis.getComputedStyle(root.querySelector('.overlay-group-start'), '::before');
+      const near = (left, right) => Math.abs(left - right) < 0.1;
+      stripStatus = {labelFits: label.scrollWidth <= label.clientWidth,
+        matchingCues: Boolean(hmBox && qualificationBox && near(hmBox.width, qualificationBox.width) && near(hmBox.height, qualificationBox.height) &&
+          near(hmBox.top + hmBox.height / 2, qualificationBox.top + qualificationBox.height / 2) &&
+          hmCue.querySelector('path')?.getAttribute('d') === qualificationCue.querySelector('path')?.getAttribute('d')),
+        matchingDivider: Boolean(divider && divider.content !== 'none' && ['width', 'height', 'backgroundColor'].every(key => divider[key] === sectionDivider[key]))};
+    }
+    return {layout: root.getAttribute('data-layout'), scale: root.getAttribute('data-scale'), outside, stripStatus,
       fitsScene: bounds.left >= scene.left && bounds.right <= scene.right && bounds.top >= scene.top && bounds.bottom <= scene.bottom,
       sections: [...root.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').slice('overlay-section-'.length)),
       width: bounds.width, height: bounds.height};
   });
   const contained = async name => {
     const result = await until(probe, value => value.outside.length === 0 && value.fitsScene, `UI_PREVIEW_CONTAINED_${name}_${language}`);
+    if (result.layout === 'strip') assert.deepEqual(result.stripStatus, {labelFits: true, matchingCues: true, matchingDivider: true}, `UI_PREVIEW_STRIP_STATUS_${name}_${language}`);
     if (result.layout === 'card') {
       const example = await preview.evaluate(cardLabelPresentation), production = await overlay.getByTestId('overlay-root').evaluate(cardLabelPresentation);
       assert.deepEqual(example.display, production.display, 'UI_PREVIEW_CARD_ICON_DISPLAY');
