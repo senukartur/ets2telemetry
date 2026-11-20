@@ -53,6 +53,8 @@ Everything Yukon Union Telemetry records or saves lives in `%LOCALAPPDATA%\ETS2T
 | --- | --- |
 | `data` | The trip history database, `telemetry.sqlite` |
 | `backups` | Backups made before a history database upgrade |
+| `emergency-journal` | Trip events and one-second readings waiting to be written to the history database |
+| `credentials` | Protected Dashboard upload credentials |
 | `settings` | Your settings, `settings.json` |
 | `logs` | Diagnostic logs |
 | `synthetic` | Synthetic or replay recordings, never your game history |
