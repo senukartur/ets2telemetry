@@ -3,10 +3,10 @@ import {withHashFs} from './hashfs';
 
 export type OfficialCargoDefinition = Readonly<{
   fragility: number | null;
-  valuable: boolean;
+  valuable: boolean | null;
   adrClass: number | null;
-  overweight: boolean;
-  oversize: boolean;
+  overweight: boolean | null;
+  oversize: boolean | null;
   groups: readonly string[];
 }>;
 
@@ -32,6 +32,12 @@ const fields = new Set(['fragility', 'valuable', 'adr_class', 'overweight', 'ove
 
 function unsupported(): never {
   throw new Error('Invalid or unsupported official cargo definitions');
+}
+
+function localAbsolute(path: string) {
+  if (!isAbsolute(path) || /^[\\/]{2}/.test(path)) return false;
+  // Windows rooted-relative paths and device namespaces do not prove a local drive.
+  return process.platform !== 'win32' || /^[a-z]:[\\/](?![\\/])/i.test(path) && !path.slice(2).includes(':');
 }
 
 function tokensIn(source: string) {
@@ -148,7 +154,10 @@ class CargoFields {
       if (this.groupValues.size !== expected || [...this.groupValues.keys()].some(index => index >= expected)) unsupported();
     }
     const fragility = this.scalars.get('fragility'), adrClass = this.scalars.get('adr_class');
-    const flag = (name: string) => asBoolean(this.scalars.get(name) ?? 'false');
+    const flag = (name: string) => {
+      const value = this.scalars.get(name);
+      return value === undefined ? null : asBoolean(value);
+    };
     return {
       fragility: fragility === undefined ? null : asFragility(fragility),
       valuable: flag('valuable'),
@@ -205,7 +214,7 @@ export async function readOfficialCargoCatalog(paths: readonly string[], signal?
   if (paths.length > MAX_ARCHIVES || new Set(paths).size !== paths.length) unsupported();
   const names = paths.map(path => basename(path));
   if (!names.includes('def.scs') || new Set(names).size !== names.length
-    || paths.some(path => !isAbsolute(path)) || names.some(name => !sourceName.test(name))) unsupported();
+    || paths.some(path => !localAbsolute(path)) || names.some(name => !sourceName.test(name))) unsupported();
   const definitions = new Map<string, OfficialCargoDefinition>(), conflicts = new Set<string>();
   const budget: ReadBudget = {files: 0, chars: 0, tokens: 0};
   const record = (id: string, value: OfficialCargoDefinition) => {
@@ -227,6 +236,8 @@ export async function readOfficialCargoCatalog(paths: readonly string[], signal?
         .map(entry => entry.name);
       if (names[index] === 'def.scs' && !namesInArchive.includes('cargo.sii')) unsupported();
       if (namesInArchive.length > MAX_REGISTRIES) unsupported();
+      // Official registries in the observed base and DLC packs include definitions in the
+      // same pack. An unresolved include fails closed without guessing mount precedence.
       const reader = new ArchiveDefinitions(file => archive.text(file), budget);
       for (const name of namesInArchive) {
         const tokens: string[] = [];

@@ -7,7 +7,9 @@ import {describe, expect, it} from 'vitest';
 import {readOfficialCargoCatalog} from '../../apps/desktop/src/cargo-catalog/official-cargo';
 
 // Synthetic HashFS v2 fixtures produced with SCS Game Archive Packer 1.55.
-// def.scs uses the default compression and the DLC fixtures use -nocompress.
+// def.scs and the oversized payload fixture use default compression.
+// Other DLC fixtures use -nocompress. The official dlc_oversize pack has a
+// cargo.mod_*.sii registry, represented here by a fictional registry.
 const fixture = (name: string) => fileURLToPath(new URL(`../fixtures/cargo-catalog/${name}`, import.meta.url));
 const base = fixture('def.scs');
 const addon = fixture('dlc_fixture.scs');
@@ -25,14 +27,16 @@ describe('official cargo catalog (REG-009)', () => {
       fragility: 0.75,
       valuable: true,
       adrClass: 8,
-      overweight: false,
-      oversize: false,
+      overweight: null,
+      oversize: null,
       groups: ['construction', 'fragile'],
     });
     expect(definitions.get('synthetic_heavy')).toEqual({
-      fragility: 0.75, valuable: false, adrClass: null, overweight: true, oversize: true, groups: ['gooseneck'],
+      fragility: 0.75, valuable: null, adrClass: null, overweight: true, oversize: true, groups: ['gooseneck'],
     });
-    expect(definitions.get('synthetic_official_extra')?.groups).toEqual(['inloader']);
+    expect(definitions.get('synthetic_official_extra')).toEqual({
+      fragility: null, valuable: null, adrClass: null, overweight: null, oversize: null, groups: ['inloader'],
+    });
     expect(definitions.get('synthetic_plain')).toEqual({
       fragility: null, valuable: false, adrClass: null, overweight: false, oversize: false, groups: [],
     });
@@ -54,12 +58,17 @@ describe('official cargo catalog (REG-009)', () => {
   });
 
   it('rejects invalid inventory paths and respects pre-aborted reads', async () => {
-    for (const sources of [[addon], [base, base], [base, fixture('mod_custom.scs')], ['def.scs']]) {
+    for (const sources of [[addon], [base, base], [base, fixture('mod_custom.scs')], ['def.scs'],
+      ['//server/share/def.scs'], ['\\\\server\\share\\def.scs'], ['\\\\?\\C:\\game\\def.scs'], ['\\\\.\\C:\\game\\def.scs']]) {
       await expect(readOfficialCargoCatalog(sources)).rejects.toThrow('official cargo definitions');
     }
     const controller = new AbortController();
     controller.abort();
     await expect(readOfficialCargoCatalog([base], controller.signal)).rejects.toMatchObject({name: 'AbortError'});
+  });
+
+  it('rejects a reachable compressed cargo definition above the payload budget', async () => {
+    await expect(readOfficialCargoCatalog([base, fixture('dlc_oversize_payload.scs')])).rejects.toThrow('cargo archive');
   });
 
   it('rejects invalid versions, oversized indexes and truncated metadata', async () => {
