@@ -76,12 +76,14 @@ describe('private cargo source and local cache (REG-003/010)', () => {
   it('shares one native probe and discards its result when the authenticated lifetime retires', async () => {
     const found = {pid: 101, createdUtcMs: 100, executable};
     const awaiting = deferred<typeof found>();
-    const native = vi.fn(() => Promise.resolve(found)).mockReturnValueOnce(awaiting.promise);
+    const native = vi.fn<(source: SourceIdentity, signal: AbortSignal) => Promise<typeof found>>(() => Promise.resolve(found))
+      .mockReturnValueOnce(awaiting.promise);
     let key = 'verified';
     const probe = new SharedGameProcessProbe(() => key, native), signal = new AbortController().signal;
     const hardMode = probe.read(source, signal), cargo = probe.read(source, signal);
     expect(native).toHaveBeenCalledTimes(1);
     probe.retire();
+    expect(native.mock.calls[0][1].aborted).toBe(true);
     key = 'new-lifetime';
     const following = probe.read(source, signal);
     expect(native).toHaveBeenCalledTimes(1);
@@ -89,6 +91,24 @@ describe('private cargo source and local cache (REG-003/010)', () => {
     await expect(Promise.all([hardMode, cargo])).resolves.toEqual([null, null]);
     await expect(following).resolves.toEqual(found);
     expect(native).toHaveBeenCalledTimes(2);
+  });
+
+  it('lets a joined native probe finish after its first subscriber cancels', async () => {
+    const cancelled = new AbortController(), other = new AbortController().signal;
+    const found = {pid: 101, createdUtcMs: 100, executable}, awaiting = deferred<typeof found>();
+    const native = vi.fn(async (_source: SourceIdentity, signal: AbortSignal) => {
+      const result = await awaiting.promise;
+      signal.throwIfAborted();
+      return result;
+    });
+    const probe = new SharedGameProcessProbe(() => 'verified', native);
+    const hardMode = probe.read(source, cancelled.signal), cargo = probe.read(source, other);
+    cancelled.abort();
+    await expect(hardMode).resolves.toBeNull();
+    expect(native.mock.calls[0][1].aborted).toBe(false);
+    awaiting.resolve(found);
+    await expect(cargo).resolves.toEqual(found);
+    expect(native).toHaveBeenCalledTimes(1);
   });
 
   it('joins duplicate cargo lookups and rejects replies from a retired source generation', async () => {
@@ -130,5 +150,26 @@ describe('private cargo source and local cache (REG-003/010)', () => {
     await expect(sent.promise).resolves.toEqual({type: 'cargo:result', generation: request.generation, request: request.request,
       classification: expect.objectContaining({valuable: false})});
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('finishes one keyed archive load for a replacement generation after the first wait is retired', async () => {
+    const started = deferred<void>(), release = deferred<void>();
+    const inventory = vi.fn(() => Promise.resolve({fingerprint: 'exact archive files', paths: ['def.scs']}));
+    const read = vi.fn(async (_paths: readonly string[], signal?: AbortSignal) => {
+      started.resolve();
+      await release.promise;
+      signal?.throwIfAborted();
+      return {definitions: new Map([['cargo_a', definition]]), conflicts: new Set<string>()};
+    });
+    const cache = new CargoArchiveCache(inventory, read), first = new AbortController(), next = new AbortController();
+    const retired = expect(cache.lookup('root', 'cargo_a', first.signal)).rejects.toMatchObject({name: 'AbortError'});
+    await started.promise;
+    first.abort();
+    const active = cache.lookup('root', 'cargo_a', next.signal);
+    await retired;
+    release.resolve();
+    await expect(active).resolves.toMatchObject({valuable: true});
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(inventory).toHaveBeenCalledTimes(2);
   });
 });

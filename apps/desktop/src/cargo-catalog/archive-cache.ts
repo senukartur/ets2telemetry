@@ -1,10 +1,12 @@
 import {lstat, opendir, realpath} from 'node:fs/promises';
 import path from 'node:path';
+import {waitUnlessAborted} from '../wait-unless-aborted';
 import {classifyCargo} from './classify';
 import {readOfficialCargoCatalog, type OfficialCargoCatalog} from './official-cargo';
 
 type Inventory = {paths: string[]; fingerprint: string};
 const regularArchive = /^(?:def|dlc_[a-z0-9_]+)\.scs$/;
+const ARCHIVE_LOAD_TIMEOUT_MS = 18_000;
 
 export async function cargoArchiveInventory(root: string, signal: AbortSignal): Promise<Inventory> {
   signal.throwIfAborted();
@@ -43,25 +45,28 @@ export class CargoArchiveCache {
   constructor(private readonly inventory = cargoArchiveInventory, private readonly read = readOfficialCargoCatalog) {}
 
   async lookup(root: string, cargoId: string, signal: AbortSignal) {
+    signal.throwIfAborted();
     const key = root.toLowerCase();
     let active = this.pending.get(key);
     if (!active) {
       if (this.pending.size >= 2) return null;
-      active = this.load(root, key, signal).finally(() => this.pending.delete(key));
+      active = this.load(root, key, AbortSignal.timeout(ARCHIVE_LOAD_TIMEOUT_MS)).finally(() => this.pending.delete(key));
       this.pending.set(key, active);
     }
-    const catalog = await active;
+    const catalog = await waitUnlessAborted(active, signal);
     signal.throwIfAborted();
     return classifyCargo(catalog.definitions.get(cargoId));
   }
 
   private async load(root: string, key: string, signal: AbortSignal) {
     const before = await this.inventory(root, signal);
+    signal.throwIfAborted();
     const cached = this.cache.get(key);
     if (cached?.fingerprint === before.fingerprint) return cached.catalog;
     this.cache.delete(key);
     const catalog = await this.read(before.paths, signal);
     const after = await this.inventory(root, signal);
+    signal.throwIfAborted();
     if (before.fingerprint !== after.fingerprint) throw new Error('Cargo archives changed during indexing');
     if (this.cache.size >= 2) this.cache.delete(this.cache.keys().next().value!);
     this.cache.set(key, {fingerprint: after.fingerprint, catalog});

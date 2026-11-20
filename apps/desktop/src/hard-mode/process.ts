@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import path from 'node:path';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
 import {parseGameTarget, sameTarget, type GameTarget} from '../native-game-discovery';
+import {waitUnlessAborted} from '../wait-unless-aborted';
 import type {GameProcess, ProfileDiagnostic} from './reader';
 
 /** One native process probe per verified lifetime, shared without changing the reader's own guard admission. */
@@ -25,12 +26,12 @@ export class SharedGameProcessProbe {
     }
     const entry = this.entry;
     // Retiring authority aborts the old child, but another lifetime must still wait for its actual close.
-    if (this.physical && !entry.pending) await this.physical;
+    if (this.physical && !entry.pending) await waitUnlessAborted(this.physical, signal).catch(() => null);
     if (signal.aborted || this.entry !== entry || this.key(source) !== key) return null;
     if (entry.result) return entry.result;
     if (!entry.pending) {
       if (entry.retryAt > performance.now()) return null;
-      const physical = AbortSignal.any([signal, entry.controller.signal]);
+      const physical = entry.controller.signal;
       this.physical = entry.pending = this.inspect(source, physical).then(result => {
         if (this.entry !== entry || this.key(source) !== key || physical.aborted) return null;
         if (result) entry.result = result;
@@ -41,7 +42,7 @@ export class SharedGameProcessProbe {
         entry.retryAt = performance.now() + 5_000;
       });
     }
-    const result = await entry.pending;
+    const result = await waitUnlessAborted(entry.pending, signal).catch(() => null);
     return !signal.aborted && this.entry === entry && this.key(source) === key ? result : null;
   }
 }

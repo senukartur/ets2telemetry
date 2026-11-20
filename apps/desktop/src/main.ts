@@ -278,7 +278,8 @@ function runApplication(profileError: unknown): void {
       const read = await readPluginBundle(pluginBundleDirectory(__dirname, process.resourcesPath, app.isPackaged));
       return read.ok ? [read.bundle.sha256, ...read.bundle.known.map(entry => entry.sha256)] : [];
     },
-    setup: {suspend: () => pluginSetup.suspend(), resume: () => pluginSetup.resume(), targetIdFor: (game, root) => pluginSetup.targetIdFor(game, root)},
+    setup: {suspend: () => {cargoBridge?.retire(); return pluginSetup.suspend();},
+      resume: () => pluginSetup.resume(), targetIdFor: (game, root) => pluginSetup.targetIdFor(game, root)},
     clock: () => performance.now(),
     log: (event, facts) => log(event, undefined, facts),
     // Windows' uninstall removes the program files and the registration; its hook finds the data already gone.
