@@ -342,7 +342,9 @@ export function isUploadSummary(value:unknown, minor = 0):value is UploadSummary
   };
   if(minor >= 1) snapshotFields.hardModeResult = one('qualified', 'not-qualified');
   if(minor >= 2) snapshotFields.accounting = accountingCheck;
-  if(minor === 3) snapshotFields.cargoClassification = nullable(isCargoClassification);
+  // Dashboard's raw JSON parser rejects numeric magnitudes above MAX_SAFE_INTEGER.
+  if(minor === 3) snapshotFields.cargoClassification = nullable(value => isCargoClassification(value)
+    && (value.fragility === null || value.fragility <= Number.MAX_SAFE_INTEGER));
   const check=shape({source:shape({provider:one('ets2telemetry'),game:one('ets2','ats'),tripId:isUploadUuid,pluginSessionId:isUploadUuid,databaseUuid:isUploadUuid,origin:one('game')}),
     snapshot:shape(snapshotFields)});
   if(!check(value))return false;

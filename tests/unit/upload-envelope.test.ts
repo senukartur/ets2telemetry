@@ -140,6 +140,19 @@ describe('REG-004/005/009/010 frozen Dashboard v1 boundary',()=>{
       expect(readUploadMaterialStamp(invalid)).toBeUndefined();
     }
   });
+  it('preserves legal cargo fragility and refuses magnitudes beyond the Dashboard JSON number bound',()=>{
+    const {snapshot}=serverCargoFixture;
+    const e:UploadEnvelope={...serverCargoFixture,snapshot:{...snapshot,hardModeResult:'not-qualified'}};
+    const withFragility=(fragility:number):UploadEnvelope=>({...e,snapshot:{
+      ...e.snapshot,cargoClassification:{...e.snapshot.cargoClassification!,fragility,fragile:true},
+    }});
+    const legal=withFragility(Number.MAX_SAFE_INTEGER),encoded=encodeUploadEnvelope(legal);
+    expect(encoded).toBeDefined();
+    expect(JSON.parse(new TextDecoder().decode(encoded))).toEqual(legal);
+    const tooLarge=withFragility(Number.MAX_SAFE_INTEGER+1);
+    expect(validateUploadEnvelope(tooLarge)).toBe(false);
+    expect(encodeUploadEnvelope(tooLarge)).toBeUndefined();
+  });
   it('keeps the accounting status out of the material comparison',()=>{
     const base=structuredClone(summary),complete=structuredClone(summary),partial=structuredClone(summary);
     complete.snapshot.accounting={distance:'complete',fuel:'complete'};partial.snapshot.accounting={distance:'partial',fuel:'unknown'};
