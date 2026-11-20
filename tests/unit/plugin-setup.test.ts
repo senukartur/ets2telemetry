@@ -235,6 +235,39 @@ function deferred<T>() {
 }
 
 describe('launch run', () => {
+  it('allows replacement cargo authorization to join startup discovery after the first caller cancels', async () => {
+    const h = harness(), waiting = deferred<void>(), release = deferred<void>();
+    let steamReads = 0;
+    const setup = h.create({fs: {...h.files, open: async (filename, flags) => {
+      if (path.basename(filename) === 'libraryfolders.vdf' && ++steamReads === 1) {waiting.resolve(); await release.promise;}
+      return h.files.open(filename, flags);
+    }}});
+    const executable = path.join(h.ets2Root, 'bin', 'win_x64', 'eurotrucks2.exe'), first = new AbortController();
+    const retired = expect(setup.cargoInstallation('ets2', executable, first.signal)).rejects.toMatchObject({name: 'AbortError'});
+    try {
+      await waiting.promise;
+      first.abort();
+      const next = setup.cargoInstallation('ets2', executable, new AbortController().signal);
+      await retired;
+      release.resolve();
+      await expect(next).resolves.toBe(h.ets2Root);
+      expect(steamReads).toBe(1);
+    } finally {release.resolve();}
+  });
+
+  it('admits cargo lookup for the matching executable in a validated, non-excluded installation', async () => {
+    const h = harness(), setup = h.create(), signal = new AbortController().signal;
+    const ets2 = path.join(h.ets2Root, 'bin', 'win_x64', 'eurotrucks2.exe');
+    const ats = path.join(h.atsRoot, 'bin', 'win_x64', 'amtrucks.exe');
+
+    await expect(setup.cargoInstallation('ets2', ets2, signal)).resolves.toBe(h.ets2Root);
+    await expect(setup.cargoInstallation('ats', ets2, signal)).resolves.toBeUndefined();
+    await expect(setup.cargoInstallation('ats', ats, signal)).resolves.toBe(h.atsRoot);
+    await setup.setExcluded('ats', true);
+    await expect(setup.cargoInstallation('ats', ats, signal)).resolves.toBeUndefined();
+    expect(h.readSteamRoot).not.toHaveBeenCalled();
+  });
+
   it('uses a fresh private fixture check only after test-root marker admission', async () => {
     const h = harness(), fixture = vi.fn<RunningCheck>(() => Promise.resolve({ok: true, running: NOT_RUNNING}));
     const setup = h.create({}, h.decision(), fixture); await h.launch(setup);

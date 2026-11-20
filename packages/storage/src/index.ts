@@ -1,5 +1,6 @@
 import {recordTrailerBaseline} from './sqlite/trailer-baselines';
 import type {TrailerBaselineInput} from './api';
+import type {CargoOpening, FillCargoClassification, FillCargoResult} from './api';
 import type {UploadSyncCommands} from './upload-sync';
 import * as sync from './sqlite/upload-sync';
 import * as queue from './sqlite/upload-queue';
@@ -56,7 +57,7 @@ export class Storage {
   get closed(): boolean { return this.connection.closed; }
   upsertSession(input: {message: unknown}) { return attempt(() => writes.upsertSession(this.connection, input)); }
   recordTrailerBaseline(input: TrailerBaselineInput): Result<void> {return attempt(() => recordTrailerBaseline(this.connection,input));}
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation; cargoOpening?: CargoOpening}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
   commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
   appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions, commitOptions?: CommitOptions): Result<SampleAppendResult> {
     return attempt(() => writes.appendSamples(this.connection, pluginSessionId, rows, options, commitOptions));
@@ -66,6 +67,7 @@ export class Storage {
   }
   /** ET-016 PR-7 (J9): opens a trip from a checkpoint job; see AttachInput. */
   openAttachedTrip(input: AttachInput, options?:CommitOptions): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input,options)); }
+  fillCargoClassification(input: FillCargoClassification): Result<FillCargoResult> { return attempt(() => writes.fillCargoClassification(this.connection, input)); }
   /** ET-112b2b (schema 9): resolves closed pending membership decisions with a later proof; see ResolveMembershipsInput. */
   resolvePendingMemberships(input: ResolveMembershipsInput, options?: CommitOptions): Result<ResolveMembershipsResult> { return attempt(() => writes.resolvePendingMemberships(this.connection, input, options)); }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Result<void> {return attempt(() => writes.observeHardMode(this.connection, game, observation, fresh));}

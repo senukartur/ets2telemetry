@@ -1,9 +1,34 @@
 import React from 'react';
-import {Check, Circle, CircleHelp, Construction, Globe, Package, TriangleAlert, Truck, UserRound, UsersRound, X, Zap} from 'lucide-react';
-import type {AppLanguage, JournalOutcome} from '../../../packages/contracts/src';
+import {Check, Circle, CircleHelp, Construction, Diamond, Gem, Globe, Package, TriangleAlert, Truck, UserRound, UsersRound, Weight, Wine, X, Zap} from 'lucide-react';
+import type {AdrClass, AppLanguage, CargoClassification, JournalOutcome} from '../../../packages/contracts/src';
 import {Badge} from './components/ui/badge';
 import {t} from './i18n';
 import type {JournalBadge, JournalJobBadge, JournalJobLine, JournalModeBadge} from './journal-view';
+
+export function cargoAdrClassName(adrClass: AdrClass, language: AppLanguage): string {
+  return t(`cargo.adrClass.${adrClass}`, undefined, language);
+}
+
+export function CargoBadges({value, language, compact = false}: {value?: CargoClassification; language: AppLanguage; compact?: boolean}) {
+  if (!value) return null;
+  const badges: {id: 'adr' | 'heavy' | 'fragile' | 'valuable'; text: string; Icon: typeof Diamond; adrClass?: AdrClass}[] = [];
+  if (value.adr.state === 'class') {
+    const adrClass = value.adr.class;
+    badges.push({id: 'adr', text: t('cargo.adr', {v: String(adrClass)}, language), Icon: Diamond, adrClass});
+  }
+  if (value.overweight || value.oversize || value.groups.includes('oversize')) badges.push({id: 'heavy', text: t('cargo.heavy', undefined, language), Icon: Weight});
+  if (value.fragile) badges.push({id: 'fragile', text: t('cargo.fragile', undefined, language), Icon: Wine});
+  if (value.valuable) badges.push({id: 'valuable', text: t('cargo.valuable', undefined, language), Icon: Gem});
+  return badges.length ? <span className="yu-cargo-badges" data-testid="cargo-badges" data-layout={compact ? 'compact' : 'full'}>
+    {badges.map(({id, text, Icon, adrClass}) => {
+      const label = adrClass ? `${text}: ${cargoAdrClassName(adrClass, language)}` : text;
+      return <Badge key={id} variant={id === 'adr' ? 'warn' : 'neutral'} data-cargo-classification={id}
+        {...(compact ? {role: 'img', 'aria-label': label, title: label} : {})}>
+        <Icon aria-hidden="true" />{compact ? adrClass && <span>{adrClass}</span> : <span>{text}</span>}
+      </Badge>;
+    })}
+  </span> : null;
+}
 
 /** One presentation in the Journal, trip header and Live. Explanations stay outside the fixed-height badge. */
 function BadgeLabel({children, note, noteTestId}: {children: React.ReactNode; note?: string | null; noteTestId?: string}) {
