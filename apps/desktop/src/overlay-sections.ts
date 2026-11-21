@@ -1,5 +1,5 @@
 import {DEFAULT_OVERLAY_OPACITY} from './overlay-opacity';
-import type {OverlayLayout, OverlayPresentation, OverlaySectionId, OverlaySections, OverlaySettings} from '../../../packages/contracts/src';
+import type {AppLanguage, OverlayLayout, OverlayPresentation, OverlaySectionId, OverlaySections, OverlaySettings} from '../../../packages/contracts/src';
 import {DEFAULT_OVERLAY_PLACEMENTS} from './overlay-placement';
 import {staleOverlayHardMode} from './overlay-hard-mode';
 
@@ -12,7 +12,7 @@ export const OVERLAY_LAYOUTS: readonly OverlayLayout[] = Object.freeze(['strip',
  * after speed; other layouts keep this order. A new section goes at the end of its group. Parsing reads stored keys by name.
  */
 export const OVERLAY_SECTION_IDS: readonly OverlaySectionId[] = Object.freeze(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo',
-  'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state']);
+  'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'cargo-damage', 'game-time', 'mandatory-break', 'rest-state']);
 
 export type OverlayGroupId = 'driving' | 'fuel' | 'job' | 'time';
 export interface OverlayGroup {id: OverlayGroupId; sections: readonly OverlaySectionId[]}
@@ -21,7 +21,7 @@ const group = (id: OverlayGroupId, sections: OverlaySectionId[]): OverlayGroup =
 export const OVERLAY_GROUPS: readonly OverlayGroup[] = Object.freeze([
   group('driving', ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit']),
   group('fuel', ['fuel', 'range', 'sdk-consumption']),
-  group('job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income']),
+  group('job', ['cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'cargo-damage']),
   group('time', ['game-time', 'mandatory-break', 'rest-state'])
 ]);
 /**
@@ -57,17 +57,25 @@ export const OVERLAY_PRESET_IDS: readonly OverlayPresetId[] = Object.freeze(['ev
  */
 export type OverlayRequirement = 'protocol-v1' | 'trip-tracking' | 'ids-until-v1';
 export const OVERLAY_SECTION_REQUIREMENTS: Readonly<Partial<Record<OverlaySectionId, OverlayRequirement>>> = Object.freeze({
-  'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1', 'mandatory-break': 'protocol-v1', 'cruise-control': 'protocol-v1', 'speed-limit': 'protocol-v1', 'rest-state': 'protocol-v1',
+  'origin': 'protocol-v1', 'distance-remaining': 'protocol-v1', 'deadline': 'protocol-v1', 'mandatory-break': 'protocol-v1', 'cruise-control': 'protocol-v1', 'speed-limit': 'protocol-v1', 'rest-state': 'protocol-v1', 'cargo-damage': 'protocol-v1',
   'distance-driven': 'trip-tracking',
   'cargo': 'ids-until-v1', 'destination': 'ids-until-v1'
 });
+
+const cargoPercent = {
+  en: new Intl.NumberFormat('en', {style: 'percent', signDisplay: 'never'}),
+  ru: new Intl.NumberFormat('ru', {style: 'percent', signDisplay: 'never'})
+};
+export function formatCargoDamage(fraction: number, language: AppLanguage): string {
+  return cargoPercent[language].format(fraction);
+}
 
 export function isOverlayLayout(value: unknown): value is OverlayLayout {
   return typeof value === 'string' && (OVERLAY_LAYOUTS as readonly string[]).includes(value);
 }
 
 /**
- * Strictly validates a complete section record from an untrusted caller: a plain object with exactly the eighteen own
+ * Strictly validates a complete section record from an untrusted caller: a plain object with exactly the known own
  * data properties, booleans only, at least one true. Returns a fresh frozen copy, or undefined. Getters are never run.
  */
 export function parseOverlaySections(value: unknown): OverlaySections | undefined {

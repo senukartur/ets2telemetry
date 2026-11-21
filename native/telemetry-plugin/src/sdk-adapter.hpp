@@ -26,10 +26,10 @@ template<class T> struct Reading { T value{}; Availability status = Availability
 // range. `mandatory_break` (ET-052) is the optional protocol v1 minor-2 channel `next_mandatory_break` (s32 game minutes)
 // and `cruise_control` (ET-071) the optional minor-3 channel `truck.cruise_control` (float m/s, zero when off), and
 // `speed_limit` (ET-084) the optional minor-4 channel `truck.navigation.speed.limit` (float m/s; zero or negative is no
-// limit and a value), and `rest_state` (ET-118) is the minor-5 channel `rest.stop` (s32 game minutes).
+// limit and a value), and `rest_state` (ET-118) is the minor-5 channel `rest.stop` (s32 game minutes). Minor 6 uses `job.cargo.damage` (float fraction).
 // These optional v1-only channels never fail initialization or enter the v0 wire or diagnostics.
 enum class Field : std::uint8_t {
-  speed, fuel, rpm, gear, odometer, consumption, range, game_time, navigation_distance, mandatory_break, cruise_control, speed_limit, rest_state, world_placement, count
+  speed, fuel, rpm, gear, odometer, consumption, range, game_time, navigation_distance, mandatory_break, cruise_control, speed_limit, rest_state, cargo_damage, world_placement, count
 };
 struct ChannelSpec { const char* name; scs_value_type_t type; const char* unit; double multiplier; double minimum; double maximum; };
 const std::array<ChannelSpec, static_cast<std::size_t>(Field::count)>& channel_specs() noexcept;
@@ -231,6 +231,8 @@ class Adapter final {
   // Only explicit SDK frame boundaries establish that a reading belongs to the current frame.
   std::array<bool, static_cast<std::size_t>(Field::count)> observed_in_frame_{};
   bool in_frame_ = false;
+  bool cargo_damage_active_job_ = false;
+  bool cargo_damage_boundary_ = false;
   std::uint64_t clock_epoch_ = 0;
   std::int64_t monotonic_origin_ = 0, monotonic_frequency_ = 0;
 };

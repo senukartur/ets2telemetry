@@ -10,7 +10,7 @@ import {smokePair, v1Projection, v1SourceState} from '../shared/live-v1-fixtures
 
 const STATE_KEYS = ['simulation', 'speed', 'fuel', 'fuelCapacity', 'engineRpm', 'gear', 'odometer', 'averageConsumption', 'estimatedRange',
   'navigationDistance', 'gameTime', 'captureUtcUnixMs', 'boundaryOrder', 'worldPlacement', 'configuration', 'gearbox', 'nextMandatoryBreak',
-  'cruiseControl', 'speedLimit', 'restState'];
+  'cruiseControl', 'speedLimit', 'restState', 'cargoDamage'];
 /** ET-052 MB5: a minor-0 or minor-1 state carries no break, so the projection reports it not-supported. */
 const NOT_SUPPORTED_BREAK = {available: false, reason: 'not-supported', unit: 'min'};
 /** ET-071: a state below minor 3 carries no cruise control, so the projection reports it not-supported. */
@@ -155,6 +155,16 @@ describe('liveV1Projection', () => {
       expect(parseLiveV1(structuredClone(live), 'synthetic'), name).toBeDefined();
     }
     expect(liveV1Projection(minor4SourceState('snapshot')).observation!.state.restState).toEqual({available: false, reason: 'not-supported', unit: 'min'});
+  });
+  it('projects minor-6 cargo damage and reports it unsupported on older connections (REG-009)', () => {
+    const read = (minor: number, name: string) => {
+      const wire = decodePayload(new Uint8Array(readFileSync(`tests/fixtures/protocol-v1/minor${minor}/${name}.json`)), 'server', {maxMinor: minor});
+      if (wire.kind !== 'checkpoint' && wire.kind !== 'snapshot') throw new Error('Expected a state fixture');
+      return liveV1Projection(sourceStateOf(wire));
+    };
+    const current = read(6, 'snapshot-zero');
+    expect(parseLiveV1(structuredClone(current), 'synthetic')?.observation?.state.cargoDamage).toEqual({available: true, value: 0, unit: 'fraction', v0ConfigurationRevision: '9007199254740993'});
+    expect(read(5, 'snapshot').observation?.state.cargoDamage).toEqual({available: false, reason: 'not-supported', unit: 'fraction'});
   });
   it('omits the observation before the first one', () => {
     expect(liveV1Projection(v1SourceState('snapshot-live', {status: 'waiting', reason: 'Awaiting selected source', fresh: false, observation: undefined})))

@@ -29,7 +29,7 @@ export const STRIP_TAG_MAX_WIDTH_CSS = 112;
  */
 export const STRIP_ITEM_MAX_WIDTH_CSS: Readonly<Record<OverlaySectionId, number>> = Object.freeze({
   'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'speed-limit': 32, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300, 'origin': 300, 'destination': 300,
-  'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150
+  'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'cargo-damage': 100, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150
 });
 
 /**

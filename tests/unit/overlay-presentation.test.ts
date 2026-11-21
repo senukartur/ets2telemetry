@@ -11,7 +11,7 @@ import {overlayView} from '../../apps/desktop/src/overlay-view';
 import {
   SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED, SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_STRIP_SECTIONS
 } from '../../scripts/ci/renderer-observation.mjs';
-import {gearboxPair, smokePair, v1Projection, type V1Options} from '../shared/live-v1-fixtures';
+import {gearboxPair, smokePair, smokeV0, v1Projection, type V1Options} from '../shared/live-v1-fixtures';
 
 // REG-009 partial (ET-012a): the overlay sections over the v0 snapshot fixture. Expected texts are hand-computed from the
 // fixture: speed 0 m/s, fuel not observed, capacity 1000 L, 600 rpm, gear -1, SDK mean 25 L/100 km, range not observed,
@@ -42,6 +42,7 @@ it('shows the v0 sections of the fixture in metric for ETS2, in canonical order,
     {id: 'cargo', state: 'value', text: 'cargo.logs'},
     {id: 'destination', state: 'value', text: 'city.warszawa'},
     {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
+    {id: 'cargo-damage', state: 'unavailable'},
     {id: 'game-time', state: 'value', text: '09:18'}
   ]);
 });
@@ -141,7 +142,7 @@ it.each([
   const presentation = overlayPresentation(current, undefined, undefined, previous);
   expect(presentation).toMatchObject({freshness, paused: false, speed: '—', fuel: '—'});
   // Range was hidden while current (not observed in the fixture), so it stays hidden.
-  expect(presentation.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
+  expect(presentation.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time']
     .map(id => ({id, state: 'unavailable'})));
 });
 
@@ -165,7 +166,7 @@ it('shows only the speed and fuel placeholders while not current without a previ
   // A section disabled since the previous projection is left out.
   const previous = overlayPresentation(live());
   expect(ids(overlayPresentation(stale, undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL, gear: false, fuel: false}, placements: PLACEMENTS}, previous).sections))
-    .toEqual(['speed', 'rpm', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+    .toEqual(['speed', 'rpm', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time']);
 });
 
 it('shows placeholders before the first observation', () => {
@@ -359,6 +360,7 @@ const FULL: OverlaySectionView[] = [
   {id: 'distance-remaining', state: 'value', text: '151 km'},
   {id: 'deadline', state: 'value', text: '10 h 55 min'},
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
+  {id: 'cargo-damage', state: 'unavailable'},
   {id: 'game-time', state: 'value', text: '09:18'},
   // ET-052 (MB9): the minor-0 stand-in carries the break as not-supported, so the section is a dash, never a zero.
   {id: 'mandatory-break', state: 'unavailable'},
@@ -394,6 +396,7 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
     {id: 'distance-remaining', state: 'unavailable'},
     {id: 'deadline', state: 'unavailable'},
     {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
+    {id: 'cargo-damage', state: 'unavailable'},
     {id: 'game-time', state: 'value', text: '09:18'},
     // ET-052: stale v1 data is a carried observation without a value, so the break is a dash.
     {id: 'mandatory-break', state: 'unavailable'},
@@ -403,7 +406,7 @@ it('keeps v1 sections as dashes when v1, then v0, stops being current, and drops
   const v0Stale = overlayPresentation(withV1(V1_STALE, {...live(), fresh: false, status: 'stale'}), undefined, undefined, v1Stale);
   expect(v0Stale).toMatchObject({freshness: 'stale', speed: '—', fuel: '—', paused: false});
   expect(v0Stale.sections).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-remaining', 'deadline',
-    'expected-income', 'game-time', 'mandatory-break', 'rest-state'].map(id => ({id, state: 'unavailable'})));
+    'expected-income', 'cargo-damage', 'game-time', 'mandatory-break', 'rest-state'].map(id => ({id, state: 'unavailable'})));
   // A new selection clears the v1 projection: v1 sections are no longer carried, even as placeholders.
   const cleared = overlayPresentation(initialLive('ats'), undefined, undefined, v0Stale);
   expect(cleared.sections).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']
@@ -420,7 +423,7 @@ it('leaves out v1 job sections for another job unless they were shown, and keeps
   const mismatch = overlayPresentation(withV1({ids: 'fixture'}));
   // ET-052: the break is not tied to the job, so it stays (as a dash for the minor-0 stand-in) beside another job's sections;
   // so does cruise control (ET-071) and the speed limit (ET-084).
-  expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'game-time',
+  expect(ids(mismatch.sections)).toEqual(['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'distance-remaining', 'expected-income', 'cargo-damage', 'game-time',
     'mandatory-break', 'rest-state']);
   expect(mismatch.sections.find(section => section.id === 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
   expect(mismatch.sections.find(section => section.id === 'distance-remaining')).toEqual({id: 'distance-remaining', state: 'value', text: '151 km'});
@@ -441,7 +444,7 @@ it('keeps v1 sections that were never shown absent without v1 data (fix round 1)
   for (const telemetry of [live(), {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}]) {
     const presentation = overlayPresentation(telemetry, undefined, undefined, overlayPresentation(live()));
     expect(presentation).toEqual(v0Only);
-    expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+    expect(ids(presentation.sections)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time']);
   }
 });
 // PR #73 advisory review: a v1-only section that was shown keeps an `unavailable` dash when its v1 carriage is lost while
@@ -463,6 +466,7 @@ const LOST_V1: OverlaySectionView[] = [
   {id: 'distance-remaining', state: 'unavailable'},
   {id: 'deadline', state: 'unavailable'},
   {id: 'expected-income', state: 'value', text: '9007199254740993.123456 (currency unknown)'},
+  {id: 'cargo-damage', state: 'unavailable'},
   {id: 'game-time', state: 'value', text: '09:18'},
   // ET-052: a break section that was shown keeps its dash when the v1 carriage is lost while v0 continues (ET-012a L5).
   {id: 'mandatory-break', state: 'unavailable'},
@@ -492,7 +496,7 @@ it('clears shown v1 sections on an update without a v0 observation, such as a se
     .map(id => ({id, state: 'unavailable'})));
   // Current v0 data of the new selection without v1 then shows no v1 section at all.
   expect(ids(overlayPresentation(live(), undefined, undefined, cleared).sections))
-    .toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+    .toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time']);
 });
 it('uses no v1 data of another origin or selection', () => {
   for (const telemetry of [{...live(), v1: v1Projection('snapshot-live', {selection: 'ets2'})}, {...live(), v1: v1Projection('snapshot-live', {selection: 'ats', origin: 'game'})}])
@@ -511,7 +515,7 @@ const expectRendered = (presentation: OverlayPresentation, expected: Readonly<Re
   for (const [key, text] of Object.entries(expected)) expect(texts[key] ?? null, key).toBe(text);
 };
 it('produces the overlay texts the telemetry smoke expects for the smoke pair', () => {
-  const current = overlayPresentation(smokePair());
+  const current = overlayPresentation(smokePair({cargoDamage: {available: true, value: 0.125, unit: 'fraction', v0ConfigurationRevision: '9007199254740993'}}));
   expectRendered(current, SYNTHETIC_V1_OVERLAY_CURRENT);
   // The strip containment assertion (ET-012c) in the telemetry smoke expects exactly these sections for the pair.
   expect(ids(current.sections)).toEqual(SYNTHETIC_V1_STRIP_SECTIONS);
@@ -754,4 +758,42 @@ it('shows Rest State independently of the break and respects the section toggle 
   const disabled = overlayPresentation(smokePair(), undefined, {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: {...ALL, 'rest-state': false}, placements: PLACEMENTS});
   expect(restOf(disabled)).toBeUndefined();
   expect(breakOf(disabled)?.state).toBe('value');
+});
+
+it('shows localized whole cargo damage and a dash for an unavailable active job (REG-009)', () => {
+  const value = (fraction: number) => smokePair({cargoDamage: {available: true, value: fraction, unit: 'fraction', v0ConfigurationRevision: '9007199254740993'}});
+  const damage = (live: LiveTelemetry, language: 'en' | 'ru' = 'en') =>
+    overlayPresentation(live, undefined, undefined, undefined, false, language).sections.find(section => section.id === 'cargo-damage');
+  expect(damage(value(0))).toEqual({id: 'cargo-damage', state: 'value', text: '0%'});
+  expect(damage(value(0.125))).toMatchObject({state: 'value', text: '13%'});
+  expect(damage(value(0.125), 'ru')).toMatchObject({state: 'value', text: '13\u00a0%'});
+  expect(damage(value(-0))).toMatchObject({state: 'value', text: '0%'});
+  const unavailable = {id: 'cargo-damage', state: 'unavailable'};
+  expect(damage(smokeV0())).toEqual(unavailable);
+  expect(damage(smokePair())).toEqual(unavailable);
+  for (const reason of ['not-observed', 'not-supported', 'invalid'] as const) {
+    expect(damage(smokePair({cargoDamage: {available: false, reason, unit: 'fraction'}}))).toEqual(unavailable);
+  }
+  const off = {...DEFAULT_OVERLAY_SETTINGS, sections: {...ALL, 'cargo-damage': false}};
+  expect(overlayPresentation(value(1), undefined, off).sections.find(section => section.id === 'cargo-damage')).toBeUndefined();
+});
+
+it('withholds cargo damage while identical-looking job replacements and connection changes settle (REG-003/004)', () => {
+  const olderRevision = '9007199254740993', newerRevision = '9007199254740994';
+  const earlier = smokePair({cargoDamage: {available: true, value: 0.5, unit: 'fraction', v0ConfigurationRevision: olderRevision}});
+  const later = smokePair({cargoDamage: {available: true, value: 0.125, unit: 'fraction', v0ConfigurationRevision: newerRevision}});
+  later.observation!.state.configuration.revision = newerRevision;
+  const find = (overlay: OverlayPresentation) => overlay.sections.find(section => section.id === 'cargo-damage');
+  const first = overlayPresentation(earlier);
+  expect(find(first)).toMatchObject({state: 'value', text: '50%'});
+  expect(find(overlayPresentation({...earlier, v1: later.v1}))).toMatchObject({state: 'unavailable'});
+  expect(find(overlayPresentation({...later, v1: earlier.v1}))).toMatchObject({state: 'unavailable'});
+  expect(find(overlayPresentation(later))).toMatchObject({state: 'value', text: '13%'});
+  const v1 = later.v1!;
+  expect(find(overlayPresentation({...later, v1: {...v1, status: 'stale', fresh: false}}))).toMatchObject({state: 'unavailable'});
+  expect(find(overlayPresentation({...later, v1: undefined}))).toMatchObject({state: 'unavailable'});
+  expect(find(overlayPresentation({...earlier, fresh: false, status: 'stale'}, undefined, undefined, first))).toMatchObject({state: 'unavailable'});
+  expect(find(overlayPresentation({...earlier, observation: undefined, fresh: false, status: 'disconnected'}, undefined, undefined, first))).toBeUndefined();
+  later.observation!.state.configuration.job = {available: false, reason: 'not-observed'};
+  expect(find(overlayPresentation(later, undefined, undefined, first))).toBeUndefined();
 });

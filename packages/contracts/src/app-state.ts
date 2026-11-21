@@ -100,7 +100,7 @@ export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
 export type OverlayLayout = 'strip' | 'card' | 'cluster' | 'hud';
 /** The overlay sections ordered and grouped in apps/desktop/src/overlay-sections.ts. */
 export type OverlaySectionId = 'speed' | 'gear' | 'rpm' | 'cruise-control' | 'speed-limit' | 'fuel' | 'range' | 'sdk-consumption' | 'cargo' | 'origin' | 'destination'
-  | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'game-time' | 'mandatory-break' | 'rest-state';
+  | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'cargo-damage' | 'game-time' | 'mandatory-break' | 'rest-state';
 /** Which overlay sections are enabled: always all seventeen keys, at least one of them true. */
 export type OverlaySections = Readonly<Record<OverlaySectionId, boolean>>;
 /**

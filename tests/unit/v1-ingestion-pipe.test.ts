@@ -7,7 +7,7 @@
 import net from 'node:net';
 import {readFileSync} from 'node:fs';
 import {describe, expect, it} from 'vitest';
-import {FrameDecoder, decodePayload, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {V1_MAX_MINOR, FrameDecoder, decodePayload, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import type {CommitResult, Result} from '../../packages/storage/src/api';
 import {storageError} from '../../packages/storage/src/errors';
 import type {CoverageMessage, DurableSink, WelcomeMessage} from '../../apps/desktop/src/durable-sink';
@@ -47,8 +47,8 @@ class Run {
   constructor(private readonly policies: ClientPolicy[], private readonly onClosed: (index: number) => void) {}
   current(): Connection | undefined { return this.connections.at(-1); }
   connect = (endpoint: string) => {
-    // ET-050b, ET-052, ET-071, ET-084: the ingestion offers minor 4 and the simulator serves it, so both directions may carry {1,4}.
-    const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server', {maxMinor: 5});
+    // ET-050b, ET-052, ET-071, ET-084: decode every minor the desktop and simulator can negotiate.
+    const socket = net.connect(endpoint), write = socket.write.bind(socket), decoder = new FrameDecoder('server', {maxMinor: V1_MAX_MINOR});
     let connection: Connection | undefined, index = -1;
     // Registered before the ingestion's listeners, so a welcome is numbered before the ingestion applies it.
     socket.on('data', (chunk: Buffer) => {
@@ -65,7 +65,7 @@ class Run {
       } catch { /* the ingestion's own decoder reports the violation */ }
     });
     socket.write = ((bytes: Uint8Array, ...rest: unknown[]) => {
-      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: 5}) as ClientMessage;
+      const m = decodePayload(bytes.subarray(4), 'client', {maxMinor: V1_MAX_MINOR}) as ClientMessage;
       if (m.kind === 'ack' && connection) {
         const ack = connection.policy.ack;
         const lost = ack.kind === 'withhold' || (ack.kind === 'dropAfter' && connection.acksPassed >= ack.count);

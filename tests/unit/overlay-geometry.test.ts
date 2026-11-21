@@ -1,6 +1,6 @@
 import {expect, it} from 'vitest';
 import type {OverlaySectionId, OverlaySections} from '../../packages/contracts/src';
-import {overlayBounds, overlaySize, overlayWindowSize, placementFromBounds, placeSize, surfaceHeightDip, type DipRect} from '../../apps/desktop/src/overlay-geometry';
+import {overlayBounds as boundsFor, overlaySize as sizeIn, overlayWindowSize as windowSizeFor, placementFromBounds as placementFor, placeSize, surfaceHeightDip, type DipRect} from '../../apps/desktop/src/overlay-geometry';
 import {DEFAULT_OVERLAY_PLACEMENTS} from '../../apps/desktop/src/overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '../../apps/desktop/src/overlay-sections';
 
@@ -15,8 +15,9 @@ import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '..
 // At 1280 DIP its CSS width is 1828 and inner width 1801: rows end at cargo (1756), game time (1704),
 // and the fixed indicator after both breaks (488). Three 38 px rows need ceil(114 x 0.7 + 2) = 82 DIP.
 const client = (x: number, y: number, width: number, height: number): DipRect => ({x, y, width, height});
-/** All current sections except Rest State. */
-const WITHOUT_REST = {...DEFAULT_OVERLAY_SECTIONS, 'rest-state': false};
+/** The older hand-computed geometry examples use the eighteen sections before cargo damage. */
+const LEGACY_SECTIONS = {...DEFAULT_OVERLAY_SECTIONS, 'cargo-damage': false};
+const WITHOUT_REST = {...LEGACY_SECTIONS, 'rest-state': false};
 const WITHOUT_LIMIT = {...WITHOUT_REST, 'speed-limit': false};
 /** The fifteen sections of before ET-071 (cruise control and the speed limit off). */
 const WITHOUT_CRUISE = {...WITHOUT_LIMIT, 'cruise-control': false};
@@ -28,6 +29,25 @@ const SPEED_ONLY = only('speed');
 /** The owner's 2560 × 1440 physical game client at 150%, {1706.67, 240, 1706.67, 960} DIP. */
 const OWNER_CLIENT = client(2560 / 1.5, 240, 2560 / 1.5, 960);
 const LAYOUTS = ['strip', 'card', 'cluster', 'hud'] as const;
+const overlayBounds = (layout: Parameters<typeof boundsFor>[0], area: DipRect, placement?: Parameters<typeof boundsFor>[2], sections = LEGACY_SECTIONS as OverlaySections) =>
+  boundsFor(layout, area, placement, sections);
+const overlaySize = (layout: Parameters<typeof sizeIn>[0], area: DipRect, scale: number, sections = LEGACY_SECTIONS as OverlaySections) =>
+  sizeIn(layout, area, scale, sections);
+const overlayWindowSize = (layout: Parameters<typeof windowSizeFor>[0], scale: number, sections = LEGACY_SECTIONS as OverlaySections) =>
+  windowSizeFor(layout, scale, sections);
+const placementFromBounds = (layout: Parameters<typeof placementFor>[0], area: DipRect, bounds: DipRect, previous: Parameters<typeof placementFor>[3],
+  sections = LEGACY_SECTIONS as OverlaySections, size?: Parameters<typeof placementFor>[5]) => placementFor(layout, area, bounds, previous, sections, size);
+
+it('reserves the cargo-damage row in the current default windows (REG-016)', () => {
+  // With the nineteenth section, track 526 card content px, 372 cluster panel px and 500 HUD px.
+  // At zoom .7 the snapped border adds 2 DIP to card and cluster, so ceil(370.2), ceil(262.4) and 350.
+  expect(windowSizeFor('card', 1)).toEqual({width: 210, height: 371});
+  expect(windowSizeFor('cluster', 1)).toEqual({width: 308, height: 263});
+  expect(windowSizeFor('hud', 1)).toEqual({width: 224, height: 350});
+  // At 800 DIP game width (768 DIP or 1097 px strip), the 100 px section pushes Game Time to a fifth row.
+  expect(boundsFor('strip', client(100, 50, 800, 600))).toEqual({x: 116, y: 58, width: 768, height: 135});
+});
+
 
 it.each([
   {width: 1920, height: 1080, expectedWidth: 1888},
@@ -319,7 +339,7 @@ const WITHOUT_DRIVEN = {...WITHOUT_BREAK, 'distance-driven': false};
 const WITHOUT_RANGE_AND_DRIVEN = {...WITHOUT_DRIVEN, range: false};
 it.each([
   // ET-084: card 480 (478 content, 337), cluster 330 (232) and HUD 450 (315).
-  {name: 'every section (card 504, cluster 351, HUD 474)', sections: DEFAULT_OVERLAY_SECTIONS, card: 354, cluster: 248, hud: 334},
+  {name: 'every section (card 504, cluster 351, HUD 474)', sections: LEGACY_SECTIONS, card: 354, cluster: 248, hud: 334},
   // ET-071: card 456 (454 content, 320), cluster 330 (232) and HUD 426 (299).
   {name: 'every section but the speed limit (card 456, cluster 330, HUD 426)', sections: WITHOUT_LIMIT, card: 320, cluster: 233, hud: 300},
   // ET-070: card 432 (430 content, 303), cluster 309 (217) and HUD 402 (282).
@@ -475,9 +495,9 @@ it.each([
 // The bottom anchor is 1192 minus the reserved height; Driving only stays one row at 100%.
 it.each([
   // One row at 50%: y = 1192 - 16 = 1176.
-  {name: 'every section at 0.5', scale: 0.5, sections: DEFAULT_OVERLAY_SECTIONS, bounds: {x: 1723, y: 1176, width: 1674, height: 16}},
+  {name: 'every section at 0.5', scale: 0.5, sections: LEGACY_SECTIONS, bounds: {x: 1723, y: 1176, width: 1674, height: 16}},
   // Two rows at 100%: y = 1192 - 56 = 1136.
-  {name: 'every section at 1', scale: 1, sections: DEFAULT_OVERLAY_SECTIONS, bounds: {x: 1723, y: 1136, width: 1674, height: 56}},
+  {name: 'every section at 1', scale: 1, sections: LEGACY_SECTIONS, bounds: {x: 1723, y: 1136, width: 1674, height: 56}},
   {name: 'driving only at 1', scale: 1, sections: OVERLAY_PRESETS['driving-only'], bounds: {x: 1723, y: 1163, width: 1674, height: 29}},
   // ET-071: y = 248 + (944 − 110) = 1082.
   {name: 'driving only at 2', scale: 2, sections: OVERLAY_PRESETS['driving-only'], bounds: {x: 1723, y: 1082, width: 1674, height: 110}}

@@ -74,11 +74,14 @@ function Strip({view}: {view: OverlayView}) {
   return <div className="overlay-surface overlay-strip-row">
     <Tags tags={view.tags} maxWidth={STRIP_TAG_MAX_WIDTH_CSS} />
     {view.groups.map((group, index) => <Fragment key={group.id}>
-      {group.items.map((item, position) => <span key={item.id} className={index > 0 && position === 0 ? 'overlay-item overlay-group-start' : 'overlay-item'}
-        data-testid={`overlay-section-${item.id}`} aria-label={item.id === 'rest-state' ? undefined : item.short} {...urgencyMarks(item, item.short)} {...signMarks(item)}
-        style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id], ...(STRIP_FIXED_WIDTH_SECTIONS.has(item.id) ? {minWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]} : {})}}>
-        {item.sign ? <SpeedLimitSign item={item} variant="strip" /> : <><SectionIcon id={item.id} />{item.id === 'rest-state' ? <span className="overlay-visually-hidden">{item.label}</span> : null}<Value item={item} /></>}
-      </span>)}
+      {group.items.map((item, position) => {
+        const hiddenLabel = item.id === 'rest-state' || item.id === 'cargo-damage';
+        return <span key={item.id} className={index > 0 && position === 0 ? 'overlay-item overlay-group-start' : 'overlay-item'}
+          data-testid={`overlay-section-${item.id}`} aria-label={hiddenLabel ? undefined : item.short} {...urgencyMarks(item, item.short)} {...signMarks(item)}
+          style={{maxWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id], ...(STRIP_FIXED_WIDTH_SECTIONS.has(item.id) ? {minWidth: STRIP_ITEM_MAX_WIDTH_CSS[item.id]} : {})}}>
+          {item.sign ? <SpeedLimitSign item={item} variant="strip" /> : <><SectionIcon id={item.id} />{hiddenLabel ? <span className="overlay-visually-hidden">{item.label}</span> : null}<Value item={item} /></>}
+        </span>;
+      })}
     </Fragment>)}
     {/* ET-070: the fixed Hard Mode indicator after every section, with its own divider and the width main reserved for it. */}
     <span className={view.groups.length ? 'overlay-item overlay-group-start overlay-hard-mode' : 'overlay-item overlay-hard-mode'} {...hardModeMarks(view.hardMode)}

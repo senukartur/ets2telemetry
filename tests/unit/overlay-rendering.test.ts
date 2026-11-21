@@ -415,3 +415,15 @@ it('renders Rest State with an accessible label and a decorative bed in every ov
     if (layout === 'strip') expect(html).toContain('class="overlay-visually-hidden">Запас бодрости</span>');
   }
 });
+
+it('renders cargo damage with its label and decorative icon in all four layouts (REG-009, REG-016)', () => {
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    for (const section of [{id: 'cargo-damage', state: 'value', text: '0%'}, {id: 'cargo-damage', state: 'unavailable'}] as const) {
+      const view = overlayView({...base, layout, sections: [section]});
+      const html = renderToStaticMarkup(React.createElement(OverlayContent, {view}));
+      expect(html, layout).toMatch(/<svg[^>]*(?=[^>]*lucide-package-x)(?=[^>]*aria-hidden="true")/);
+      expect(html, layout).toMatch(/>[^<]*(Cargo damage|Damage)</);
+      expect(html, layout).toMatch(section.state === 'value' ? />0%</ : />—</);
+    }
+  }
+});

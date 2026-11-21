@@ -78,7 +78,8 @@
       "atMs": 50,
       "action": "connect",
       "client": {
-        "durable": true
+        "durable": true,
+        "maxMinor": 5
       }
     },
     {

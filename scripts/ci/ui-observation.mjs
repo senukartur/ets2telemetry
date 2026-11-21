@@ -164,7 +164,7 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
     assert.deepEqual([...result.sections].sort(), [...ids].sort());
     assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
     assert.equal(await preview.getByTestId('overlay-hard-mode').count(), 1);
-    assert.equal(await dashboard.getByTestId('overlay-sections-count').innerText(), language === 'en' ? 'shown 18 of 18' : 'показано 18 из 18');
+    assert.equal(await dashboard.getByTestId('overlay-sections-count').innerText(), language === 'en' ? 'shown 19 of 19' : 'показано 19 из 19');
     await dashboard.getByTestId('overlay-preview-card').scrollIntoViewIfNeeded();
     await save(`settings-preview-${layout}`, language, size);
   }
@@ -869,7 +869,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
     const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
     return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
-      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 18 &&
+      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 19 &&
       [...card.querySelectorAll('[data-testid^="overlay-switch-"]')].every(node => node.checkVisibility());
   });
   assert.equal(visible, true, 'UI_OVERLAY_UNIFIED_CONTROLS');
@@ -879,8 +879,10 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
     try {
       if (zoom > 1) await observeSettingsNavigation({dashboard, language, size, zoom, record});
       await dashboard.getByTestId('overlay-switch-expected-income').focus();
-      await dashboard.keyboard.press('Tab');
-      assert.equal(await dashboard.getByTestId('overlay-switch-game-time').evaluate(node => node === globalThis.document.activeElement), true);
+      for (const id of ['cargo-damage', 'game-time']) {
+        await dashboard.keyboard.press('Tab');
+        assert.equal(await dashboard.getByTestId(`overlay-switch-${id}`).evaluate(node => node === globalThis.document.activeElement), true, `UI_OVERLAY_TAB_${id}`);
+      }
       const observation = await dashboard.getByTestId('overlay-settings').evaluate(card => new Promise(resolve => globalThis.requestAnimationFrame(() => {
         const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
         const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p')]
@@ -1369,7 +1371,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         if (language === 'en' && size.width === 1280) await observeOverlayEditing({dashboard, config, record});
         // ET-045e: after ET-048's editing check, which may have saved another scale.
         if (size === sizes[0]) await observeScaleControl({dashboard, config, language, record});
-        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 18);
+        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 19);
         await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
         const navigationBytes = await readFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'));
@@ -1771,7 +1773,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
-    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 18);
+    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 19);
     assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
   const file = path.join(smokeDataRoot(config), 'settings', 'settings.json');
