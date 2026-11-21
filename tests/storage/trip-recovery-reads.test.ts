@@ -200,7 +200,7 @@ describe('cold-start seeds from the real worker (R4)', () => {
     expect([...manifestJobs].sort()).toEqual([...NAMES].sort());
   });
 
-  it.each(NAMES)('keeps the jobKey of %s through a commit and a seed read', async name => {
+  it.each(NAMES)('keeps the jobKey and configuration revision of %s through a commit and a seed read', async name => {
     const message = v1(name);
     if (message.kind !== 'event' || message.data.record.type !== 'job.configured') throw new Error('job.configured fixture expected');
     const w = await openWorker(path.join(ws.directory, `${name}.sqlite`));
@@ -210,7 +210,8 @@ describe('cold-start seeds from the real worker (R4)', () => {
     // uint64 maximum: not a usable label, so the seed has none (T15).
     const label = name === 'event-worst' || name === 'event-size-limit' ? {} : {lastObservedUtcMs: 1_791_676_800_000};
     expect(ok(await readTripSeeds(w.client, 'ets2'))).toEqual([{tripUuid: T(1), pluginSessionId: message.source.pluginSessionId, game: 'ets2',
-      jobKey: jobKey(message.data.record), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete', ...label}]);
+      jobKey: jobKey(message.data.record), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete', ...label,
+      configurationRevision: message.data.occurred.configurationRevision}]);
     expect(ok(await readTripSeeds(w.client, 'ats'))).toEqual([]);
     await w.close();
   });
@@ -221,25 +222,25 @@ describe('cold-start seeds from the real worker (R4)', () => {
     for (const s of [a, b, c]) ok(await w.client.upsertSession({message: s.welcome()}));
     // Session A, labels BASE_UTC + 1 s per event: T1 opens at 1, its job is cleared at 2 with 150 m observed, a fine at 3 has no label.
     await commit(w.client, a.event(r.jobConfigured()), [opens(T(1))]);
-    await commit(w.client, a.event(r.jobCleared()), [{kind: 'trip.update', tripUuid: T(1), set: {observedDistanceM: {available: true, value: 150}}}]);
-    await commit(w.client, a.event(r.fined(), {utcMs: null}));
+    await commit(w.client, a.event(r.jobCleared(), {configurationRevision: '2'}), [{kind: 'trip.update', tripUuid: T(1), set: {observedDistanceM: {available: true, value: 150}}}]);
+    await commit(w.client, a.event(r.fined(), {utcMs: null, configurationRevision: '2'}));
     // ATS session: an open trip that an ETS2 cold start never sees.
     await commit(w.client, b.event(r.jobConfigured()), [opens(T(2), 'ats')]);
     // Session B: T3 is delivered (closed), T4 opens at 3 and stays active.
     await commit(w.client, c.event(r.jobConfigured()), [opens(T(3))]);
     await commit(w.client, c.event(r.delivered()), [closes(T(3), 'delivered', 'outcome')]);
-    await commit(w.client, c.event(r.jobConfigured(otherJob())), [opens(T(4))]);
+    await commit(w.client, c.event(r.jobConfigured(otherJob()), {configurationRevision: '2'}), [opens(T(4))]);
     const activeA = {tripUuid: T(1), pluginSessionId: ETS2_A, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete',
-      lastObservedUtcMs: BASE_UTC + 2_000, observedDistanceM: 150};
+      lastObservedUtcMs: BASE_UTC + 2_000, observedDistanceM: 150, configurationRevision: '2'};
     const seedA = {...activeA, awaitingOutcome: true};
     const seedB = {tripUuid: T(4), pluginSessionId: ETS2_B, game: 'ets2', jobKey: jobKey(otherJob()), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete',
-      lastObservedUtcMs: BASE_UTC + 3_000};
+      lastObservedUtcMs: BASE_UTC + 3_000, configurationRevision: '2'};
     expect(ok(await readTripSeeds(w.client, 'ets2'))).toEqual([seedA, seedB]);
     expect(ok(await readTripSeeds(w.client, 'ats'))).toEqual([{tripUuid: T(2), pluginSessionId: ATS_A, game: 'ats', jobKey: jobKey(job()), startedUtcMs: BASE_UTC,
-      recordingCompleteness: 'complete', lastObservedUtcMs: BASE_UTC + 1_000}]);
+      recordingCompleteness: 'complete', lastObservedUtcMs: BASE_UTC + 1_000, configurationRevision: '1'}]);
     // The re-send of the job after the clear (a save load) ends the pending outcome.
-    await commit(w.client, a.event(r.jobConfigured()));
-    expect(ok(await readTripSeeds(w.client, 'ets2'))).toEqual([{...activeA, lastObservedUtcMs: BASE_UTC + 4_000}, seedB]);
+    await commit(w.client, a.event(r.jobConfigured(), {configurationRevision: '3'}));
+    expect(ok(await readTripSeeds(w.client, 'ets2'))).toEqual([{...activeA, lastObservedUtcMs: BASE_UTC + 4_000, configurationRevision: '3'}, seedB]);
     await w.close();
   });
 });
@@ -277,9 +278,9 @@ describe('trip fuel used (S-1, J8)', () => {
     expect(ok(await w.client.getTrip(T(2)))?.fuelUsedL).toEqual({available: true, value: 0});
     expect(ok(await readTripSeeds(w.client, 'ets2'))).toEqual([
       {tripUuid: T(1), pluginSessionId: ETS2_A, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete',
-        lastObservedUtcMs: BASE_UTC + 2_000, observedDistanceM: 100, fuelUsedL: 12.5},
+        lastObservedUtcMs: BASE_UTC + 2_000, observedDistanceM: 100, fuelUsedL: 12.5, configurationRevision: '1'},
       {tripUuid: T(2), pluginSessionId: ETS2_B, game: 'ets2', jobKey: jobKey(job()), startedUtcMs: BASE_UTC, recordingCompleteness: 'complete',
-        lastObservedUtcMs: BASE_UTC + 5_000, fuelUsedL: 0}]);
+        lastObservedUtcMs: BASE_UTC + 5_000, fuelUsedL: 0, configurationRevision: '1'}]);
     await w.close();
   });
 });
