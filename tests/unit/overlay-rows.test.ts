@@ -101,7 +101,9 @@ it.each([[3, 72], [2, 48], [1, 24], [0, 0]])('keeps the hero at one 24 px row pe
   expect(cardHeroHeightCss(parts, false)).toBe(hero);
 });
 
-it('never reserves more for a subset of the sections than for all of them', () => {
+// Exhaustive subset enumeration needs a CPU work budget on shared CI runners.
+const SUBSET_ENUMERATION_BUDGET_MS = 15_000;
+it('never reserves more for a subset of the sections than for all of them', {timeout: SUBSET_ENUMERATION_BUDGET_MS}, () => {
   const all = Object.fromEntries(ROW_LAYOUTS.map(layout => [layout, layoutReservedCss(layout, ALL)]));
   const sections = {...ALL};
   for (let mask = 1; mask < 1 << OVERLAY_SECTION_IDS.length; mask++) {
