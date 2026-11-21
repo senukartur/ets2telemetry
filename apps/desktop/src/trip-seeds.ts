@@ -3,6 +3,7 @@
 // from stored rows by fixed rules, mirroring TripStorageModel.seeds() in tests/shared/trip-replay.ts; they are not
 // derived by running the reducer over stored items. Node-safe: it reads through the StorageClient interface only.
 import type {Available, Uint64} from '../../../packages/contracts/src/protocol-v1';
+import {isUint64} from '../../../packages/contracts/src/protocol-v0';
 import {MAX_EVENT_PAGE, MAX_TRIP_PAGE, type EventRow, type Result, type TripRecord} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {jobKey} from '../../../packages/telemetry-core/src/trips/identity';
@@ -28,11 +29,12 @@ function labelOf(occurred: unknown): number | null {
 
 /**
  * Running values of one session's stored events, kept instead of the rows: the usable label with the highest eventSeq
- * and, per open trip, the last `job.configured` or `job.cleared` event after the trip's opening event. Events may be
+ * and configuration revision, and, per open trip, the last `job.configured` or `job.cleared` after opening. Events may be
  * observed in any order and more than once; each value keeps the highest eventSeq.
  */
 interface SessionScan {
   lastLabel: {eventSeq: bigint; utcMs: number} | null;
+  lastConfiguration: {eventSeq: bigint; revision: Uint64} | null;
   trips: Map<string, {opened: bigint; lastJobEvent: {eventSeq: bigint; type: string} | null}>;
 }
 /**
@@ -44,11 +46,16 @@ function openedAt(trip: TripRecord): bigint {
   return trip.checkpointJob === null ? 0n : BigInt(trip.checkpointJob.nextEventSeq) - 1n;
 }
 const newScan = (trips: readonly TripRecord[]): SessionScan =>
-  ({lastLabel: null, trips: new Map(trips.map(trip => [trip.tripUuid, {opened: openedAt(trip), lastJobEvent: null}]))});
+  ({lastLabel: null, lastConfiguration: null, trips: new Map(trips.map(trip => [trip.tripUuid, {opened: openedAt(trip), lastJobEvent: null}]))});
 function observe(scan: SessionScan, event: EventRow, labelOnly = false): void {
   const eventSeq = BigInt(event.eventSeq), label = labelOf(event.occurred);
   if (label !== null && (scan.lastLabel === null || eventSeq > scan.lastLabel.eventSeq)) scan.lastLabel = {eventSeq, utcMs: label};
-  if (labelOnly || (event.type !== 'job.configured' && event.type !== 'job.cleared')) return;
+  if (labelOnly) return;
+  const revision = isRecord(event.occurred) ? event.occurred.configurationRevision : undefined;
+  if (isUint64(revision) && (scan.lastConfiguration === null || eventSeq > scan.lastConfiguration.eventSeq)) {
+    scan.lastConfiguration = {eventSeq, revision};
+  }
+  if (event.type !== 'job.configured' && event.type !== 'job.cleared') return;
   for (const trip of scan.trips.values()) {
     if (eventSeq > trip.opened && (trip.lastJobEvent === null || eventSeq > trip.lastJobEvent.eventSeq)) trip.lastJobEvent = {eventSeq, type: event.type};
   }
@@ -62,11 +69,14 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
   // start label the session's last label, and storage holds no event at it (PR-7 review round 1). A stored label counts
   // only when its event follows the checkpoint, as the reducer's own last label would.
   const opened = scan.trips.get(trip.tripUuid)?.opened ?? 0n;
+  const firstEvent = trip.openedBy === 'checkpoint' ? opened + 1n : opened;
+  const configuration = scan.lastConfiguration;
   const lastObserved = trip.openedBy !== 'checkpoint' ? scan.lastLabel?.utcMs
     : scan.lastLabel !== null && scan.lastLabel.eventSeq > opened ? scan.lastLabel.utcMs : trip.startedUtcMs;
   return {
     ...(trip.profileScope?{profileScope:trip.profileScope}:{}),tripUuid: trip.tripUuid, pluginSessionId: trip.pluginSessionId, game: trip.game, jobKey: job, startedUtcMs: trip.startedUtcMs,
     recordingCompleteness: trip.recordingCompleteness, ...(lastObserved !== undefined ? {lastObservedUtcMs: lastObserved} : {}),
+    ...(configuration && configuration.eventSeq >= firstEvent ? {configurationRevision: configuration.revision} : {}),
     ...(trip.observedDistanceM.available ? {observedDistanceM: trip.observedDistanceM.value} : {}),
     ...(trip.fuelUsedL.available ? {fuelUsedL: trip.fuelUsedL.value} : {}),
     ...(lastJobEvent?.type === 'job.cleared' ? {awaitingOutcome: true} : {})
@@ -83,6 +93,7 @@ function seedOf(trip: TripRecord, jobRow: EventRow | undefined, scan: SessionSca
  *   otherwise the trip's start label, the label the reducer gave the session at the attach.
  * - `observedDistanceM`: the stored observed distance when it is available.
  * - `fuelUsedL`: the stored fuel used when it is available (S-1, J8).
+ * - `configurationRevision`: the most recent stored configuration evidence at or after the trip's opening.
  * - `awaitingOutcome`: true when the session's last `job.configured` or `job.cleared` event after the trip's opening
  *   event is `job.cleared`: the job was cleared and not configured again before the stop.
  * `sessionEvents` are the stored events of the trip's plugin session, in any order. readTripSeeds() applies the same

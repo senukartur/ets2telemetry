@@ -96,7 +96,8 @@ describe('ET-015c recording runtime with the real storage worker and the real sh
   it('recovers a complete event stream and second-by-second samples after the game and application exit with SQLite unavailable', async () => {
     const input = scenario('normal-delivery');
     input.steps = input.steps.map(step => ({...step, atMs: Number(step.atMs) * 10, ...(step.action === 'frame' ? {
-      channels: {...step.channels as Json, 'world.placement': {x: Number(step.atMs), y: 42, z: 100, heading: 0, pitch: 0, roll: 0}}
+      channels: {...step.channels as Json, 'world.placement': {x: Number(step.atMs), y: 42, z: 100, heading: 0, pitch: 0, roll: 0},
+        'job.cargo.damage': step.atMs === 100 ? 0 : 0.125}
     } : {})}));
     const replay = withTransport(input, 'emergency-delivery', [
       connect(0, {durable: true, commit: 'each', ack: 'each'}), disconnect(11_000)
@@ -132,8 +133,8 @@ describe('ET-015c recording runtime with the real storage worker and the real sh
       } finally { storage.close(); }
       const samples = await storedSamples(reader(name), input.seed, sessionOf(replay));
       expect(samples).toEqual(expect.arrayContaining([
-        expect.objectContaining({trip: 'trip@3', position: {available: true, value: {x: 100, y: 42, z: 100}}}),
-        expect.objectContaining({trip: 'trip@3', position: {available: true, value: {x: 200, y: 42, z: 100}}})
+        expect.objectContaining({trip: 'trip@3', cargoDamage: 0, position: {available: true, value: {x: 100, y: 42, z: 100}}}),
+        expect.objectContaining({trip: 'trip@3', cargoDamage: 0.125, position: {available: true, value: {x: 200, y: 42, z: 100}}})
       ]));
       const seconds = (samples as {monotonicNs: string}[]).map(sample => BigInt(sample.monotonicNs) / 1_000_000_000n);
       expect(new Set(seconds).size).toBe(samples.length);

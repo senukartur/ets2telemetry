@@ -203,6 +203,8 @@ export interface JournalSample {
   speed: Available<number>; fuel: Available<number>; averageConsumption: Available<number>; estimatedRange: Available<number>;
   engineRpm: Available<number>; gear: Available<number>; odometer: Available<number>;
   position: Available<{x: number; y: number; z: number}>;
+  /** Observed damage fraction for the recorded job, in [0, 1]. Absent when unavailable. */
+  cargoDamage?: number;
 }
 /** One page of a trip's samples in id order, and the cursor of the next page when this one is full. */
 export interface JournalSamplePage {database: JournalDatabase; samples: JournalSample[]; nextCursor: string | null}

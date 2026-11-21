@@ -3,7 +3,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {SampleChart} from '../../apps/desktop/src/screens/sample-chart';
 import {describe, expect, it} from 'vitest';
 import type {JournalSample} from '../../packages/contracts/src';
-import {chartGapLegend, chartLayout, journalChart, chartSpeedY} from '../../apps/desktop/src/screens/journal-chart';
+import {chartGapLegend, chartLayout, journalChart, chartY} from '../../apps/desktop/src/screens/journal-chart';
 const value = (value: number) => ({available: true as const, value});
 const sample = (id: number, changes: Partial<JournalSample> = {}): JournalSample => ({id: String(id), tripUuid: null, utcMs: 1000 + id * 1000,
   sourceClockId: 'clock-a', monotonicNs: String(id * 1e9), gameTime: null, speed: value(10), fuel: value(0), averageConsumption: value(0), estimatedRange: value(0),
@@ -12,8 +12,8 @@ describe('current-page speed chart (REG-002/003/008/009/014)', () => {
   it('converts canonical speed and retains zero without using UTC for elapsed time', () => {
     const view = journalChart([sample(10, {utcMs: 90_000, speed: value(0)}), sample(11, {utcMs: 1})], 'ets2');
     expect(view).toEqual({unit: 'km/h', sampleCount: 2, domain: {min: 0, max: 36}, gaps: [], segments: [{points: [
-      {id: '10', elapsedSeconds: 0, speed: 0, utcMs: 90_000}, {id: '11', elapsedSeconds: 1, speed: 36, utcMs: 1}]}]});
-    expect(journalChart([sample(1)], 'ats').segments[0].points[0].speed).toBeCloseTo(22.3693629205, 8);
+      {id: '10', elapsedSeconds: 0, value: 0, utcMs: 90_000}, {id: '11', elapsedSeconds: 1, value: 36, utcMs: 1}]}]});
+    expect(journalChart([sample(1)], 'ats').segments[0].points[0].value).toBeCloseTo(22.3693629205, 8);
   });
   it('breaks at unavailable values and missing seconds without inventing a pause or bridging the gap', () => {
     const view = journalChart([sample(1), sample(2, {speed: {available: false, reason: 'invalid'}}), sample(3), sample(5), sample(6)], 'ets2');
@@ -27,20 +27,44 @@ describe('current-page speed chart (REG-002/003/008/009/014)', () => {
   it('limits work to the current 300 samples and never sorts by clock labels', () => {
     const view = journalChart(Array.from({length: 400}, (_, index) => sample(index, {utcMs: 900_000 - index})), 'ets2');
     expect(view.sampleCount).toBe(300); expect(view.segments).toHaveLength(1); expect(view.segments[0].points).toHaveLength(300);
-    expect(view.segments[0].points.at(-1)).toEqual({id: '299', elapsedSeconds: 299, speed: 36, utcMs: 899701});
+    expect(view.segments[0].points.at(-1)).toEqual({id: '299', elapsedSeconds: 299, value: 36, utcMs: 899701});
     expect(journalChart([], 'ets2').segments).toEqual([]);
+  });
+});
+
+describe('cargo damage history (REG-008/009/014)', () => {
+  it('draws valid zero and damage without crossing missing samples, excluded readings, or clock changes', () => {
+    const samples = [sample(1, {cargoDamage: 0}), sample(2, {cargoDamage: 0.0125}), sample(3),
+      sample(4, {cargoDamage: 0.25}), sample(5, {cargoDamage: 0.75, accountingIncluded: false}),
+      sample(6, {cargoDamage: 0.5}), sample(8, {cargoDamage: 0.5}), sample(9, {cargoDamage: 0.2, sourceClockId: 'clock-b'})];
+    const view = journalChart(samples, 'ats', undefined, 'cargo-damage');
+    expect(view.unit).toBe('%');
+    expect(view.segments.map(({points}) => points.map(point => point.value))).toEqual([[0, 0.0125], [0.25], [0.5], [0.5], [0.2]]);
+    expect(view.gaps.map(({kind, seconds}) => [kind, seconds])).toEqual([['no-cargo-damage', 1], ['excluded', 1], ['no-samples', 1], ['source-change', null]]);
+    expect(view.domain).toEqual({min: 0, max: 0.5});
+  });
+
+  it('shows localized exact observations and an unavailable chart for an older page', () => {
+    const samples = [sample(1, {cargoDamage: 0}), sample(2, {cargoDamage: 0.0125}), sample(3)];
+    const render = (rows: JournalSample[]) => renderToStaticMarkup(React.createElement(SampleChart, {samples: rows, game: 'ets2', language: 'ru', metric: 'cargo-damage'}));
+    const chart = render(samples);
+    expect(chart).toContain('data-testid="trip.damage-chart"');
+    expect(chart).toContain('data-damage="0"');
+    expect(chart).toContain('1,25\u00a0%');
+    expect(chart).toContain('data-kind="no-cargo-damage"');
+    expect(render([sample(1)])).not.toContain('<svg');
   });
 });
 
 it.each(['metric', 'us-customary'] as const)('preserves signed geometry relative to zero for %s pages', profile => {
   for (const speeds of [[-10, 0, 10], [-10, -5], [0, 0]]) {
     const view = journalChart(speeds.map((speed, id) => sample(id, {speed: value(speed)})), 'ets2', {ets2: profile, ats: profile});
-    const zero = chartSpeedY(0, view.domain);
+    const zero = chartY(0, view.domain);
     expect(view.domain.min).toBeLessThanOrEqual(0); expect(view.domain.max).toBeGreaterThan(view.domain.min);
     for (const point of view.segments[0].points) {
-      const y = chartSpeedY(point.speed, view.domain); expect(Number.isFinite(y)).toBe(true); expect(y).toBeGreaterThanOrEqual(30); expect(y).toBeLessThanOrEqual(130);
-      if (point.speed < 0) expect(y).toBeGreaterThan(zero);
-      else if (point.speed > 0) expect(y).toBeLessThan(zero);
+      const y = chartY(point.value, view.domain); expect(Number.isFinite(y)).toBe(true); expect(y).toBeGreaterThanOrEqual(30); expect(y).toBeLessThanOrEqual(130);
+      if (point.value < 0) expect(y).toBeGreaterThan(zero);
+      else if (point.value > 0) expect(y).toBeLessThan(zero);
       else expect(y).toBe(zero);
     }
   }
@@ -100,7 +124,7 @@ describe('chart gaps (ET-077; REG-002/003/008/009/014)', () => {
     expect(layout.bands[0].x).toBeCloseTo(481.8, 8); expect(layout.bands[0].width).toBe(28);
     expect(layout.segments[1].x).toBeCloseTo(509.8, 8); expect(layout.segments[1].width).toBeCloseTo(50.2, 8);
     const many = Array.from({length: 20}, (_, index) => ({afterSegment: index, kind: 'no-samples' as const, seconds: 1}));
-    const segments = Array.from({length: 20}, () => ({points: [{id: 'x', elapsedSeconds: 1, speed: 0, utcMs: 0}]}));
+    const segments = Array.from({length: 20}, () => ({points: [{id: 'x', elapsedSeconds: 1, value: 0, utcMs: 0}]}));
     expect(chartLayout({segments, gaps: many}).bands[0].width).toBe(13.25);
   });
   it('aggregates the legend per kind and keeps the count of bands without a length', () => {

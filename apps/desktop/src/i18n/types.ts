@@ -566,7 +566,7 @@ export type I18nKey =
   | "copy.game-chosen-folder"
   | "copy.game-a-folder-that-is-no-longer-listed"
 
-  | 'ui.unavailable' | 'ui.planned' | 'ui.accountNote' | 'ui.diagnostics' | 'ui.details' | 'ui.help' | 'ui.helpNote' | 'ui.chartPage' | 'ui.chartNote' | 'ui.actualUnavailable' | 'ui.searchPlanned' | 'ui.status.connected' | 'ui.status.paused' | 'ui.status.waiting' | 'ui.status.stale' | 'ui.status.disconnected' | 'ui.status.incompatible' | 'ui.status.unavailable' | 'ui.status.restarting' | 'ui.status.service-failed' | 'ui.plugin' | 'ui.origin' | 'ui.current' | 'ui.notCurrent' | 'ui.observedProgress' | 'ui.readOnly'
+  | 'ui.unavailable' | 'ui.planned' | 'ui.accountNote' | 'ui.diagnostics' | 'ui.details' | 'ui.help' | 'ui.helpNote' | 'ui.chartPage' | 'ui.cargoDamageChart' | 'ui.chartNote' | 'ui.actualUnavailable' | 'ui.searchPlanned' | 'ui.status.connected' | 'ui.status.paused' | 'ui.status.waiting' | 'ui.status.stale' | 'ui.status.disconnected' | 'ui.status.incompatible' | 'ui.status.unavailable' | 'ui.status.restarting' | 'ui.status.service-failed' | 'ui.plugin' | 'ui.origin' | 'ui.current' | 'ui.notCurrent' | 'ui.observedProgress' | 'ui.readOnly'
   | 'app.name' | 'app.sub' | 'app.window'
   | 'nav.live' | 'nav.hardMode' | 'nav.journal' | 'nav.settings' | 'nav.account' | 'nav.group.drive' | 'nav.group.app' | 'nav.group.company'
   | 'tag.later' | 'tag.planned' | 'side.exit' | 'side.lang'
@@ -607,7 +607,7 @@ export type I18nKey =
   | 'tr.tab.summary' | 'tr.tab.timeline' | 'tr.tab.completeness' | 'tr.speed' | 'tr.samples' | 'tr.gap'
   | 'tr.money' | 'tr.moneySubtotal' | 'tr.fines' | 'tr.tolls' | 'tr.ferry' | 'tr.hmStart' | 'tr.hmEnd' | 'tr.hmSnapshot' | 'tr.truck'
   | 'tr.ivRecorded' | 'tr.ivGap' | 'tr.ivTotal'
-  | 'tr.tabs' | 'tr.kpis' | 'tr.started' | 'tr.recordedTime' | 'tr.recordedNote' | 'tr.recordedLimit' | 'tr.ivNoSamples' | 'tr.recordedNone' | 'tr.gameTimeNone' | 'tr.durS' | 'tr.durM' | 'tr.durH' | 'tr.durMs' | 'tr.durHm' | 'tr.gapNoSpeed' | 'tr.gapExcluded' | 'tr.gapSource' | 'tr.gapUnknown' | 'tr.hmLatest' | 'tr.truckLabel' | 'tr.trailerLabel' | 'tr.trailerN' | 'tr.ivCount' | 'tr.ivNone' | 'tr.ivNoneFirst' | 'tr.ivUnknown' | 'tr.ivBar' | 'tr.ivNote' | 'tr.ivFirstOnly' | 'tr.intervalsMore' | 'tr.allFields' | 'tr.site' | 'tr.siteSaved' | 'tr.siteRevision'
+  | 'tr.tabs' | 'tr.kpis' | 'tr.started' | 'tr.recordedTime' | 'tr.recordedNote' | 'tr.recordedLimit' | 'tr.ivNoSamples' | 'tr.recordedNone' | 'tr.gameTimeNone' | 'tr.durS' | 'tr.durM' | 'tr.durH' | 'tr.durMs' | 'tr.durHm' | 'tr.gapNoSpeed' | 'tr.gapNoCargoDamage' | 'tr.gapExcluded' | 'tr.gapSource' | 'tr.gapUnknown' | 'tr.hmLatest' | 'tr.truckLabel' | 'tr.trailerLabel' | 'tr.trailerN' | 'tr.ivCount' | 'tr.ivNone' | 'tr.ivNoneFirst' | 'tr.ivUnknown' | 'tr.ivBar' | 'tr.ivNote' | 'tr.ivFirstOnly' | 'tr.intervalsMore' | 'tr.allFields' | 'tr.site' | 'tr.siteSaved' | 'tr.siteRevision'
   | 'ev.accepted' | 'ev.refuel' | 'ev.fine' | 'ev.toll' | 'ev.gap' | 'ev.delivered' | 'ev.cancelled' | 'ev.closed' | 'ev.recording'
   | 's.general' | 's.units' | 's.overlay' | 's.plugin' | 's.data' | 's.about'
   | 's.lang' | 's.langD' | 's.theme' | 's.themeD' | 's.autostart' | 's.autostartD' | 's.autostart.active' | 's.autostart.disabled' | 's.autostart.notInstalled' | 's.autostart.notInstalledNote' | 's.autostart.failed' | 's.autostart.saveFailed'

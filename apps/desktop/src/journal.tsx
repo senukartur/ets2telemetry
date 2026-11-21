@@ -218,13 +218,15 @@ function Samples({trip, options, onDatabase}: {trip: Selected; options: JournalT
   return <div className="yu-trip-panel" data-testid="journal-samples">
     <Status loaded={paged.loaded} testId="journal-samples" />
     {paged.loaded.state === 'value' ? <SampleChart samples={paged.loaded.value.samples} game={game} units={options.units} language={options.language} /> : null}
+    {paged.loaded.state === 'value' && paged.loaded.value.samples.length > 0
+      ? <SampleChart samples={paged.loaded.value.samples} game={game} language={options.language} metric="cargo-damage" /> : null}
     {text?.empty ? <p data-testid="journal-samples-empty">{text.empty}</p> : null}
     <Pager paged={paged} testId="journal-samples" />
     {text?.rows.length ? <details className="yu-trip-samples" data-testid="trip.samples" onToggle={event => setTableOpen(event.currentTarget.open)}><summary data-testid="trip.samples.toggle"><ChevronRight aria-hidden="true" />{JOURNAL_STRINGS.samplesTab}</summary>{tableOpen ? <Table><TableHeader><TableRow>{text.columns.map(column => <TableHead key={column.label}>{column.label}
       {column.note ? <span className="block text-xs font-normal text-muted-foreground" data-testid="journal-samples-column-note">{column.note}</span> : null}</TableHead>)}</TableRow></TableHeader>
     <TableBody>{text.rows.map(row => row.kind === 'sample'
       ? <TableRow key={row.key} data-testid="journal-sample-row" data-kind="sample">
-        {[row.time, row.speed, row.fuel, row.gear, row.rpm, row.odometer, row.range, row.consumption, row.gameTime, row.position].map((cell, index) => <TableCell key={index}>{cell}</TableCell>)}
+        {[row.time, row.speed, row.fuel, row.gear, row.rpm, row.odometer, row.range, row.consumption, row.gameTime, row.position, row.cargoDamage].map((cell, index) => <TableCell key={index}>{cell}</TableCell>)}
       </TableRow>
       : <TableRow key={row.key} data-testid="journal-sample-row" data-kind={row.kind}><TableCell colSpan={text.columns.length} className="text-muted-foreground italic">{row.text}</TableCell></TableRow>)}
     </TableBody></Table> : null}</details> : null}

@@ -90,7 +90,7 @@ export type JournalSampleRow =
   | {kind: 'gap'; key: string; text: string}
   | {kind: 'restart'; key: string; text: string}
   | {kind: 'sample'; key: string; time: string; speed: string; fuel: string; consumption: string; range: string; rpm: string; gear: string; odometer: string;
-    gameTime: string; position: string};
+    gameTime: string; position: string; cargoDamage: string};
 /** A column heading of the sample table; `note` says what its values are, such as the SDK mean. */
 export interface JournalColumn {label: string; note?: string}
 export interface JournalSampleText {columns: JournalColumn[]; rows: JournalSampleRow[]; empty: string | null; hasNext: boolean}
@@ -623,14 +623,15 @@ function journalSampleText(page: JournalSamplePage, game: JournalGame, options: 
       fuel: show(sample.fuel, amount(units, powertrain)),
       consumption: show(sample.averageConsumption, value => consumptionText(value, units, powertrain)),
       range: show(sample.estimatedRange, distance(units)), rpm: show(sample.engineRpm, formatRpm), gear: show(sample.gear, formatGear),
-      odometer: show(sample.odometer, distance(units)), gameTime: sampleGameTime(sample, language), position: show(sample.position, formatPosition)});
+      odometer: show(sample.odometer, distance(units)), gameTime: sampleGameTime(sample, language), position: show(sample.position, formatPosition),
+      cargoDamage: sample.cargoDamage === undefined ? unavailable('not-observed') : journalDamageText(sample.cargoDamage, language)});
     previous = sample;
   }
   const L = JOURNAL_LABEL_TEXT;
   const amountLabel = powertrains.size === 1 && powertrains.has('electric') ? t('energy.charge', undefined, language)
     : powertrains.has('electric') ? t('energy.amount', undefined, language) : L.fuel;
   const columns: JournalColumn[] = [{label: L.time}, {label: L.speed}, {label: amountLabel}, {label: L.gear}, {label: L.rpm}, {label: L.odometer}, {label: L.range},
-    {label: L.consumption, note: JOURNAL_NOTE_TEXT.consumption}, {label: L.gameTime}, {label: L.position, note: JOURNAL_NOTE_TEXT.position}];
+    {label: L.consumption, note: JOURNAL_NOTE_TEXT.consumption}, {label: L.gameTime}, {label: L.position, note: JOURNAL_NOTE_TEXT.position}, {label: L.cargoDamage}];
   return {columns, rows, empty: page.samples.length ? null : (options.firstPage ?? true) ? JOURNAL_STRINGS.noSamples : JOURNAL_STRINGS.noMoreSamples,
     hasNext: page.nextCursor !== null};
 }
@@ -638,6 +639,14 @@ function journalSampleText(page: JournalSamplePage, game: JournalGame, options: 
   return {partialText, localTime, journalErrorText, journalExportText, journalBannerText, outcomeText, completenessBadge, gameModeText, journalListText, journalDetailText, journalTripSideText, journalIntervalText, journalEventText, journalTimelineItems, journalCompletenessText, journalSiteSaved, journalSampleText};
 }
 const texts = {en: createJournalText('en'), ru: createJournalText('ru')};
+const damageFormats = {
+  en: new Intl.NumberFormat('en', {style: 'percent', maximumFractionDigits: 2}),
+  ru: new Intl.NumberFormat('ru', {style: 'percent', maximumFractionDigits: 2})
+};
+export function journalDamageText(fraction: number, language: AppLanguage): string {
+  const format = damageFormats[language], minFraction = 0.0001; // 0.01% as a fraction.
+  return fraction > 0 && fraction < minFraction ? `<${format.format(minFraction)}` : format.format(fraction);
+}
 export const journalListText = (...args: Parameters<typeof texts.en.journalListText>): ReturnType<typeof texts.en.journalListText> => texts[args[1]?.language ?? 'en'].journalListText(...args);
 export const journalDetailText = (...args: Parameters<typeof texts.en.journalDetailText>): ReturnType<typeof texts.en.journalDetailText> => texts[args[1]?.language ?? 'en'].journalDetailText(...args);
 export const journalTripSideText = (...args: Parameters<typeof texts.en.journalTripSideText>): ReturnType<typeof texts.en.journalTripSideText> => texts[args[1]?.language ?? 'en'].journalTripSideText(...args);

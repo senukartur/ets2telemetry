@@ -52,7 +52,7 @@ export interface TripExportHeader {
  */
 export interface TripExportBounds {projection?: JournalTripDetail['exportBounds']['snapshot']; sources?: JournalTripDetail['exportBounds']['sources']; sourceTotal?:number;accountingHead?:string|null;committedThroughEventSeq: Uint64; lastSampleId: string | null; lastIntervalId: string | null; snapshot: boolean}
 /** One stored one-second sample of the trip in canonical units; the trip is the document's own. */
-export type TripExportSample = Omit<JournalSample, 'tripUuid' | 'powertrain'> & {powertrain: TruckPowertrain};
+export type TripExportSample = Omit<JournalSample, 'tripUuid' | 'powertrain' | 'cargoDamage'> & {powertrain: TruckPowertrain};
 export type TripExportTruck = Omit<TruckConfiguration, 'fuelCapacity'> & {
   fuelCapacity: Available<number> & {unit: TruckEnergyUnit | null};
 };

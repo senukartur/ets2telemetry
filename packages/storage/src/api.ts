@@ -54,6 +54,8 @@ export interface SampleInput {
   speed: Available<number>; fuel: Available<number>; averageConsumption: Available<number>; estimatedRange: Available<number>;
   engineRpm: Available<number>; gear: Available<number>; odometer: Available<number>;
   position: Available<{x: number; y: number; z: number}>;
+  /** Observed damage fraction for the recorded job, in [0, 1]. Absent when unavailable. */
+  cargoDamage?: number;
 }
 export interface SampleRecord extends Omit<SampleInput, 'recording'> {powertrain?: import('../../contracts/src/truck-powertrain').TruckPowertrain; id: string; tripUuid: string | null; pluginSessionId?: string; rawTripUuid?: string; accountingIncluded?: boolean}
 /**

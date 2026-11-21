@@ -195,6 +195,7 @@ describe('main accepts a service reply only when it answers the request exactly 
     ['a sample page', SAMPLES, SAMPLE_PAGE],
     ['a full sample page', SAMPLES, {...SAMPLE_PAGE, samples: numbered(SAMPLE, 'id', 300, 11), nextCursor: '310'}],
     ['an empty sample page', SAMPLES, {...SAMPLE_PAGE, samples: []}],
+    ['a sample with observed zero cargo damage', SAMPLES, {...SAMPLE_PAGE, samples: [{...SAMPLE, cargoDamage: 0}]}],
     // ET-072: the job summary's market is forwarded raw, up to the protocol's id bound; an unknown value is not refused.
     ['a trip whose job market is 128 bytes', TRIPS, changed(TRIP_PAGE, p => { p.trips[0].job.market = {available: true, value: 'é'.repeat(64)}; })],
     ['a trip of an unknown job market without a special-job flag', TRIPS, changed(TRIP_PAGE, p => {
@@ -277,6 +278,8 @@ describe('main accepts a service reply only when it answers the request exactly 
     ['a sample with a process id', SAMPLES, changed(SAMPLE_PAGE, p => { (p.samples[0] as Record<string, unknown>).processId = 4242; })],
     ['an unavailable sample value read as zero without a reason', SAMPLES, changed(SAMPLE_PAGE, p => { (p.samples[0] as {fuel: unknown}).fuel = {available: false, value: 0}; })],
     ['a sample value that is not finite', SAMPLES, changed(SAMPLE_PAGE, p => { p.samples[0].speed = {available: true, value: Number.NaN}; })],
+    ['sample cargo damage above 100 percent', SAMPLES, {...SAMPLE_PAGE, samples: [{...SAMPLE, cargoDamage: 1.01}]}],
+    ['sample cargo damage that is not finite', SAMPLES, {...SAMPLE_PAGE, samples: [{...SAMPLE, cargoDamage: Number.NaN}]}],
     ['negative game minutes', SAMPLES, changed(SAMPLE_PAGE, p => { p.samples[0].gameTime.minutes = {available: true, value: -1}; })],
     ['a position without z', SAMPLES, changed(SAMPLE_PAGE, p => { (p.samples[0].position as {value: unknown}).value = {x: 1, y: 2}; })],
     ['an upper-case clock id', SAMPLES, changed(SAMPLE_PAGE, p => { p.samples[0].sourceClockId = p.samples[0].sourceClockId.toUpperCase(); })],
