@@ -740,3 +740,17 @@ it.each(['event-loss','restore-loss','storage-unavailable'] as const)('REG-003/0
   expect(attempt.status).toBe('claimed');
   expect((JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot.recordingCompleteness).toBe('partial');
 });
+
+it.each(['event-loss','restore-loss'] as const)('REG-003 keeps the trailer complete and reports partial recording for a trip %s inside the job',async kind=>{
+  const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage);
+  ok(storage.commitEvent({message:game(source.s.event(r.trailerConfigured(lowbed))),effects:[{kind:'trip.update',tripUuid:source.tripUuid,set:{trailerConfigurations:['this-event']}}]}));
+  ok(storage.recordCompleteness(source.s.session,{tripUuid:source.tripUuid,kind,firstEventSeq:source.s.next.toString(),lastEventSeq:source.s.next.toString()}));
+  const workId=await complete(storage,source);
+  expect(ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:1000})).status).toBe('frozen');
+  const attempt=ok(storage.claimUploadAttempt({attemptId:randomUUID(),registrationId:source.registrationId,expectedVersion:'1',mode:'any',nowMs:1000}));
+  expect(attempt.status).toBe('claimed');const snapshot=(JSON.parse(Buffer.from(attempt.payload!).toString()) as UploadEnvelope).snapshot;
+  // The loss no longer adds a rule-context reason; recording completeness carries it.
+  expect(snapshot.trailers).toEqual({complete:true,items:[lowbedItem]});
+  expect(snapshot.evidence).toMatchObject({ruleContextComplete:true,reasons:[]});
+  expect(snapshot.recordingCompleteness).toBe('partial');
+});
