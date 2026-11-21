@@ -1,4 +1,3 @@
-import {ruleLossBounds,ruleNativeBounds} from './trailer-baselines';
 import {validCoverage} from './logical-coverage';
 import {decisionState,identityPending} from './identity-pending';
 import type Database from 'better-sqlite3';
@@ -75,7 +74,7 @@ export function resolveBinding(db:Database.Database,root:unknown):Row|undefined 
 /** Called by revise inside the recorder transaction. No projection fold, payload serialization or history walk. */
 export function discoverRevision(db:Database.Database,root:bigint,revision:unknown,delivery?:{mode:'backfill'|'live';runId:string}):void {
   if(!syncEnabled(db)||!candidate(db,root))return;
-  const r=required(get(db,`SELECT r.state_ref,r.progress_head,l.retired,l.member_count,l.latest_trip_ref,m.proof_json,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref
+  const r=required(get(db,`SELECT r.state_ref,r.progress_head,l.retired,m.proof_json,s.row_json FROM logical_revisions r JOIN logical_projection_states s ON s.id=r.state_ref
     JOIN logical_trips l ON l.id=r.logical_ref JOIN logical_memberships m ON m.trip_ref=l.id WHERE r.id=?`,revision));
   const row=JSON.parse(String(r.row_json)) as Row,outcome=String(row.outcome),head=r.progress_head===null?undefined:get(db,'SELECT distance_m,fuel_used_l FROM logical_progress WHERE id=?',r.progress_head);
   const evidence=get(db,'SELECT generation FROM upload_projection_evidence_versions WHERE root_ref=?',root)?.generation??0n;
@@ -86,18 +85,13 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
   const atom=(value:unknown)=>{const s=String(value&&typeof value==='object'&&'$integer' in value?value.$integer:value);return `${s.length}:${s}`;};
   const coverage=validCoverage(row._coverage)?row._coverage:undefined,endpoint=coverage?.endpoint;
   const quality=[coverage?.start,coverage?.phase,coverage?.losses,coverage?.acceptancePending??false,endpoint?.distanceM.available,endpoint?(endpoint.distanceM.available?null:endpoint.distanceM.reason):null,endpoint?.fuelUsedL.available,endpoint?(endpoint.fuelUsedL.available?null:endpoint.fuelUsedL.reason):null];
-  const joinedOpen=outcome==='open'&&(r.member_count as bigint)>1n;
-  const session=joinedOpen?required(get(db,'SELECT plugin_session_ref FROM trips WHERE id=?',r.latest_trip_ref)).plugin_session_ref
-    :BigInt((row.plugin_session_ref as {$integer:string}).$integer);
-  const ruleContext=Number(db.pragma('user_version',{simple:true}))>=7
-    ?JSON.stringify([outcome==='open'?ruleNativeBounds(db,session,joinedOpen):null,ruleLossBounds(db,session)]):null;
   // Keep the old key for existing diesel and unknown roots. React to entering or leaving an explicitly electric model.
   const truck = row.truck_configuration_ref as {$integer: string} | null;
   const model = truck ? get(db,'SELECT model_id FROM truck_configurations WHERE id=?',BigInt(truck.$integer))?.model_id : undefined;
   const electric = truckPowertrain(row.game as 'ets2' | 'ats', typeof model === 'string' ? model : undefined) === 'electric';
   // Unknown cargo keeps the legacy key. A known fill must reach comparison, where negotiation determines materiality.
   const cargo = typeof row.cargo_classification === 'string' ? ['cargo-classification',row.cargo_classification] : [];
-  const materialKey=[ruleContext,...fields.map(field=>row[field]),...quality,evidence,r.retired,r.proof_json===null?0:1,head?.distance_m===null?'distance-unknown':'distance-supported',
+  const materialKey=[...fields.map(field=>row[field]),...quality,evidence,r.retired,r.proof_json===null?0:1,head?.distance_m===null?'distance-unknown':'distance-supported',
     head?.fuel_used_l===null?'fuel-unknown':'fuel-supported',
     ...(outcome==='open'?[]:[r.progress_head,row.observed_distance_m,row.fuel_used_l,endpoint?.distanceM.available?endpoint.distanceM.value:null,endpoint?.fuelUsedL.available?endpoint.fuelUsedL.value:null]),
     ...(electric?['electric-truck']:[]),...cargo].map(atom).join('|');

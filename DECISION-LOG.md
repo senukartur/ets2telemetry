@@ -910,3 +910,7 @@ On [ET-119](https://trello.com/c/ecFxl641) the owner approved a connected-accoun
 ## ET-121 live cargo damage in protocol v1.6 — November 20, 2026
 
 The owner approved the [ET-121](https://trello.com/c/ZunIHoH5) plan to add live cargo damage to negotiated protocol v1.6 and use the matching v0 configuration revision for overlay display.
+
+## Pooled upload trailers — November 20, 2026
+
+The owner dropped the trailer replay proof for the Dashboard upload. It failed on the routine startup gap of a resumed game session and blocked qualification, and the owner states that a trailer cannot change within one job. The upload now reports the trailer configurations linked to any member session of the merged trip, one per slot with the later record winning unless it would lose a known body type, and the lead trailer's body type is enough for complete trailers. The `recording-intervals`, `trailer-context-unproven` and `trailer-context-changed` reasons are removed. Already uploaded trips are not repaired. See [the upload specification](docs/dashboard-upload.md).

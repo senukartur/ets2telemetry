@@ -4,7 +4,6 @@ import type {LiveObservationV1,CurrentState} from '../../../../packages/contract
 import type {StorageClient} from '../../../../packages/storage/src/client';
 import type {QualificationAuthority} from '../../../../packages/storage/src/qualification';
 import type {UploadProjection} from '../../../../packages/storage/src/upload-projection';
-import {chainComplete,type RuleContext} from '../../../../packages/storage/src/upload-rule-context';
 import {jobKey as canonicalJobKey} from '../../../../packages/telemetry-core/src/trips/identity';
 import {stored} from '../dashboard-upload/scheduler';
 export type PreviewStorage=Pick<StorageClient,'readQualificationPreview'|'beginQualificationPreview'|'advanceQualificationPreview'|'releaseQualificationPreview'>;
@@ -13,11 +12,10 @@ const firstBody=(slots:CurrentState['configuration']['trailers']):string|null=>{
   const first=slots[0];return first?.available&&first.value.bodyType.available&&first.value.bodyType.value.length>0&&first.value.bodyType.value.length<=128?first.value.bodyType.value:null;
 };
 /** One code per coupling observation: additional physical slots are provenance, never additional restricted types. */
-export function qualificationTrailerFacts(proof:RuleContext|undefined,slots:CurrentState['configuration']['trailers'],history:(string|null)[]=[]):QualificationPreviewInput['trailers'] {
-  const current=firstBody(slots),prior=proof?.items.find(item=>item.index===0)?.bodyType;
-  const previous=[...history];if(prior?.available&&prior.value!==current&&!previous.includes(prior.value))previous.unshift(prior.value);
-  const items:QualificationPreviewInput['trailers']['items']=previous.map(code=>({code,provenance:code===null?'unknown':'previous'}));
-  let complete=proof?.status==='proven'&&chainComplete(proof.items)&&current!==null&&!previous.includes(null);
+export function qualificationTrailerFacts(slots:CurrentState['configuration']['trailers'],history:(string|null)[]=[]):QualificationPreviewInput['trailers'] {
+  const current=firstBody(slots);
+  const items:QualificationPreviewInput['trailers']['items']=history.map(code=>({code,provenance:code===null?'unknown':'previous'}));
+  let complete=current!==null&&!history.includes(null);
   if(items.length>9){items.splice(8,items.length-8,{code:null,provenance:'unknown'});complete=false;}
   items.push({code:current,provenance:current===null?'unknown':'attached'});
   return {complete:!!complete,items};
@@ -79,7 +77,7 @@ export class QualificationPreviewFacts {
     if(!projection.facts.job||canonicalJobKey(projection.facts.job)!==canonicalJobKey(job)){this.#current=null;return null;}
     const cargo=job.cargoId.available&&job.cargoId.value.length<=128&&job.cargoId.value.length>0?job.cargoId.value:null;
     const mass=job.cargoMass.available?previewDecimal(job.cargoMass.value):null;
-    const trailers=qualificationTrailerFacts(projection.ruleContext,live.state.configuration.trailers,this.#couplings);
+    const trailers=qualificationTrailerFacts(live.state.configuration.trailers,this.#couplings);
     const started=projection.facts.opening?.utcMs;
     const facts={game:live.source.game,cargo:{availability:cargo?'known' as const:'unknown' as const,code:cargo},cargoMassKg:{availability:mass!==null?'known' as const:'unknown' as const,value:mass},trailers,actualDistance:current.actualDistance,hardMode:{final:false,result:'unknown' as const},start:started!==null&&started!==undefined?{basis:'actual' as const,utc:new Date(started).toISOString()}:null,eventId:null};
     const context=JSON.stringify({key,...facts,actualDistance:{...facts.actualDistance,metres:null}}),evidence=JSON.stringify(facts.actualDistance);

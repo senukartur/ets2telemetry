@@ -1,12 +1,12 @@
 import {randomUUID} from 'node:crypto';
 import type {CommitOptions} from '../api';
 import {fail} from '../errors';
-import {beginUploadFold,advanceUploadFold,finishUploadFold,isUploadUuid,UPLOAD_PAGE_KINDS,type UploadFold,type UploadProjection} from '../upload-projection';
+import {beginUploadFold,advanceUploadFold,finishUploadFold,isRetiredUploadFold,isUploadUuid,UPLOAD_PAGE_KINDS,type UploadFold,type UploadProjection} from '../upload-projection';
 import {decodeUploadReceipt,encodeUploadEnvelope,readUploadMaterialStamp,uploadDigest,uploadMaterialStamp,type UploadEnvelope} from '../upload-envelope';
 import {isUploadEventMinor,UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS,type UploadSyncCommands,type UploadWork,type UploadWorkReason,type UploadAttemptResult,type UploadEventMinor,type UploadRegistration,type UploadReceiptResult,type UploadCleanup} from '../upload-sync';
 import type {StorageConnection} from './connection';
 import {all,connection,discoverRevision,get,required,resolveBinding,type Row} from './upload-discovery';
-import {beginUploadProjection,advanceUploadProjection,readUploadProjectionPage,recheckUploadMaterialContext,releaseUploadProjection,uploadRuleWorkStatus} from './upload-projection';
+import {beginUploadProjection,advanceUploadProjection,readUploadProjectionPage,recheckUploadMaterialContext,releaseUploadProjection} from './upload-projection';
 import {check,pressure,syncTransaction} from './upload-sync';
 
 type Input<K extends keyof UploadSyncCommands>=UploadSyncCommands[K]['args'] extends {input:infer I}?I:never;
@@ -17,6 +17,7 @@ function hold(db:ReturnType<StorageConnection['writer']>,work:Row,reason:UploadW
   if(status==='held')db.prepare('UPDATE upload_source_bindings SET held=1,hold_reason=? WHERE root_ref=?').run(reason,work.root_ref);
   return workStatus({...work,state:status,hold_reason:reason,examined:0});
 }
+const retiredFold=(work:Row):boolean=>typeof work.fold_json==='string'&&isRetiredUploadFold(JSON.parse(work.fold_json) as object);
 /** Refresh the existing root when a pending upload needs a new pin without a recorder revision. */
 function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row,refreshPin=false):UploadWork {
   const head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref);
@@ -50,7 +51,7 @@ export function beginUploadMaterialization(conn:StorageConnection,input:Input<'b
 export function advanceUploadMaterialization(conn:StorageConnection,input:Input<'advanceUploadMaterialization'>,options?:CommitOptions):UploadWork {
   check('advanceUploadMaterialization',input);return syncTransaction(conn,db=>{
     const work=required(get(db,'SELECT * FROM upload_materializations WHERE work_id=?',input.workId));
-    if(['preparing','folding','complete'].includes(String(work.state))&&uploadRuleWorkStatus(db,String(work.pin_id))!=='current')return staleMaterial(db,work,true);
+    if(['folding','complete'].includes(String(work.state))&&retiredFold(work))return staleMaterial(db,work,true);
     if(['preparing','folding'].includes(String(work.state))&&pressure(db))return transient(input.workId,'pressure','queue-pressure');
     if(work.state==='preparing'){
       const preparation=advanceUploadProjection(conn,String(work.pin_id));
@@ -85,8 +86,8 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     const pin=JSON.parse(String(work.pin_json)) as UploadProjection,head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref),bound=resolveBinding(db,work.root_ref);
     if(!bound||bound.registration_ref!==work.registration_ref||bound.held===1n)return hold(db,work,'reconciliation-required');
     if(!head||head.material_version!==work.material_version||head.dirty!==0n)return staleMaterial(db,work);
-    const context=recheckUploadMaterialContext(db,pin);
-    if(context!=='current')return staleMaterial(db,work,context!=='stale');
+    if(retiredFold(work))return staleMaterial(db,work,true);
+    if(recheckUploadMaterialContext(db,pin)!=='current')return staleMaterial(db,work);
     const registration=get(db,'SELECT * FROM upload_registrations WHERE registration_id=?',work.registration_ref),installation=get(db,'SELECT client_uuid FROM upload_installation WHERE id=1');
     if(!registration||!installation||registration.client_uuid!==installation.client_uuid||!get(db,'SELECT 1 FROM upload_candidates WHERE trip_ref=?',work.root_ref))return hold(db,work,'reconciliation-required');
     const owner=get(db,'SELECT r.* FROM upload_reservations r JOIN upload_candidates c ON c.ordinal=r.candidate_ref WHERE c.trip_ref=?',work.root_ref);

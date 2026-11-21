@@ -222,7 +222,7 @@ Once connected, the connection card shows the service address and **Disconnect**
 
 Loading an earlier save during the same game session can also keep a complete recording. The job's start must have been recorded, the profile and job must match, and the loaded truck must match a recorded save point. The journal keeps the retained portion and the new driving, and the JSON export identifies the abandoned samples.
 
-If a saved job resumes after a game restart, its summary can include the same verified trailer chain once. The recorder must link the two recordings, and retained events must confirm the same trailers in the same order in every session. Changes or gaps that could hide a change still leave the trailer context incomplete. Recording completeness, distance and fuel, and Hard Mode qualification are assessed separately.
+If a saved job resumes after a game restart, its summary includes the trailers recorded in any of its game sessions, each trailer position once. The recorder must link the two recordings. The trailer context is complete when the first trailer's body type is known. Recording completeness, distance and fuel, and Hard Mode qualification are assessed separately.
 
 ## Hard Mode on the overlay (ET-070)
 
