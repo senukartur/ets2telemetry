@@ -34,6 +34,8 @@ export type GameModeEvidence = Pick<GameMode, 'mode' | 'method' | 'confidence'>;
 export interface TripSeed {
   profileScope?:string; tripUuid: string; pluginSessionId: string; game: TripGame; jobKey: string | null;
   startedUtcMs: number; recordingCompleteness: RecordingCompleteness; lastObservedUtcMs?: number; observedDistanceM?: number; fuelUsedL?: number;
+  /** Newest v1 configuration revision witnessed by a stored event at or after opening the trip. */
+  configurationRevision?: Uint64;
   awaitingOutcome?: boolean;
 }
 
