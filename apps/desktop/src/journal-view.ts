@@ -57,6 +57,7 @@ export interface JournalJobBadge {kind: JournalJobKind; text: string}
 export interface JournalJobLine {kind: JournalJobKind; text: string; sub: string | null}
 export interface JournalTripRow {
   mode: JournalModeBadge;
+  cargoClassification?: JournalTripListItem['cargoClassification'];
   /** The job type line; `specialTransport` is its label only when the game marked the job as special. */
   jobType: JournalJobLine; specialTransport: string | null;
   tripUuid: string; isHardMode: boolean; gameId: JournalGame; started: string; startedLabel: string; game: string; route: string; cargo: string;
@@ -282,7 +283,8 @@ function tripRow(trip: JournalTripListItem, options: JournalTextOptions): Journa
   return {
     mode: modeLine(trip.gameMode, trip.gameModeAmbiguous), jobType: jobLine(trip.job.market), specialTransport: specialTransport(trip.job.isSpecialJob), tripUuid: trip.tripUuid, gameId: trip.game, started: localTime(trip.startedUtcMs, options.timeZone), game: JOURNAL_GAME_TEXT[trip.game], route: routeText(trip.job),
     startedLabel: listTime(trip.startedUtcMs, options.timeZone), companies: `${nameOf(trip.job.sourceCompany)} · ${nameOf(trip.job.destinationCompany)}`,
-    isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), outcome: outcomeText(trip), outcomeKind: outcomeKind(trip), completeness: completenessBadge(trip.recordingCompleteness),
+    isHardMode: trip.isHardMode, cargo: nameOf(trip.job.cargo), ...(trip.cargoClassification ? {cargoClassification: trip.cargoClassification} : {}),
+    outcome: outcomeText(trip), outcomeKind: outcomeKind(trip), completeness: completenessBadge(trip.recordingCompleteness),
     plannedDistance, plannedOf: t('j.of', {v: plannedDistance}, language), observedDistance: trip.observedDistanceM.available ? distance(units)(trip.observedDistanceM.value) : '—',
     expectedIncome: trip.netIncome ? expectedMoneyText({...trip.netIncome, sdkType: 's64'}) : '—',
     ...(trip.accounting?.distance.status === 'partial' ? {distancePartial: t('j.qty.partial', undefined, language)} : {}),

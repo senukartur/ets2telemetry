@@ -4,7 +4,7 @@
 import {createHash} from 'node:crypto';
 import {
   EVENT_TYPES, GAMEPLAY_EVENT_TYPES, V1_GEARBOX, fraction, kmToMetersFloat, kmToMetersU32, sdkMoney, sdkText,
-  type Available, type CurrentState, type Currency, type EventOccurrence, type EventRecord, type EventType, type GameMode, type GearboxState, type HShifterLayout,
+  type Available, type CargoDamage, type CurrentState, type Currency, type EventOccurrence, type EventRecord, type EventType, type GameMode, type GearboxState, type HShifterLayout,
   type GameTimeStamp, type JobConfiguration, type Measure, type TrailerConfiguration, type TruckConfiguration, type UnavailableReason, type V1Minor
 } from '../../../../packages/contracts/src/protocol-v1';
 import {MAX_SEQ} from './store';
@@ -63,10 +63,10 @@ export type ChannelValue = number | null | 'invalid';
  * navigation speed limit in m/s (zero or negative is no limit). `rest.stop` supplies Rest State in s32 game minutes.
  */
 export const CHANNELS = ['speed', 'fuel.amount', 'engine.rpm', 'displayed.gear', 'odometer', 'fuel.consumption.average', 'fuel.range', 'game.time', 'navigation.distance', 'mandatory.break',
-  'cruise_control', 'navigation.speed.limit', 'rest.stop', 'world.placement'] as const;
+  'cruise_control', 'navigation.speed.limit', 'rest.stop', 'job.cargo.damage', 'world.placement'] as const;
 export type ChannelName = typeof CHANNELS[number];
 /** The optional protocol v1-only channels (ET-052, ET-071, ET-084): their callbacks never advance the shared boundary order. */
-const V1_ONLY_CHANNELS: ReadonlySet<ChannelName> = new Set(['mandatory.break', 'cruise_control', 'navigation.speed.limit', 'rest.stop']);
+const V1_ONLY_CHANNELS: ReadonlySet<ChannelName> = new Set(['mandatory.break', 'cruise_control', 'navigation.speed.limit', 'rest.stop', 'job.cargo.damage']);
 export type FrameChannels = Partial<Record<Exclude<ChannelName, 'world.placement'>, ChannelValue>> & {'world.placement'?: Placement | null | 'invalid'};
 export interface SourceConfig {
   game: 'ets2' | 'ats'; seed: string; gameplayEvents: 'registered' | 'not-supported'; currency: 'unknown' | 'sdk-documented';
@@ -91,8 +91,9 @@ export interface SourceConfig {
   speedLimit?: 'registered' | 'not-supported';
   /** Rest State registration status. Omitted means the channel is registered. */
   restState?: 'registered' | 'not-supported';
+  cargoDamage?: 'registered' | 'not-supported';
   /**
-   * The highest protocol v1 minor this simulated plugin serves, 0 to 5 (default 5). A lower value
+   * The highest protocol v1 minor this simulated plugin serves, 0 to 6 (default 6). A lower value
    * models a plugin from before ET-084 (3), ET-071 (2), ET-052 (1) or ET-050b (0), which answers a higher offer with its
    * own highest minor.
    */
@@ -241,8 +242,8 @@ export class EventChannel {
  * The producer adds each field introduced after minor 0 to `state` according to the negotiated minor.
  */
 interface Published {
-  state: Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak' | 'cruiseControl' | 'speedLimit' | 'restState'>; gearbox: GearboxState; nextMandatoryBreak: Measure<'min'>; cruiseControl: Measure<'m/s'>;
-  speedLimit: Measure<'m/s'>; restState: Measure<'min'>; offlineTransitions: bigint;
+  state: Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak' | 'cruiseControl' | 'speedLimit' | 'restState' | 'cargoDamage'>; gearbox: GearboxState; nextMandatoryBreak: Measure<'min'>; cruiseControl: Measure<'m/s'>;
+  speedLimit: Measure<'m/s'>; restState: Measure<'min'>; cargoDamage: CargoDamage; offlineTransitions: bigint;
 }
 
 /** The adapter: SDK callbacks in, records and the published v1 state slot out. */
@@ -251,6 +252,8 @@ export class AdapterModel {
   readonly currency: Currency;
   gameMode: GameMode = UNKNOWN_MODE;
   private boundary = 0n; private revision = 0n; private clockEpoch = 0; private offlineTransitions = 0n;
+  private v0ConfigurationRevision = 0n;
+  private cargoDamageActiveJob = false;
   private simulation: CurrentState['simulation'] = 'unavailable';
   private readings = new Map<ChannelName, Reading>();
   private placement: Available<Placement> = notObserved;
@@ -302,6 +305,8 @@ export class AdapterModel {
     this.next();
     const a = new Attributes(attributes, list), cleared = list === 'terminated' && attributes.length === 0;
     const slot = /^trailer\.[0-9]$/.test(id) ? Number(id.slice(8)) : -1;
+    if ((id === 'job' || id === 'truck') && list !== 'null') this.v0ConfigurationRevision++;
+    if (id === 'job') this.cargoDamageActiveJob = list === 'terminated' && !cleared;
     if (id === 'truck' && list !== 'null') {
       // A truck boundary invalidates dynamic values except game time; a model id is not a truck instance.
       for (const c of CHANNELS) if (c !== 'game.time' && c !== 'world.placement') this.readings.delete(c);
@@ -347,6 +352,7 @@ export class AdapterModel {
 
   gameplay(id: string, attributes: readonly SdkAttribute[], list: AttributeList, atMs: number): void {
     this.next();
+    if (id === 'job.delivered' || id === 'job.cancelled') this.cargoDamageActiveJob = false;
     const a = new Attributes(attributes, list), c = this.currency;
     const transfer = () => ({amount: a.money('pay.amount', 's64', c), sourceId: a.text('source.id', 'id'), sourceName: a.text('source.name', 'name'), targetId: a.text('target.id', 'id'), targetName: a.text('target.name', 'name')});
     let record: EventRecord;
@@ -409,6 +415,8 @@ export class AdapterModel {
   frame(timerRestart: boolean, channels: FrameChannels, atMs: number): void {
     this.next();
     const observed = new Set<ChannelName>();
+    const clockEpoch = this.clockEpoch;
+    let frameDamage: Reading = notObserved;
     if (timerRestart) { this.restartClock(observed); this.emit({type: 'timers.restart'}, atMs, true); }
     for (const c of CHANNELS) {
       if (!Object.hasOwn(channels, c)) continue;
@@ -417,6 +425,7 @@ export class AdapterModel {
       if (c === 'cruise_control' && this.config.cruiseControl === 'not-supported') continue;
       if (c === 'navigation.speed.limit' && this.config.speedLimit === 'not-supported') continue;
       if (c === 'rest.stop' && this.config.restState === 'not-supported') continue;
+      if (c === 'job.cargo.damage' && this.config.cargoDamage === 'not-supported') continue;
       // Like the native callback, a v1-only copy does not advance the shared boundary order, so a game that provides the
       // channel gives the same boundary orders as one that does not.
       if (!V1_ONLY_CHANNELS.has(c)) this.next();
@@ -429,6 +438,7 @@ export class AdapterModel {
       }
       const v = channels[c] as ChannelValue, isInt = c === 'game.time' || c === 'displayed.gear' || c === 'mandatory.break' || c === 'rest.stop';
       const reading: Reading = v === null ? notObserved : v === 'invalid' ? invalid : {available: true, value: isInt ? v : Math.fround(v)};
+      if (c === 'job.cargo.damage') { frameDamage = reading; continue; }
       if (c !== 'game.time') { this.readings.set(c, reading); continue; }
       if (reading.available && this.gameTime.available && reading.value < this.gameTime.value) {
         // gameTime.regression: `from` is the reading and clock before the rotation, `to` the regressed reading after it.
@@ -439,7 +449,7 @@ export class AdapterModel {
     }
     this.next();
     this.channel.flushLoss();
-    this.publishedSlot = this.copyState(atMs);
+    this.publishedSlot = this.copyState(atMs, this.clockEpoch === clockEpoch && this.cargoDamageActiveJob ? frameDamage : notObserved);
   }
 
   /** A synthetic game-mode determination (D9); emitted when first determined and on every change. Not an SDK callback. */
@@ -451,9 +461,9 @@ export class AdapterModel {
   unencodable(count: number, atMs: number): void { for (let i = 0; i < count; i++) { this.next(); this.emit({type: 'trailer.cleared', index: 10}, atMs, false); } }
 
   private reading(c: ChannelName): Reading { return this.readings.get(c) ?? notObserved; }
-  private copyState(atMs: number): Published {
+  private copyState(atMs: number, frameDamage: Reading = notObserved): Published {
     const gear = this.reading('displayed.gear');
-    const state: Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak' | 'cruiseControl' | 'speedLimit' | 'restState'> = {
+    const state: Omit<CurrentState, 'window' | 'gearbox' | 'nextMandatoryBreak' | 'cruiseControl' | 'speedLimit' | 'restState' | 'cargoDamage'> = {
       simulation: this.simulation, speed: scaled(this.reading('speed'), 1, -1000, 1000, 'm/s'), fuel: scaled(this.reading('fuel.amount'), 1, 0, 1e6, 'L'),
       fuelCapacity: scaled(this.fuelCapacity, 1, 0, 1e6, 'L'), engineRpm: scaled(this.reading('engine.rpm'), 1, 0, 100_000, 'rpm'),
       gear: gear.available && (gear.value < -100 || gear.value > 100) ? {available: false, reason: 'invalid', unit: 'index'} : withUnit(gear, 'index'),
@@ -472,7 +482,9 @@ export class AdapterModel {
     // ET-084: unscaled m/s, speed's bounds; zero and negative are values (no limit) and an above-bound float32 copy is invalid, never clamped.
     const speedLimit = this.config.speedLimit === 'not-supported' ? withUnit(unavailable('not-supported'), 'm/s') : scaled(this.reading('navigation.speed.limit'), 1, -1000, 1000, 'm/s');
     const restState = this.config.restState === 'not-supported' ? withUnit(unavailable('not-supported'), 'min') : withUnit(this.reading('rest.stop'), 'min');
+    const damage = this.config.cargoDamage === 'not-supported' ? withUnit(unavailable('not-supported'), 'fraction') : scaled(frameDamage, 1, 0, 1, 'fraction');
+    const cargoDamage = damage.available ? {...damage, v0ConfigurationRevision: this.v0ConfigurationRevision.toString()} : damage;
     return {state: structuredClone(state), gearbox: structuredClone(this.gearbox), nextMandatoryBreak: structuredClone(nextMandatoryBreak), cruiseControl: structuredClone(cruiseControl),
-      speedLimit: structuredClone(speedLimit), restState: structuredClone(restState), offlineTransitions: this.offlineTransitions};
+      speedLimit: structuredClone(speedLimit), restState: structuredClone(restState), cargoDamage, offlineTransitions: this.offlineTransitions};
   }
 }

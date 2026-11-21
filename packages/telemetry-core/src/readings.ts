@@ -114,5 +114,6 @@ export interface NormalizedLiveState {
   speedLimit: Reading<number>;
   /** Signed SDK Rest State in game minutes from protocol v1 minor 5. */
   restState: Reading<number>;
+  cargoDamage: Reading<number>;
   configurationRevision: string;
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import {Activity, Banknote, Bed, Check, CircleGauge, Clock, Coffee, Cog, Droplet, Flag, Flame, Fuel, Gauge, MapPin, Milestone, Navigation, Package, Pause, Route, Signpost, Timer, Unplug, X, type LucideIcon} from 'lucide-react';
+import {Activity, Banknote, Bed, Check, CircleGauge, Clock, Coffee, Cog, Droplet, Flag, Flame, Fuel, Gauge, MapPin, Milestone, Navigation, Package, PackageX, Pause, Route, Signpost, Timer, Unplug, X, type LucideIcon} from 'lucide-react';
 import type {OverlaySectionId} from '../../../packages/contracts/src';
 import type {OverlayHardModeCue, OverlayTagId} from './overlay-view';
 
@@ -8,7 +8,7 @@ import type {OverlayHardModeCue, OverlayTagId} from './overlay-view';
 
 export const OVERLAY_SECTION_ICONS: Readonly<Record<OverlaySectionId, LucideIcon>> = Object.freeze({
   'speed': Gauge, 'gear': Cog, 'rpm': Activity, 'cruise-control': CircleGauge, 'speed-limit': Signpost, 'fuel': Fuel, 'range': Milestone, 'sdk-consumption': Droplet, 'cargo': Package, 'origin': MapPin,
-  'destination': Flag, 'distance-driven': Route, 'distance-remaining': Navigation, 'deadline': Timer, 'expected-income': Banknote, 'game-time': Clock, 'mandatory-break': Coffee, 'rest-state': Bed
+  'destination': Flag, 'distance-driven': Route, 'distance-remaining': Navigation, 'deadline': Timer, 'expected-income': Banknote, 'cargo-damage': PackageX, 'game-time': Clock, 'mandatory-break': Coffee, 'rest-state': Bed
 });
 const TAG_ICONS: Readonly<Partial<Record<OverlayTagId, LucideIcon>>> = Object.freeze({'paused': Pause, 'no-signal': Unplug});
 

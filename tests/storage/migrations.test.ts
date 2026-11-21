@@ -53,6 +53,14 @@ function withoutV10(table: string, rows: unknown[]): unknown[] {
   if (!added) return rows;
   return (rows as Record<string, unknown>[]).map(({[added[0]]: value, ...rest}) => { expect(value, table).toBe(added[1]); return rest; });
 }
+function beforeAddedColumns(table: string, rows: unknown[]): unknown[] {
+  if (table !== 'trips') return withoutV10(table, rows);
+  return (rows as Record<string, unknown>[]).map(({cargo_classification, cargo_classification_generation, ...rest}) => {
+    expect(cargo_classification).toBeNull();
+    expect(cargo_classification_generation).toBeNull();
+    return rest;
+  });
+}
 const jobIdentities = (file: string) => readOnly(file, db => db.prepare('SELECT id, plugin_session_ref, source, event_ref, checkpoint_next_event_seq FROM job_configurations ORDER BY id').all());
 /** Opens a file that is not ours and checks that it was refused without changing a byte or leaving sidecar files. */
 async function expectRefused(file: string, code: 'SCHEMA_NEWER' | 'DATABASE_UNRECOGNIZED' | 'PURPOSE_MISMATCH', purpose: 'synthetic' | 'history' = 'synthetic') {
@@ -194,12 +202,12 @@ describe('REG-013/REG-017 installer history contract', () => {
   it('accepts the actual version 1 to current migration and rejects corrupted upgrade evidence', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), original = readVersion1(copy);
     const storage = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(storage.summary).toMatchObject({schemaVersion: 11, created: false, migratedFrom: 1});
+    expect(storage.summary).toMatchObject({schemaVersion: 12, created: false, migratedFrom: 1});
     expectMigratedFromVersion1(storage, copy, original, path.join(ws.backups, storage.summary.backupFileName!));
     const facts = collectHistory(Database, copy, ws.backups);
     expect(() => assertHistoryFacts(facts, '0.1.0-test')).not.toThrow();
     const reopened = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(reopened.summary).toMatchObject({schemaVersion: 11, created: false});
+    expect(reopened.summary).toMatchObject({schemaVersion: 12, created: false});
     expect(reopened.summary.migratedFrom).toBeUndefined();
     reopened.close();
     expect(() => assertHistoryFacts(collectHistory(Database, copy, ws.backups), '0.1.0-test')).not.toThrow();
@@ -241,10 +249,10 @@ it('REG-013 migrates frozen schema4 additively and preserves every existing tabl
   const copy=ws.copyFixture('schema-v4-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").pluck().all()) as string[];
   const rows=readOnly(copy,db=>Object.fromEntries(tables.map(table=>[table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:11,migratedFrom:4});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:12,migratedFrom:4});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
   readOnly(copy,db=>{
-    for(const table of tables.filter(t=>t!=='schema_migrations'))expect(withoutV10(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),table).toEqual(rows[table]);
+    for(const table of tables.filter(t=>t!=='schema_migrations'))expect(beforeAddedColumns(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),table).toEqual(rows[table]);
     expect(db.prepare('SELECT generation FROM upload_projection_evidence_versions').all()).toEqual([]);
     expect(db.pragma('foreign_key_check')).toEqual([]);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');
   });
@@ -254,11 +262,11 @@ it('REG-006/013 migrates frozen schema5 additively after a verified backup witho
   const copy=ws.copyFixture('schema-v5-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:11,migratedFrom:5});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:12,migratedFrom:5});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);
   const ready=ok(storage.getUploadProjectionPreparation('80000000-0000-4000-8000-000000000001'));expect(ready.state).toBe('ready');
   storage.close();readOnly(copy,db=>{
-    expect(tables.map(table=>withoutV10(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
+    expect(tables.map(table=>beforeAddedColumns(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
     expect(db.prepare('SELECT legacy_boundary,next_ordinal,next_change,version,client_uuid FROM upload_connection').all()).toEqual([{legacy_boundary:4,next_ordinal:5,next_change:1,version:0,client_uuid:null}]);
     expect(db.prepare('SELECT count(*) FROM upload_candidates').pluck().get()).toBe(0);expect(db.pragma('foreign_key_check')).toEqual([]);
   });
@@ -269,9 +277,9 @@ it('REG-006/013 migrates schema6 without rewriting frozen upload bytes, receipts
   const copy=ws.copyFixture('schema-v6-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:11,migratedFrom:6});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:12,migratedFrom:6});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
-  readOnly(copy,db=>{expect(tables.map(table=>withoutV10(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
+  readOnly(copy,db=>{expect(tables.map(table=>beforeAddedColumns(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
     expect(db.prepare('SELECT * FROM trailer_baselines').all()).toEqual([]);expect(db.pragma('foreign_key_check')).toEqual([]);});
 });
 it('REG-007/013 rolls back failed schema7 DDL without modifying schema6 uploads or preparations',async()=>{

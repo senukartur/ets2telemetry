@@ -2,8 +2,8 @@ import {randomUUID} from 'node:crypto';
 import type {CommitOptions} from '../api';
 import {fail} from '../errors';
 import {beginUploadFold,advanceUploadFold,finishUploadFold,isRetiredUploadFold,isUploadUuid,UPLOAD_PAGE_KINDS,type UploadFold,type UploadProjection} from '../upload-projection';
-import {decodeUploadReceipt,encodeUploadEnvelope,uploadDigest,uploadMaterialDigest,type UploadEnvelope} from '../upload-envelope';
-import {UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS,type UploadSyncCommands,type UploadWork,type UploadWorkReason,type UploadAttemptResult,type UploadRegistration,type UploadReceiptResult,type UploadCleanup} from '../upload-sync';
+import {decodeUploadReceipt,encodeUploadEnvelope,readUploadMaterialStamp,uploadDigest,uploadMaterialStamp,type UploadEnvelope} from '../upload-envelope';
+import {isUploadEventMinor,UPLOAD_MAX_BYTES,UPLOAD_MAX_EVENTS,type UploadSyncCommands,type UploadWork,type UploadWorkReason,type UploadAttemptResult,type UploadEventMinor,type UploadRegistration,type UploadReceiptResult,type UploadCleanup} from '../upload-sync';
 import type {StorageConnection} from './connection';
 import {all,connection,discoverRevision,get,required,resolveBinding,type Row} from './upload-discovery';
 import {beginUploadProjection,advanceUploadProjection,readUploadProjectionPage,recheckUploadMaterialContext,releaseUploadProjection} from './upload-projection';
@@ -19,14 +19,13 @@ function hold(db:ReturnType<StorageConnection['writer']>,work:Row,reason:UploadW
 }
 const retiredFold=(work:Row):boolean=>typeof work.fold_json==='string'&&isRetiredUploadFold(JSON.parse(work.fold_json) as object);
 /** Refresh the existing root when a pending upload needs a new pin without a recorder revision. */
-function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row,refreshFold=false):UploadWork {
+function staleMaterial(db:ReturnType<StorageConnection['writer']>,work:Row,refreshPin=false):UploadWork {
   const head=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',work.root_ref);
   const member=get(db,'SELECT logical_ref FROM logical_memberships WHERE trip_ref=?',work.root_ref);
   if(head&&head.material_version===work.material_version&&head.dirty===0n&&member?.logical_ref===work.root_ref){
-    // A retired fold only replaces this unfinished upload, without changing other roots' material keys.
-    if(refreshFold){
+    // Refresh only this unfinished upload, preserving its original delivery class and scan run.
+    if(refreshPin){
       db.prepare('UPDATE upload_change_heads SET dirty=1 WHERE root_ref=?').run(work.root_ref);
-      // This is the same pending upload, including its original delivery class and scan run.
       discoverRevision(db,work.root_ref as bigint,head.revision_ref,{mode:work.mode==='backfill'?'backfill':'live',runId:String(work.run_ref)});
     }else discoverRevision(db,work.root_ref as bigint,head.revision_ref);
   }
@@ -94,11 +93,15 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     const owner=get(db,'SELECT r.* FROM upload_reservations r JOIN upload_candidates c ON c.ordinal=r.candidate_ref WHERE c.trip_ref=?',work.root_ref);
     if(!owner||owner.registration_ref!==bound.registration_ref||owner.run_ref!==bound.run_ref||owner.mode!==bound.mode||owner.hold_reason!==null)return hold(db,work,'reconciliation-required');
     const last=get(db,'SELECT revision FROM upload_envelopes WHERE root_ref=? ORDER BY revision DESC LIMIT 1',work.root_ref);
-    if(last?.revision!==bound.http_revision && (last!==undefined||bound.http_revision!==0n) || bound.http_revision!==0n&&bound.material_digest===null)return hold(db,work,'reconciliation-required');
+    const prior=readUploadMaterialStamp(bound.material_digest);
+    if(last?.revision!==bound.http_revision && (last!==undefined||bound.http_revision!==0n) || bound.http_revision!==0n&&!prior)return hold(db,work,'reconciliation-required');
     const mapping=finishUploadFold(pin,JSON.parse(String(work.fold_json)) as UploadFold);
     if(mapping.status==='hold')return hold(db,work,'projection-invalid');
-    const digest=uploadMaterialDigest(mapping.summary);
-    if(digest===bound.material_digest){
+    const minor=input.contractMinor??0;
+    // A pre-1.3 pin omitted cargo even if the pinned trip already had saved opening evidence.
+    if(minor===3&&!Object.hasOwn(pin.facts,'cargoClassification'))return staleMaterial(db,work,true);
+    const digest=uploadMaterialStamp(mapping.summary,minor);
+    if(digest===(minor===3?bound.material_digest:prior?.base)){
       db.prepare("UPDATE upload_materializations SET state='equal',examined=0 WHERE work_id=?").run(input.workId);
       db.prepare('UPDATE upload_source_bindings SET compared_version=?,pending=0,held=0,hold_reason=NULL WHERE root_ref=?').run(work.material_version,work.root_ref);
       return workStatus({...work,state:'equal',examined:0});
@@ -106,14 +109,15 @@ export function freezeUploadMaterialization(conn:StorageConnection,input:Input<'
     const outcome=mapping.summary.snapshot.outcome;
     if(bound.terminal===1n&&outcome==='open')return hold(db,work,'reconciliation-required');
     if((bound.http_revision as bigint)>=BigInt(Number.MAX_SAFE_INTEGER))return hold(db,work,'revision-exhausted');
-    // The event minor fixes the frozen shape: v1.0 has neither field, v1.1 adds hardModeResult and v1.2 adds accounting.
-    const minor = input.contractMinor === 2 ? 2 : input.contractMinor === 1 ? 1 : 0;
     const summary = structuredClone(mapping.summary);
     if (minor === 0) {
       delete summary.snapshot.hardModeResult;
     }
     if (minor < 2) {
       delete summary.snapshot.accounting;
+    }
+    if (minor < 3) {
+      delete summary.snapshot.cargoClassification;
     }
     const envelope:UploadEnvelope={...summary,contract:{major:1,minor},producer:{application:'ets2telemetry',version:input.producerVersion},eventId:randomUUID(),revision:Number(bound.http_revision)+1,
       installationId:String(registration.installation_id),bindingId:String(registration.binding_id),delivery:{mode:work.mode as 'live'|'backfill',syncRunId:String(work.run_ref)},
@@ -204,9 +208,9 @@ export function recoverUploadAttempt(conn:StorageConnection,input:Input<'recover
  * receipt, so without them (undefined) the stored receipt identity decides a replay. Unreadable bytes (null) accept no
  * receipt version.
  */
-function frozenMinor(payload:unknown):0|1|2|null|undefined {
+function frozenMinor(payload:unknown):UploadEventMinor|null|undefined {
   if(!(payload instanceof Uint8Array))return undefined;
-  try{const minor=(JSON.parse(Buffer.from(payload).toString('utf8')) as {contract?:{minor?:unknown}}).contract?.minor;if(minor===0||minor===1||minor===2)return minor;}catch{/* Unreadable bytes: no version matches. */}
+  try{const minor=(JSON.parse(Buffer.from(payload).toString('utf8')) as {contract?:{minor?:unknown}}).contract?.minor;if(isUploadEventMinor(minor))return minor;}catch{/* Unreadable bytes: no version matches. */}
   return null;
 }
 export function commitUploadReceipt(conn:StorageConnection,input:Input<'commitUploadReceipt'>,options?:CommitOptions):UploadReceiptResult {

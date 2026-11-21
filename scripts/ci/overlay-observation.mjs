@@ -47,9 +47,9 @@ export function overlayTagObservation() {
   });
 }
 
-// ET-012c strip containment. The synthetic checkpoint fixture (tests/fixtures/protocol-v0/checkpoint.json) carries
-// current values for these sections, in canonical order; range stays hidden because its estimate is not observed.
-export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+// ET-012c strip containment. The synthetic v0 checkpoint shows these sections in canonical order. Cargo damage
+// shows a dash on its active job. Range stays hidden because its estimate is not observed.
+export const STRIP_SMOKE_SECTIONS = Object.freeze(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time']);
 // The hidden overlay window is created at the strip's reserved size for every section at the scale setting 1, 1280 x 82
 // DIP at zoom 0.7 (overlay-geometry.ts, ET-045e; ET-052's fifteenth section needs a third row, 56 DIP with two), so its
 // CSS viewport is 82 / 0.7 = 117.14 high, within one CSS px of rounding, and up to 1280 / 0.7 = 1828.57 wide. Without a game window main never places it, and Windows limits a window
@@ -114,12 +114,12 @@ export async function waitForStripLayout(page, expected) {
   try {return await handle.jsonValue();} finally {await handle.dispose();}
 }
 
-// The smoke reserves just the sixteen sections shown by the paired source plus the fixed Hard Mode row.
+// The smoke reserves the seventeen sections shown by the paired source plus the fixed Hard Mode row.
 // The window sizes are overlayWindowSize(layout, 1). Their CSS reserves are layoutReservedCss(layout, shown).
 export const LAYOUT_SMOKE_WINDOWS = Object.freeze({
-  card: Object.freeze({width: 210, height: 320}),
-  cluster: Object.freeze({width: 308, height: 219}),
-  hud: Object.freeze({width: 224, height: 300})
+  card: Object.freeze({width: 210, height: 337}),
+  cluster: Object.freeze({width: 308, height: 233}),
+  hud: Object.freeze({width: 224, height: 317})
 });
 export const LAYOUT_SMOKE_ZOOM = 0.7;
 /**
@@ -143,25 +143,25 @@ export function verifyAppliedWindow(requested, actual) {
     `The overlay window was not applied at the requested size: ${JSON.stringify(requested)} became ${JSON.stringify(actual)}`);
   return actual;
 }
-export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 456, cluster: 311, hud: 428});
+export const LAYOUT_SMOKE_RESERVED_CSS = Object.freeze({card: 480, cluster: 332, hud: 452});
 // ET-045e review frames for the UI overlay shard, at the zoom of a scale setting (overlayZoom in overlay-placement.ts).
 // SCALE_REFERENCE_FRAMES are the product windows with every section at the new 100% (overlayWindowSize(layout, 1)) and
 // the ET-045d strip at its 70% (896 × 82 at zoom 0.7) and 100% (1280 × 116 at zoom 1) for the owner's comparison.
 // The 50% frames use the product window sizes with every section enabled, with the strip raised to the measured 38 DIP minimum.
 export const SCALE_REFERENCE_FRAMES = Object.freeze([
   Object.freeze({name: 'scale-strip', layout: 'strip', zoom: 0.7, width: 1280, height: 82}),
-  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 354}),
-  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 248}),
-  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 334}),
+  Object.freeze({name: 'scale-card', layout: 'card', zoom: 0.7, width: 210, height: 371}),
+  Object.freeze({name: 'scale-cluster', layout: 'cluster', zoom: 0.7, width: 308, height: 263}),
+  Object.freeze({name: 'scale-hud', layout: 'hud', zoom: 0.7, width: 224, height: 350}),
   Object.freeze({name: 'scale-strip-old70', layout: 'strip', zoom: 0.7, width: 896, height: 82}),
   Object.freeze({name: 'scale-strip-old100', layout: 'strip', zoom: 1, width: 1280, height: 116})
 ]);
 export const SCALE_RANGE_ZOOM = 0.35;
 export const SCALE_RANGE_FRAMES = Object.freeze({
   strip: Object.freeze({width: 1280, height: 38}),
-  card: Object.freeze({width: 105, height: 178}),
-  cluster: Object.freeze({width: 154, height: 125}),
-  hud: Object.freeze({width: 112, height: 167})
+  card: Object.freeze({width: 105, height: 187}),
+  cluster: Object.freeze({width: 154, height: 133}),
+  hud: Object.freeze({width: 112, height: 175})
 });
 
 // Self-contained browser callback: false until exactly one current root of the expected layout shows exactly the
@@ -455,6 +455,7 @@ export async function runOverlaySmoke(application, dashboard, overlay, source, r
   // ET-012c (REG-016): every enabled strip section with data lies inside the overlay window. The observation is stored
   // before it is verified, so a failed receipt keeps it. Recorded for review; RuntimeReceipt.ps1 does not validate it.
   verifyStripLayout(result.stripLayout = await waitForStripLayout(overlay, {sections: STRIP_SMOKE_SECTIONS}));
+  assert.equal(await overlay.getByTestId('overlay-cargo-damage').textContent(), '—');
   source.setReading(20, 71); await observe('changed', {speed: '72', fuel: '71'}); await dashboardReading('72', '71.0');
   result.changedReading = {speedKmh: 72, fuelL: 71};
   source.setUnavailable(); await observe('missing', {speed: '—', fuel: '—'});

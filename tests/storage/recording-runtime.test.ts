@@ -1,7 +1,7 @@
 import {GameSourceCoordinator} from '../../apps/desktop/src/game-source-coordinator';
 import {resolveSourceMode} from '../../apps/desktop/src/source-mode';
 import type {GameDiscovery, GameTarget} from '../../apps/desktop/src/native-game-discovery';
-import {decodePayload, encodeFrame, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
+import {V1_MAX_MINOR, decodePayload, encodeFrame, type ClientMessage, type ServerMessage} from '../../packages/contracts/src/protocol-v1';
 import {Script, ETS2_A, ETS2_B, ATS_A, r} from '../shared/trip-messages';
 // ET-015c PR-1 (G13, G14, G20): the telemetry service's recording runtime (apps/desktop/src/recording-runtime.ts), the
 // production wiring of the recording plan, HistoryStorage, TripRecorderSink and V1Ingestion, driven in process under the
@@ -526,7 +526,7 @@ describe('ET-015c recording runtime with the real storage worker and the real sh
 class CoordinatedSocket extends EventEmitter {
   authority: GameTarget['source']; target: GameTarget; readonly sent: ClientMessage[] = []; destroyed = false;
   constructor(target: GameTarget) {super(); this.target = target; this.authority = target.source;}
-  write(bytes: Uint8Array) {this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: 5}) as ClientMessage);}
+  write(bytes: Uint8Array) {this.sent.push(decodePayload(bytes.subarray(4), 'client', {maxMinor: V1_MAX_MINOR}) as ClientMessage);}
   destroy() {this.destroyed = true;}
   feed(message: ServerMessage) {this.emit('data', encodeFrame({...message, source: this.authority}));}
   get acks() {return this.sent.flatMap(message => message.kind === 'ack' ? [message.data.throughEventSeq] : []);}

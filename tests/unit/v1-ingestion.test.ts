@@ -102,7 +102,7 @@ describe('ET-006b protocol v1 ingestion', () => {
     start(); connectLatest();
     // ET-050b B1, ET-052, ET-071, ET-084: the hello is version 1.0 and offers minor 4 (it offered 0 before ET-050b PR-5, 1 before
     // ET-052 PR-4, 2 before ET-071 and 3 before ET-084).
-    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 5, durableEvents: false}}]);
+    expect(latest().sent).toEqual([{version: {major: 1, minor: 0}, kind: 'hello', data: {clientInstanceId: ingestion!.clientInstanceId, minMinor: 0, maxMinor: 6, durableEvents: false}}]);
     void ingestion!.stop();
     start({sink: new Sink()}); connectLatest();
     expect(latest().hello.durableEvents).toBe(true);
@@ -504,12 +504,12 @@ const M3 = resolve(V1, 'minor3');
 const frame3 = (name: string) => prefix(fileBytes(resolve(M3, `${name}.json`)));
 // ET-084: the minor-4 corpus (tests/fixtures/protocol-v1/minor4), hand-authored from the minor-3 bytes.
 const M4 = resolve(V1, 'minor4');
-const aboveCurrentOffer = () => prefix(Buffer.from(readFileSync(resolve(M4, 'welcome-minor-5.json'), 'utf8').replaceAll('"minor":5', '"minor":6')));
+const aboveCurrentOffer = () => prefix(Buffer.from(readFileSync(resolve(M4, 'welcome-minor-5.json'), 'utf8').replaceAll('"minor":5', '"minor":7')));
 const frame4 = (name: string) => prefix(fileBytes(resolve(M4, `${name}.json`)));
 describe('ET-050b protocol v1 minor negotiation', () => {
   it('derives the hello offer, the probe and ACK minors and the clock mapping from one negotiated minor', async () => {
-    // ET-052, ET-071, ET-084: the service offers minor 5, and a minor-1 plugin (ET-050b) still selects 1 for the whole connection.
-    expect(V1_CLIENT_MAX_MINOR).toBe(5);
+    // ET-052, ET-071, ET-084: the service offers minor 6, and a minor-1 plugin (ET-050b) still selects 1 for the whole connection.
+    expect(V1_CLIENT_MAX_MINOR).toBe(6);
     const sink = new Sink(); start({sink}); connectLatest();
     expect(latest().hello.maxMinor).toBe(V1_CLIENT_MAX_MINOR);
     latest().feed(frame1('welcome'), frame1('checkpoint'), frame1('event-job-configured'));
@@ -528,7 +528,7 @@ describe('ET-050b protocol v1 minor negotiation', () => {
 
   it('accepts a minor-0 welcome from an older plugin and then writes every probe and ACK at minor 0', async () => {
     const sink = new Sink(); start({sink}); connectLatest();
-    expect(latest().hello.maxMinor).toBe(5);
+    expect(latest().hello.maxMinor).toBe(6);
     latest().feed(frame1('welcome-minor-0'), frame1('checkpoint-minor-0'), frame1('event-job-configured-minor-0'));
     await settle();
     expect(state().status).toBe('connected');
@@ -574,7 +574,7 @@ describe('ET-050b protocol v1 minor negotiation', () => {
 describe('ET-052 protocol v1 minor 2', () => {
   it('writes every probe and ACK, and reads the clock reply, at the minor-2 welcome\'s minor', async () => {
     const sink = new Sink(); start({sink}); connectLatest();
-    expect(latest().hello.maxMinor).toBe(5);
+    expect(latest().hello.maxMinor).toBe(6);
     latest().feed(frame2('welcome'), frame2('checkpoint'), frame2('event-job-configured'));
     await settle();
     expect(state().status).toBe('connected');
@@ -657,7 +657,7 @@ describe('ET-052 protocol v1 minor 2', () => {
 describe('ET-071 protocol v1 minor 3', () => {
   it('writes every probe and ACK, and reads the clock reply, at the minor-3 welcome\'s minor', async () => {
     const sink = new Sink(); start({sink}); connectLatest();
-    expect(latest().hello.maxMinor).toBe(5);
+    expect(latest().hello.maxMinor).toBe(6);
     latest().feed(frame3('welcome'), frame3('checkpoint'), frame3('event-job-configured'));
     await settle();
     expect(state().status).toBe('connected');
@@ -731,12 +731,12 @@ describe('ET-071 protocol v1 minor 3', () => {
   });
 });
 
-// ET-084: the service offers minor 5 and keeps the one minor its welcome selected. The minor-4 fixtures carry the navigation
+// ET-084: the service offers minor 6 and keeps the one minor its welcome selected. The minor-4 fixtures carry the navigation
 // speed limit in m/s, where zero and a negative reading are values meaning no limit; the expected readings are by hand.
 describe('ET-084 protocol v1 minor 4', () => {
   it('writes every probe and ACK at the minor-4 welcome\'s minor and replaces the limit with every new state', async () => {
     const sink = new Sink(); start({sink}); connectLatest();
-    expect(latest().hello.maxMinor).toBe(5);
+    expect(latest().hello.maxMinor).toBe(6);
     latest().feed(frame4('welcome'), frame4('checkpoint'), frame4('event-job-configured'));
     await settle();
     expect(state().status).toBe('connected');

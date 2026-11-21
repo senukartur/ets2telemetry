@@ -98,6 +98,7 @@ export function normalizeV1State(state: Omit<CurrentState, 'window'>, status?: P
     // Below minor 4 the state carries no speed limit: the protocol does not transport it, which is not-supported (ET-084).
     speedLimit: state.speedLimit ? fromAvailable(state.speedLimit) : missing('not-supported'),
     restState: state.restState ? fromAvailable(state.restState) : missing('not-supported'),
+    cargoDamage: state.cargoDamage ? fromAvailable(state.cargoDamage) : missing('not-supported'),
     configurationRevision: configuration.revision
   };
 }

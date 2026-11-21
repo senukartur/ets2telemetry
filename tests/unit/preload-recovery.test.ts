@@ -312,7 +312,7 @@ it('validates gear display requests before IPC and forwards exactly a game and a
 });
 // ET-012a: two appended overlay settings methods; each validates before IPC and forwards only the validated value.
 const ALL_ON = {'speed': true, 'gear': true, 'rpm': true, 'cruise-control': true, 'speed-limit': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
-  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true, 'rest-state': true};
+  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true, 'rest-state': true, 'cargo-damage': true};
 const without = (record: Record<string, boolean>, key: string) => Object.fromEntries(Object.entries(record).filter(([name]) => name !== key));
 it('validates overlay layout requests before IPC and forwards exactly one layout id', async () => {
   for (const layout of ['Strip', 'bar', '', undefined, null, 1, ['card'], {layout: 'card'}]) {
@@ -324,7 +324,7 @@ it('validates overlay layout requests before IPC and forwards exactly one layout
   expect(ipc.invoke.mock.calls).toEqual([['settings:set-overlay-layout', 'cluster']]);
 });
 it('validates overlay section records strictly before IPC and forwards a fresh copy only', async () => {
-  const invalid = [{...ALL_ON, extra: true}, without(ALL_ON, 'rpm'), {...ALL_ON, rpm: 'false'},
+  const invalid = [{...ALL_ON, extra: true}, without(ALL_ON, 'rpm'), without(ALL_ON, 'cargo-damage'), {...ALL_ON, rpm: 'false'},
     Object.fromEntries(Object.keys(ALL_ON).map(id => [id, false])), [true], null, 'all', Object.assign(Object.create({x: 1}) as object, ALL_ON)];
   for (const sections of invalid) await expect(bridge.setOverlaySections(sections as never)).rejects.toThrow('Invalid overlay sections request');
   expect(ipc.invoke).not.toHaveBeenCalled();

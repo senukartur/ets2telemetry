@@ -89,8 +89,12 @@ export function discoverRevision(db:Database.Database,root:bigint,revision:unkno
   const truck = row.truck_configuration_ref as {$integer: string} | null;
   const model = truck ? get(db,'SELECT model_id FROM truck_configurations WHERE id=?',BigInt(truck.$integer))?.model_id : undefined;
   const electric = truckPowertrain(row.game as 'ets2' | 'ats', typeof model === 'string' ? model : undefined) === 'electric';
+  // Unknown cargo keeps the legacy key. A known fill must reach comparison, where negotiation determines materiality.
+  const cargo = typeof row.cargo_classification === 'string' ? ['cargo-classification',row.cargo_classification] : [];
   const materialKey=[...fields.map(field=>row[field]),...quality,evidence,r.retired,r.proof_json===null?0:1,head?.distance_m===null?'distance-unknown':'distance-supported',
-    head?.fuel_used_l===null?'fuel-unknown':'fuel-supported',...(outcome==='open'?[]:[r.progress_head,row.observed_distance_m,row.fuel_used_l,endpoint?.distanceM.available?endpoint.distanceM.value:null,endpoint?.fuelUsedL.available?endpoint.fuelUsedL.value:null]),...(electric?['electric-truck']:[])].map(atom).join('|');
+    head?.fuel_used_l===null?'fuel-unknown':'fuel-supported',
+    ...(outcome==='open'?[]:[r.progress_head,row.observed_distance_m,row.fuel_used_l,endpoint?.distanceM.available?endpoint.distanceM.value:null,endpoint?.fuelUsedL.available?endpoint.fuelUsedL.value:null]),
+    ...(electric?['electric-truck']:[]),...cargo].map(atom).join('|');
   const prior=get(db,'SELECT * FROM upload_change_heads WHERE root_ref=?',root),material=!prior||prior.material_key!==materialKey||prior.dirty===1n;
   const position=connection(db).next_change;
   db.prepare('UPDATE upload_connection SET next_change=next_change+1 WHERE id=1').run();

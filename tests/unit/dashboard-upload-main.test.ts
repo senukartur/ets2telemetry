@@ -295,9 +295,9 @@ function advertisingService(bodyMinor: 0 | 1, eventVersions?: string) {
   const activate = vi.spyOn(service.scheduler, 'activate').mockResolvedValue();
   return {service, configuration, limits, activate};
 }
-// ET-113: the Dashboard keeps the v1.0 control body and lists its event versions only in VTC-Telemetry-Event-Versions.
+// The Dashboard keeps the v1.0 control body and lists its event versions only in VTC-Telemetry-Event-Versions.
 it.each([
-  [0, '1.0, 1.1, 1.2', 2], [0, '1.0, 1.1', 1], [0, undefined, 0], [1, undefined, 0], [1, '1.0', 0]
+  [0, '1.0, 1.1, 1.2, 1.3', 3], [0, '1.0, 1.1, 1.2', 2], [0, '1.0, 1.1', 1], [0, undefined, 0], [1, undefined, 0], [1, '1.0', 0]
 ] as const)('REG-010 activates with the event minor of the connection header, not the body: body minor %s, header %j', async (bodyMinor, header, minor) => {
   const f = advertisingService(bodyMinor, header);
   try {

@@ -17,10 +17,10 @@ import {classifyStep} from '../../../packages/telemetry-core/src/trips/accountin
 import type {HardModeDiagnostic, HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
 import {hardModeDiagnostic, unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
-import type {JobConfiguration, Uint64} from '../../../packages/contracts/src/protocol-v1';
+import type {JobConfiguration, SourceIdentity, Uint64} from '../../../packages/contracts/src/protocol-v1';
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
 import {MAX_EVENT_PAGE} from '../../../packages/storage/src/api';
-import type {AttachInput, CapturedEndpoint, CapturedRunning, CommitResult, CompletenessKind, SampleAppendResult, SampleInput, TripEffect} from '../../../packages/storage/src/api';
+import type {AttachInput, CapturedEndpoint, CapturedRunning, CommitResult, CompletenessKind, FillCargoClassification, SampleAppendResult, SampleInput, TripEffect} from '../../../packages/storage/src/api';
 import type {StorageClient} from '../../../packages/storage/src/client';
 import {
   dueAttach, endsStaleCheckpointJob, initialSamplerState, initialTripState, normalizeV1State, sampleReading, stepTrip, tripView, type SamplerState, type TripErrorCode, type TripGame, type TripInput,
@@ -30,13 +30,14 @@ import type {AttachSink, AttachStatus, CommitContext, CoverageMessage, HardModeC
 import {saturatingAdd} from './recording-status';
 import {SampleBuffer} from './sample-buffer';
 import {readTripSeeds} from './trip-seeds';
+import type {CargoLookup} from './cargo-catalog/source-client';
 
 /** The recorder's sink codes and their E7 class live in durable-sink.ts, so the ingestion chain never loads the reducer. */
 export {RECORDER_FAILURE_CLASS, type RecorderErrorCode} from './durable-sink';
 
 /** The storage commands the recorder uses: the durable path, the restore-loss marker, the cold-start reads and the samples. */
 export type TripRecorderClient = Pick<StorageClient, 'upsertSession' | 'committedThrough' | 'commitEvent' | 'commitGap' | 'recordCompleteness' | 'listTrips' | 'getEvent' |
-  'listEvents' | 'appendSamples' | 'openAttachedTrip' | 'recordTrailerBaseline'> & Partial<Pick<StorageClient, 'observeHardMode' | 'getTrip' | 'journalTrip' | 'resolvePendingMemberships'>>;
+  'listEvents' | 'appendSamples' | 'openAttachedTrip' | 'recordTrailerBaseline'> & Partial<Pick<StorageClient, 'observeHardMode' | 'getTrip' | 'journalTrip' | 'resolvePendingMemberships' | 'fillCargoClassification'>>;
 
 const RECORDER_CODE: Readonly<Record<TripErrorCode, RecorderErrorCode>> = {
   ORDER_VIOLATION: 'TRIP_ORDER_VIOLATION', COVERAGE_MISMATCH: 'TRIP_COVERAGE_MISMATCH', UNKNOWN_SESSION: 'TRIP_UNKNOWN_SESSION'
@@ -51,7 +52,7 @@ const COUNTED: Partial<Record<CompletenessKind, 'eventLoss' | 'notConnected' | '
 };
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
 /** ET-015c: `onChange` is called after every change the recording status may show: trip state, losses or dropped samples. */
-export interface TripRecorderOptions {onChange?: () => void; profileEvidence?: () => ProfileObservation | undefined; profileStatus?: () => ProfileObserverStatus; hardModeEvidence?: () => HardModeObservation; onHardModeTrip?: (details: HardModeDetails | null) => void}
+export interface TripRecorderOptions {onChange?: () => void; profileEvidence?: () => ProfileObservation | undefined; profileStatus?: () => ProfileObserverStatus; hardModeEvidence?: () => HardModeObservation; onHardModeTrip?: (details: HardModeDetails | null) => void; cargoLookup?: (source: SourceIdentity, cargoId: string) => CargoLookup | undefined}
 const newerCheck = (previous: string | undefined, check: NonNullable<HardModeObservation['check']>) => {
   const [producer, sequence] = previous?.split(':') ?? [];
   return producer !== check.producer || Number(sequence) < check.sequence;
@@ -343,6 +344,20 @@ export class TripRecorderSink implements DurableSink {
   };
   constructor(private readonly client: TripRecorderClient, private readonly options: TripRecorderOptions = {}) {}
 
+  private cargoAttach?: {source: SourceIdentity; cargoId: string; boundary: Uint64};
+  private pendingCargo?: object;
+
+  private fillCargoLater(lookup: CargoLookup, anchor: Omit<FillCargoClassification, 'generation' | 'cargoId' | 'classification'>) {
+    if (lookup.opening.classification || !this.client.fillCargoClassification) return;
+    const pending = this.pendingCargo = {};
+    void lookup.result.then(async classification => {
+      if (!classification || this.pendingCargo !== pending || !lookup.current() || this.state.connection !== anchor.pluginSessionId
+        || this.view(anchor.game).current?.tripUuid !== anchor.tripUuid) return;
+      const {generation, cargoId} = lookup.opening;
+      await this.client.fillCargoClassification?.({...anchor, generation, cargoId, classification});
+    }).catch(() => undefined).finally(() => {if (this.pendingCargo === pending) this.pendingCargo = undefined;});
+  }
+
   async openSession(welcome: WelcomeMessage): Promise<SinkResult<{committedThroughEventSeq: Uint64}>> {
     await this.flushObservations();
     // The FIFO has adopted every preceding reading. Persist its bounded buffer before a new source can decide
@@ -410,6 +425,9 @@ export class TripRecorderSink implements DurableSink {
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
     // No await between this read and posting the transaction: any earlier observed loss is part of opening/closing.
     const opening = stepped.effects.find(e => e.kind === 'trip.open');
+    const cargo = opening && message.kind === 'event' && !message.data.redelivered && !context.historyReplay && !context.restoreCheckpoint
+      && opening.jobConfiguration === 'this-event' && message.data.record.type === 'job.configured' && message.data.record.cargoId.available
+      ? this.options.cargoLookup?.(message.source, message.data.record.cargoId.value) : undefined;
     const member = opening?.kind === 'trip.open' ? opening.tripUuid : capture?.checkBoundary === 'job' ? this.view(message.source.game).current?.tripUuid : undefined;
     const target = capture?.checkBoundary === 'job' && member ? this.handoffChecks(capture, member, opening?.kind === 'trip.open') : undefined;
     if (!target && stepped.effects.some(e => e.kind === 'trip.close' && e.tripUuid === this.checkTarget?.batch.tripUuid)) this.checkTarget = undefined;
@@ -418,12 +436,17 @@ export class TripRecorderSink implements DurableSink {
     // with the next ordinary event/gap, so no check or original diagnostic disappears before ACK.
     const hardModeLoss = retained ? {...retained.value, assessment: unknownHardMode(Date.now(), 'interrupted'), diagnostic: 'storage-failure' as const,
       ...(retained.diagnostics?.length ? {diagnostics: retained.diagnostics} : {})} : capture?.firstUnsafe;
-    const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode, hardModeFresh: capture?.fresh ?? false} : {}), ...(hardModeLoss ? {hardModeLoss} : {})};
+    const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode, hardModeFresh: capture?.fresh ?? false} : {}),
+      ...(hardModeLoss ? {hardModeLoss} : {}), ...(cargo?.current() ? {cargoOpening: cargo.opening} : {})};
     const result = message.kind === 'event' ? await this.client.commitEvent(input) : await this.client.commitGap(input);
     if (!result.ok || !ADOPT.has(result.value.status)) return result;
     // R7: the gap's effects describe only (coveredThrough, lastEventSeq]; another starting point means they were wrong.
     if (message.kind === 'gap' && result.value.previouslyCoveredThrough !== coveredThrough) return refused('TRIP_COVERAGE_MISMATCH');
     this.state = stepped.state;
+    if (opening && cargo && cargo.current() && message.kind === 'event' && result.value.status === 'committed') {
+      this.fillCargoLater(cargo, {game: message.source.game, pluginSessionId: message.source.pluginSessionId, tripUuid: opening.tripUuid,
+        opening: 'event', boundary: message.data.eventSeq});
+    }
     if (retained && this.pendingObservation === retained && result.value.status === 'committed') {this.pendingObservation = undefined; this.observationError = undefined;}
     if (target) {target.ready = true; this.startObservationWrite();}
     if(message.kind==='gap' || message.kind==='event' && message.data.record.type==='gameTime.regression'
@@ -504,6 +527,12 @@ export class TripRecorderSink implements DurableSink {
     this.state = read.state;
     this.lastReadingProfile=profile && profile.pluginSessionId===message.source.pluginSessionId && profile.processInstanceId===message.source.processInstanceId && profile.sourceClockId===message.capture.clockId && BigInt(message.capture.monotonicNs)>=BigInt(profile.afterMonotonicNs)?structuredClone(profile):undefined;
     const current=message.data.state.configuration.job,session=this.state.sessions[message.source.pluginSessionId];
+    const pendingCargo = session.pendingAttach;
+    if (context.historyReplay || context.restoreCheckpoint || !pendingCargo?.job.cargoId.available) this.cargoAttach = undefined;
+    else if (current.available && current.value.cargoId.available && current.value.cargoId.value === pendingCargo.job.cargoId.value
+      && pendingCargo.clockId === message.capture.clockId && pendingCargo.monotonicNs === message.capture.monotonicNs) {
+      this.cargoAttach = {source: message.source, cargoId: current.value.cargoId.value, boundary: pendingCargo.nextEventSeq};
+    }
     const replayDrained=session.attachedFromEventSeq!==null && BigInt(session.processedThrough)>=BigInt(session.attachedFromEventSeq)-1n;
     const view=tripView(this.state,message.source.game);
     this.pendingProfile=undefined;
@@ -630,11 +659,22 @@ export class TripRecorderSink implements DurableSink {
     if (!stepped.ok) return refused(RECORDER_CODE[stepped.code]);
     const session = this.state.sessions[request.pluginSessionId];
     const profile = this.lastReadingProfile;
-    const result = await this.client.openAttachedTrip({...request, effects: stepped.effects, ...(profile && this.lastEndpoint ? {endpoint:this.lastEndpoint}:{}), ...(profile ? {profile, sourceClockId: session.lastReading?.capture.clockId ?? session.clockId ?? undefined, monotonicNs: session.lastReading?.capture.monotonicNs ?? session.lastMonotonicNs ?? undefined} : {})});
+    const source = this.cargoAttach;
+    const cargo = source && !context.historyReplay && !context.restoreCheckpoint && source.source.pluginSessionId === request.pluginSessionId
+      && source.boundary === request.nextEventSeq && request.job.cargoId.available && request.job.cargoId.value === source.cargoId
+      ? this.options.cargoLookup?.(source.source, source.cargoId) : undefined;
+    const result = await this.client.openAttachedTrip({...request, effects: stepped.effects, ...(profile && this.lastEndpoint ? {endpoint:this.lastEndpoint}:{}),
+      ...(profile ? {profile, sourceClockId: session.lastReading?.capture.clockId ?? session.clockId ?? undefined, monotonicNs: session.lastReading?.capture.monotonicNs ?? session.lastMonotonicNs ?? undefined} : {}),
+      ...(cargo?.current() ? {cargoOpening: cargo.opening} : {})});
     if (!result.ok) return result;
     this.state = stepped.state;
     const attachedTrip = this.view(session.game).current;
     if (attachedTrip) {this.seedCheckTarget(session.game, request.pluginSessionId, attachedTrip.tripUuid); this.checkTarget!.ready = true;}
+    this.cargoAttach = undefined;
+    if (attachedTrip && cargo && cargo.current() && result.value.status === 'committed') {
+      this.fillCargoLater(cargo, {game: session.game, pluginSessionId: request.pluginSessionId, tripUuid: attachedTrip.tripUuid,
+        opening: 'checkpoint', boundary: request.nextEventSeq});
+    }
     this.pendingProfile=undefined;
     // G6: only a new row stored the intervals.
     if (result.value.status === 'committed') this.countIntervals(stepped.effects);

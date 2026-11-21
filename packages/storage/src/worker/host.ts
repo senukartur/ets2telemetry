@@ -92,7 +92,7 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
     // Only the message and its effects are forwarded; in-process commit options never come from a message, only from
     // a test entry's in-process testOptions.
     case 'recordTrailerBaseline': return storage.recordTrailerBaseline(command.input);
-    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss, profile: command.input.profile}, testOptions.commitOptions?.(command));
+    case 'commitEvent': return storage.commitEvent({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss, profile: command.input.profile, cargoOpening: command.input.cargoOpening}, testOptions.commitOptions?.(command));
     case 'commitGap': return storage.commitGap({message: command.input.message, effects: command.input.effects, hardMode: command.input.hardMode, hardModeFresh: command.input.hardModeFresh, hardModeLoss: command.input.hardModeLoss, profile: command.input.profile}, testOptions.commitOptions?.(command));
     // Only `uniqueSeconds` of the options is forwarded; the commit options come from the in-process testOptions only.
     case 'appendSamples':
@@ -102,9 +102,10 @@ export function serveStorage(port: HostPort, testOptions: HostTestOptions = {}):
       return storage.recordCompleteness(command.pluginSessionId, command.interval, command.options === undefined ? undefined : {ifAbsent: command.options.ifAbsent});
     // ET-016 PR-7: only the parsed input fields are forwarded.
     case 'openAttachedTrip': {
-      const {pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid,endpoint} = command.input;
-      return storage.openAttachedTrip({pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid,endpoint});
+      const {pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid,endpoint,cargoOpening} = command.input;
+      return storage.openAttachedTrip({pluginSessionId, nextEventSeq, job, effects,profile,sourceClockId,monotonicNs,profileChange,observeTripUuid,endpoint,cargoOpening});
     }
+    case 'fillCargoClassification': return storage.fillCargoClassification(command.input);
     // ET-112b2b: only the five parsed input fields are forwarded.
     case 'resolvePendingMemberships': {
       const {pluginSessionId, nextEventSeq, profile, sourceClockId, monotonicNs} = command.input;

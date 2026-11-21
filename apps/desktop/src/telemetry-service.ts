@@ -15,7 +15,9 @@ import {resolveSourceMode} from './source-mode';
 import {hardModeFixtureReader} from './hard-mode/fixture';
 import {HardModeReader, coalesceProfileDiagnostics} from './hard-mode/reader';
 import {HardModeMonitor} from './hard-mode/monitor';
-import {inspectGameProcess, processLifetime} from './hard-mode/process';
+import {inspectGameProcess, processLifetime, SharedGameProcessProbe} from './hard-mode/process';
+import {CargoSourceClient} from './cargo-catalog/source-client';
+import type {SourceIdentity} from '../../../packages/contracts/src/protocol-v1';
 import type {GameTarget} from './native-game-discovery';
 import {readSteamRoot} from './plugin-setup/steam-registry';
 import { Worker } from 'node:worker_threads';
@@ -127,13 +129,20 @@ let steamRoot: string | undefined;
 const hardModeLifetime = new AbortController();
 let steamDiscoveryStarted = false;
 let profileTarget: GameTarget | undefined;
+const provedProcess = (source: SourceIdentity) => profileTarget ? processLifetime(profileTarget, source) : undefined;
+const processProbe = new SharedGameProcessProbe(provedProcess, (source, signal) => inspectGameProcess(source,signal,profileDiagnostic,
+  activeBroker && profileTarget ? {executable: activeBroker.executable, target: profileTarget} : undefined));
+const cargoSource = new CargoSourceClient(value => port.postMessage(value), source => {
+  const key = provedProcess(source);
+  return key ? `${key}/${source.pluginSessionId}` : undefined;
+}, (source, signal) => processProbe.read(source, signal));
 let monitoredReader: HardModeReader | undefined;
 const hardMode = new HardModeMonitor((source, ns, at, signal, force) => {
   const documents = process.env.ETS2TELEMETRY_DOCUMENTS;
   if (!hardModeReader && !documents) {profileDiagnostic({code:'PROFILE_LOCATION_UNPROVEN'}); return Promise.reject(new Error('Documents unavailable'));}
   const reader = hardModeReader ??= new HardModeReader({diagnostic: profileDiagnostic, documents: documents!, get steamRoot() {return steamRoot;},
-    processLifetime: source => profileTarget ? processLifetime(profileTarget, source) : undefined,
-    process: (source,signal) => inspectGameProcess(source,signal,profileDiagnostic, activeBroker && profileTarget ? {executable: activeBroker.executable, target: profileTarget} : undefined)});
+    processLifetime: provedProcess,
+    process: (source, signal) => processProbe.read(source, signal)});
   if (monitoredReader !== reader) {monitoredReader = reader; reader.onInvalidate((_profileChanged, diagnostic) => hardMode.invalidate(diagnostic));}
   // The monitor owns the only scan cadence; independent consumers share this fresh physical operation.
   return profileObserver.readSettings(reader, source, ns, at, signal, force);
@@ -150,6 +159,7 @@ function onV1State(state: V1SourceState): void {
   recordV1State(state);
   if (state.selection !== effectiveSelection) return;
   const current = state.fresh && state.observation && (state.status === 'connected' || state.status === 'paused') ? state.observation : undefined;
+  if (state.status === 'disconnected' || state.status === 'unavailable') cargoSource.retire();
   qualification?.observe(current?.source.origin==='game'?current:null);
   if (current?.source.origin === 'game' && !steamDiscoveryStarted) {steamDiscoveryStarted = true; void readSteamRoot({signal: hardModeLifetime.signal}).then(root => {if (root.kind === 'found') steamRoot = root.path;}, () => undefined);}
   profileObserver.select(current ? {gameClockId:current.state.gameTime.clockId,source: current.source, monotonicNs: current.capture.monotonicNs, clockId: current.capture.clockId, boundary: state.clockBoundary} : null);
@@ -175,6 +185,7 @@ const runtime = createRecordingRuntime({env: process.env, gameHistory: GAME_HIST
   emergencyJournal: 'game',
   createWorker: () => historyWorker(__dirname), connectGame: (configuration, game, target) => new NativePipeClient(configuration, game, diagnoseV1Broker, 'v1', target),
   profileEvidence: () => profileObserver.evidence(), profileStatus: () => profileObserver.status(), hardModeEvidence: () => hardMode.evidence(), onHardModeTrip: details => {port.postMessage({type: 'hard-mode', update: 'trip', trip: details});},
+  cargoLookup: (source, cargoId) => cargoSource.lookup(source, cargoId),
   onV1State, onV1Healthy: target => coordinator.healthy(target), onRecordingStatus: status => port.postMessage({type: 'recording', status})});
 let dashboardUpload:DashboardUploadService|undefined,uploadGeneration:string|undefined,uploadCommandPending=false;
 let qualification:QualificationService|undefined;
@@ -210,6 +221,7 @@ function selectV1(selection: SourceSelection, broker: BrokerConfiguration | unde
 const coordinator = new GameSourceCoordinator({
   discover: discoverGames,
   retire: async () => {
+    cargoSource.retire(); processProbe.retire();
     profileTarget = undefined;
     effectiveSelection = 'game'; v0Live = initialLive(requestedSelection); v1Live = undefined; lastV1 = undefined; publishLive();
     hardMode.select(null); hardModeGame = undefined;
@@ -301,7 +313,7 @@ function exitAfterLog(code: number): Promise<void> {
 function exitAfterHistory(code: number): void {
   if (exiting) return;
   stopHeartbeat();
-  exiting = true; void dashboardUpload?.stop(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
+  exiting = true; cargoSource.retire(); processProbe.retire(); void dashboardUpload?.stop(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const bound = new Promise<void>(resolve => {timer = setTimeout(resolve, HISTORY_CLOSE_BUDGET_MS);});
   void Promise.race([runtime.history.close().catch(() => undefined), bound]).then(() => {clearTimeout(timer); return exitAfterLog(code);});
@@ -320,7 +332,7 @@ runtime.register(shutdown);
 function stop(): void {
   if (stopping) return;
   stopHeartbeat();
-  stopping = true; void dashboardUpload?.stop(); stopReceivedAt = performance.now(); subscriptions.close(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
+  stopping = true; cargoSource.retire(); processProbe.retire(); void dashboardUpload?.stop(); stopReceivedAt = performance.now(); subscriptions.close(); hardModeLifetime.abort(); hardMode.close(); profileObserver.close(); runtime.stopStatus();
   void shutdown.run().then(({clean}) => {
     const message = {type: 'stopped', clean};
     log('SERVICE_REPORT', message); port.postMessage(message);
@@ -331,6 +343,7 @@ port.on('message', event => {
   const incoming: unknown = event.data;
   const command = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming as Record<string, unknown> : undefined;
   if (command?.type === 'stop') stop();
+  else if (command?.type === 'cargo:result') {for (const transferred of event.ports) transferred.close(); cargoSource.receive(incoming);}
   else if(command?.type==='dashboard-upload:cancel'){if(!stopping&&!exiting&&isUploadServiceCancel(incoming)&&command.generation===uploadGeneration)dashboardUpload?.cancel();}
   else if(command?.type==='dashboard-upload:request'){if(!stopping&&!exiting)void uploadCommand(incoming);}
   else if(command?.type==='qualification:request'&&!stopping&&!exiting&&isQualificationServiceRequest(incoming)&&incoming.generation===uploadGeneration){

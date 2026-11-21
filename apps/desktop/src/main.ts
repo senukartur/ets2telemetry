@@ -21,6 +21,8 @@ import {isOpacity, isStyle, isSelection} from './now-playing/contract';
 import type {MediaTrack, NowPlayingDisplay, NowPlayingView} from '../../../packages/contracts/src/now-playing';
 import {initialSource, resolveSourceMode} from './source-mode';
 import {HardModeServiceCache} from './hard-mode/service-status';
+import {CargoArchiveCache} from './cargo-catalog/archive-cache';
+import {CargoMainBridge} from './cargo-catalog/main-bridge';
 import {overlayHardMode, sameOverlayHardMode} from './overlay-hard-mode';
 import {app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeImage, nativeTheme, net, safeStorage, screen, shell, Tray, utilityProcess, type MessagePortMain, type UtilityProcess, type IpcMainEvent, type IpcMainInvokeEvent} from 'electron';
 import {spawn} from 'node:child_process';
@@ -250,6 +252,8 @@ function runApplication(profileError: unknown): void {
       : {ok: true, running: {ets2: false, ats: false, client: false}}) : undefined,
     ports: pluginDecision.mode === 'disabled' ? undefined : productionPluginSetupPorts({mainDirectory: __dirname, resourcesPath: process.resourcesPath,
       packaged: app.isPackaged, localAppData: process.env.LOCALAPPDATA, installDirectory: path.dirname(app.getPath('exe')), log})});
+  const cargoCache = new CargoArchiveCache();
+  let cargoBridge: CargoMainBridge | undefined;
   // ET-018 PR-4 (U8): the in-app uninstall. Main owns both dialogs; the dashboard gets fixed codes and target ids only.
   // The smoke-only dialog seam (`ets2telemetry:diagnostic-uninstall-dialogs` below) answers both dialogs in isolated smokes.
   let uninstallDialogs: {confirm: boolean} | undefined;
@@ -274,7 +278,8 @@ function runApplication(profileError: unknown): void {
       const read = await readPluginBundle(pluginBundleDirectory(__dirname, process.resourcesPath, app.isPackaged));
       return read.ok ? [read.bundle.sha256, ...read.bundle.known.map(entry => entry.sha256)] : [];
     },
-    setup: {suspend: () => pluginSetup.suspend(), resume: () => pluginSetup.resume(), targetIdFor: (game, root) => pluginSetup.targetIdFor(game, root)},
+    setup: {suspend: () => {cargoBridge?.retire(); return pluginSetup.suspend();},
+      resume: () => pluginSetup.resume(), targetIdFor: (game, root) => pluginSetup.targetIdFor(game, root)},
     clock: () => performance.now(),
     log: (event, facts) => log(event, undefined, facts),
     // Windows' uninstall removes the program files and the registration; its hook finds the data already gone.
@@ -596,6 +601,7 @@ function runApplication(profileError: unknown): void {
   function commitSelection(next: SourceSelection, origin: 'startup' | 'user' | 'restore'): void {
     const previous = selection;
     selection = next;
+    cargoBridge?.retire();
     if (selectionDispatched && previous !== next) log('SOURCE_SELECTION_RETIRED', undefined, {source: previous, origin});
     selectionDispatched = true;
     log('SOURCE_SELECTED', undefined, {source: next, origin});
@@ -617,7 +623,7 @@ function runApplication(profileError: unknown): void {
     log,
     // A running trip export stops first, so a journal read that the retirement answers ends it as interrupted (J16).
     // ET-017: plugin setup stops after its current game folder; no new run, poll or trigger starts.
-    begin: () => {qualification.detach();upload.stop(); latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
+    begin: () => {cargoBridge?.retire(); qualification.detach();upload.stop(); latency?.finish('exit'); exporter.abort(); diagnosticsExporter.abort(); pluginSetup.abort(); updates.retire(); heartbeatMonitor.stop(); updateHealth({type: 'exit-requested'}, true); retireLive();},
     stopService: () => supervisor.stop(),
     // An in-flight settings save, the removal of an interrupted trip or diagnostics export's partial file and the plugin setup run in flight
     // (which ends with the removal of its temporary file) may delay the final exit by at most EXIT_IDLE_BUDGET_MS
@@ -988,6 +994,7 @@ function runApplication(profileError: unknown): void {
   }
   function startService(): void {
     if (supervisor.stopping) return;
+    cargoBridge?.retire();
     retireHardMode();
     const entrypoint = processEntrypoint(__dirname, 'telemetry-service');
     if (!existsSync(entrypoint)) throw new Error('Missing physical telemetry service entrypoint');
@@ -997,7 +1004,9 @@ function runApplication(profileError: unknown): void {
     child.stdout?.on('data', chunk => log('SERVICE_STDOUT', String(chunk)));
     child.stderr?.on('data', chunk => log('SERVICE_STDERR', String(chunk)));
     child.once('spawn', () => log('SERVICE_SPAWN', {pid: child.pid}));
-    child.once('exit', code => {heartbeatMonitor.stop(); if (service === child) {service = undefined; supervisor.serviceExited(code);}});
+    const childCargo = cargoBridge = new CargoMainBridge(cargoCache, (game, executable, signal) => pluginSetup.cargoInstallation(game, executable, signal),
+      value => child.postMessage(value), game => service === child && !supervisor.stopping && !selectionPending && (selection === 'game' || selection === game));
+    child.once('exit', code => {childCargo.retire(); heartbeatMonitor.stop(); if (service === child) {service = undefined; supervisor.serviceExited(code);}});
     const childUpload=new UploadServiceBridge(value=>child.postMessage(value),value=>upload.acceptStatus(value));
     const childQualification=new QualificationServiceBridge(childUpload.generation,value=>child.postMessage(value),(value,connectionVersion)=>qualification.accept(value,connectionVersion));
     qualification.attach(childQualification);
@@ -1009,6 +1018,7 @@ function runApplication(profileError: unknown): void {
       if(childQualification.receive(message))return;
       const type = message && typeof message === 'object' && !Array.isArray(message) ? (message as Record<string, unknown>).type : undefined;
       if (type === 'heartbeat') return;
+      if (type === 'cargo:lookup') {childCargo.receive(message); return;}
       if (type === 'hard-mode') {
         hardMode.accept(message); publishOverlayHardMode();
         return;

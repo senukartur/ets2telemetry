@@ -94,7 +94,7 @@ class FakeSettingsError extends Error {constructor(readonly code: 'SETTINGS_WRIT
 class FakeSettingsBusyError extends Error {}
 // ET-012a: the view carries the overlay layout and sections; `overlayWrite` controls each overlay save.
 const ALL_SECTIONS = {'speed': true, 'gear': true, 'rpm': true, 'cruise-control': true, 'speed-limit': true, 'fuel': true, 'range': true, 'sdk-consumption': true, 'cargo': true, 'origin': true,
-  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true, 'rest-state': true};
+  'destination': true, 'distance-driven': true, 'distance-remaining': true, 'deadline': true, 'expected-income': true, 'game-time': true, 'mandatory-break': true, 'rest-state': true, 'cargo-damage': true};
 // ET-012b: the overlay settings carry the placements of every layout (the ET-012a anchors at scale 1 by default).
 const PLACEMENTS = {strip: {x: 0.5, y: 0, scale: 1}, card: {x: 1, y: 0, scale: 1}, cluster: {x: 0, y: 1, scale: 1}, hud: {x: 0, y: 0, scale: 1}};
 const DEFAULT_OVERLAY = {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: ALL_SECTIONS, placements: PLACEMENTS};
@@ -1438,18 +1438,12 @@ it('creates the overlay window at the strip size reserved for every section by d
 });
 it('creates the overlay window at the size the saved layout reserves for its sections', async () => {
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: ALL_SECTIONS, placements: PLACEMENTS}}; await ready();
-  // ET-070: the Hard Mode row makes the panel's content 34 + 21 × 13 = 307 CSS px, ceil(307 × 0.7 + 2) = ceil(216.9) = 217 (203 before).
-  // ET-071: cruise control is a panel row, 34 + 21 × 14 = 328, ceil(328 × 0.7 + 2) = ceil(231.6) = 232.
-  expect(configurations[1]).toMatchObject({width: 308, height: 248, webPreferences: {zoomFactor: 0.7}});
+  expect(configurations[1]).toMatchObject({width: 308, height: 263, webPreferences: {zoomFactor: 0.7}});
 });
 it('delivers the saved layout and sections in the overlay document first projection', async () => {
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: {...ALL_SECTIONS, rpm: false, cargo: false}, placements: PLACEMENTS}}; await ready();
-  // ET-052: thirteen sections reserve 48 + 24 × 13 = 360 CSS px: ceil(358 × 0.7 + 2) = ceil(252.6) = 253, one DIP above the
-  // card's nominal round(360 × 0.7) = 252 (twelve sections gave ceil(236) below it). ET-070: the Hard Mode row reserves
-  // 48 + 24 × 14 = 384, ceil(382 × 0.7 + 2) = ceil(269.4) = 270. ET-071: cruise control adds a row, 48 + 24 × 15 = 408,
-  // ceil(406 × 0.7 + 2) = ceil(286.2) = 287.
-  // RPM and cargo are off. Rest State adds one 24 CSS px card row to the saved layout.
-  expect(configurations[1]).toMatchObject({width: 210, height: 322});
+  // The card reserves 338 DIP with RPM and cargo name disabled.
+  expect(configurations[1]).toMatchObject({width: 210, height: 338});
   ipc.emit('overlay:subscribe', overlayTrusted());
   const first = overlayProjection(channels.at(-1)!);
   expect(first).toMatchObject({layout: 'card', freshness: 'unavailable', paused: false});
@@ -1490,9 +1484,7 @@ it('applies an overlay layout only after the durable save, then republishes and 
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'card', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded'}; saved.resolve(settingsView);
   await expect(request).resolves.toEqual(settingsView);
   expect(pushes().at(-1)).toMatchObject({settings: settingsView});
-  // ET-070: every section and the Hard Mode row, ceil(430 × 0.7 + 2) = ceil(303) = 303 (287 before). ET-071: with cruise
-  // control ceil(454 × 0.7 + 2) = ceil(319.8) = 320.
-  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -226, y: 16, width: 210, height: 354});
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -226, y: 16, width: 210, height: 371});
   expect(windows[1].setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]); expect(windows[1].moveTop).toHaveBeenCalledOnce();
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(50);
@@ -1512,7 +1504,7 @@ it('applies overlay sections after the durable save and hands the store only a v
   ipc.emit('overlay:subscribe', overlayTrusted()); const overlayChannel = channels[1];
   consumeOverlay(overlayChannel); deliver(currentReading()); await vi.advanceTimersByTimeAsync(50); consumeOverlay(overlayChannel);
   expect(sectionIds(overlayProjection(overlayChannel))).toContain('rpm');
-  const input = {...ALL_SECTIONS, rpm: false, cargo: false, 'rest-state': false};
+  const input = {...ALL_SECTIONS, rpm: false, cargo: false, 'rest-state': false, 'cargo-damage': false};
   overlayWrite.mockImplementation((_kind, value) => {
     settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'strip', sections: value as Record<string, boolean>, placements: PLACEMENTS}, state: 'loaded'}; return Promise.resolve(settingsView);
   });
@@ -1660,9 +1652,10 @@ it.each([
   const update = dashboard.port1.postMessage.mock.lastCall![0].update as LiveTelemetry;
   expect(update).not.toHaveProperty('v1');
   expect(update).toMatchObject({selection: 'ets2', status: 'connected', fresh: true});
-  // The overlay equals the v0-only projection: no v1 section at all.
+  // The v0-only projection displays unavailable cargo damage on an active job.
   const projection = overlayProjection(overlayChannel);
-  expect(sectionIds(projection)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'game-time']);
+  expect(sectionIds(projection)).toEqual(['speed', 'gear', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'destination', 'expected-income', 'cargo-damage', 'game-time']);
+  expect(sectionOf(projection, 'cargo-damage')).toEqual({id: 'cargo-damage', state: 'unavailable'});
   expect(sectionOf(projection, 'cargo')).toEqual({id: 'cargo', state: 'value', text: 'cargo.logs'});
   expect(channels[0].port1.close).not.toHaveBeenCalled();
   expect(channels[0].port1.postMessage.mock.calls.map(call => call[0])).toEqual([1, 2, 3, 4, 5].map(delivery => ({type: 'consumed', delivery})));
@@ -1710,9 +1703,8 @@ it('re-places the overlay when a late settings read brings another layout', asyn
   expect(windows[1].setBounds).not.toHaveBeenCalled(); expect(windows[1].showInactive).not.toHaveBeenCalled();
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'hud', sections: ALL_SECTIONS, placements: PLACEMENTS}, state: 'loaded', writable: true};
   settingsChanged!();
-  // ET-070: the HUD with every section and the Hard Mode row is ceil(402 × 0.7) = ceil(281.4) = 282 high (265 before).
-  // ET-071: with cruise control ceil(426 × 0.7) = ceil(298.2) = 299.
-  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 224, height: 334});
+  // The HUD with all sections reserves 350 DIP at the default scale.
+  expect(windows[1].setBounds).toHaveBeenLastCalledWith({x: -1904, y: 16, width: 224, height: 350});
   await vi.advanceTimersByTimeAsync(50);
   expect(overlayProjection(overlayChannel)).toMatchObject({layout: 'hud', freshness: 'current'});
   expect(windows[1].showInactive).toHaveBeenCalledOnce();
@@ -1801,8 +1793,7 @@ it.each([false, true])('keeps the real pending settings defaults hidden until a 
     expect(store.view()).toMatchObject({state: 'loaded-with-fallbacks', autostart: true, overlay: {enabled, layout: 'hud'}});
     expect(await readFile(path.join(directory, 'settings.json'), 'utf8')).toBe(bytes);
     if (enabled) {
-      // ET-070: 282 with the Hard Mode row, ceil(402 × 0.7); ET-071: 299 with cruise control, ceil(426 × 0.7).
-      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 224, height: 334}]]);
+      expect(windows[1].setBounds.mock.calls).toEqual([[{x: -1904, y: 16, width: 224, height: 350}]]);
       expect(windows[1].showInactive).toHaveBeenCalledOnce();
       expect(windows[1].setBounds.mock.invocationCallOrder[0]).toBeLessThan(windows[1].showInactive.mock.invocationCallOrder[0]);
     } else expect(windows[1].showInactive).not.toHaveBeenCalled();
@@ -1834,11 +1825,8 @@ const EDITABLE = {ignoreMouse: false, focusable: true, movable: true, skipTaskba
 
 it('creates the overlay window at the saved scale of its layout and applies that zoom after every load', async () => {
   settingsView = {...settingsView, overlay: {enabled: true, backgroundOpacity: 80, layout: 'cluster', sections: ALL_SECTIONS, placements: {...PLACEMENTS, cluster: {x: 0, y: 1, scale: 1.5}}}}; await ready();
-  // ET-045e: the saved setting 1.5 is zoom 1.05, so the cluster with every section is round(440 × 1.05) = 462 wide and
-  // ceil(286 × 1.05 + 2.1) = 303 high (ET-052; 281 with fourteen sections; ET-012d's 660 × 401 at zoom 1.5). ET-070: the
-  // Hard Mode row makes it ceil(307 × 1.05 + 2.1) = ceil(324.45) = 325. ET-071: cruise control makes it ceil(328 × 1.05 + 2.1)
-  // = ceil(346.5) = 347; adding the Rest State row gives ceil(349 × 1.05 + 2.1) = 369.
-  expect(configurations[1]).toMatchObject({width: 462, height: 371, webPreferences: {zoomFactor: 1.05, partition: 'ets2telemetry-overlay'}});
+  // The saved scale 1.5 maps to zoom 1.05. The cluster with all sections reserves 462 × 393 DIP.
+  expect(configurations[1]).toMatchObject({width: 462, height: 393, webPreferences: {zoomFactor: 1.05, partition: 'ets2telemetry-overlay'}});
   expect(configurations[0].webPreferences).not.toHaveProperty('zoomFactor');
   overlayContents.emit('did-finish-load'); expect(overlayContents.setZoomFactor).toHaveBeenLastCalledWith(1.05);
   expect(contents.setZoomFactor).not.toHaveBeenCalled();

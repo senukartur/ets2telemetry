@@ -237,8 +237,8 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
   // ET-050b B1, ET-052, ET-071, ET-084: the producer selects min(hello maxMinor, 4); minor-0 to minor-3 bytes stay the original ones.
   const helloOffering = (maxMinor: number, durable = true) => encodeFrame({version: PROTOCOL_V1, kind: 'hello', data: {clientInstanceId: '50000000-0000-4000-8000-000000000001', minMinor: 0, maxMinor, durableEvents: durable}});
   const M1 = {major: 1, minor: 1} as const;
-  it('serves minor 0 without a gearbox or break to a client that offers only minor 0, minor 1 with the gearbox, minor 2 with both, minor 3 with cruise control too, and minor 4 with the speed limit too', () => {
-    for (const [offered, selected] of [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 5]] as const) {
+  it('serves exactly the fields of the negotiated minor for offers below, at and above the maximum', () => {
+    for (const [offered, selected] of [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 6]] as const) {
       const {adapter, p} = producer();
       adapter.configuration('truck', [{name: 'gears.forward', sdkType: 'u32', value: 12}, {name: 'gears.reverse', sdkType: 'u32', value: 4}], 'terminated', 0); adapter.frame(false, {}, 1);
       p.open(); const [welcome, checkpoint] = p.receive(helloOffering(offered), 1_000_002_000_000n);
@@ -253,13 +253,36 @@ describe('simulator v1 producer caller sequence (docs/native-transport-v1.md ste
       if (selected >= 3) expect(state!.cruiseControl).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
       expect(Object.hasOwn(state!, 'speedLimit'), `offer ${offered}`).toBe(selected >= 4);
       if (selected >= 4) expect(state!.speedLimit).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
-      expect(Object.hasOwn(state!, 'restState'), `offer ${offered}`).toBe(selected === 5);
-      if (selected === 5) expect(state!.restState).toEqual({available: false, reason: 'not-observed', unit: 'min'});
+      expect(Object.hasOwn(state!, 'restState'), `offer ${offered}`).toBe(selected >= 5);
+      if (selected >= 5) expect(state!.restState).toEqual({available: false, reason: 'not-observed', unit: 'min'});
+      expect(Object.hasOwn(state!, 'cargoDamage'), `offer ${offered}`).toBe(selected >= 6);
+      if (selected >= 6) expect(state!.cargoDamage).toEqual({available: false, reason: 'not-observed', unit: 'fraction'});
       // Every later message of the connection, here a snapshot, keeps the selected minor.
       adapter.frame(false, {speed: 1}, 100);
       const snapshot = p.publication(1_000_100_000_000n)!;
       expect(snapshot.message.version).toEqual({major: 1, minor: selected});
     }
+  });
+  it('publishes live cargo damage only for complete job frames in minor 6 (REG-004, REG-009)', () => {
+    const {adapter, p} = producer();
+    adapter.configuration('trailer.0', [{name: 'id', sdkType: 'string', value: 'trailer.a'}], 'terminated', 0);
+    adapter.configuration('job', [{name: 'cargo.id', sdkType: 'string', value: 'cargo.a'}], 'terminated', 0);
+    adapter.frame(false, {'job.cargo.damage': 0.125}, 1);
+    p.open();
+    const [, checkpoint] = p.receive(helloOffering(6), 1_000_002_000_000n);
+    expect(checkpoint.message.kind === 'checkpoint' && checkpoint.message.data.state.cargoDamage)
+      .toEqual({available: true, value: 0.125, unit: 'fraction', v0ConfigurationRevision: '1'});
+    const unobserved = {available: false, reason: 'not-observed', unit: 'fraction'};
+    adapter.frame(false, {}, 100);
+    const snapshot = p.publication(1_000_100_000_000n)!;
+    expect(snapshot.message.kind === 'snapshot' && snapshot.message.data.state.cargoDamage).toEqual(unobserved);
+    adapter.frame(true, {'job.cargo.damage': 0}, 200);
+    expect(adapter.published.cargoDamage).toEqual(unobserved);
+    adapter.frame(false, {'job.cargo.damage': 0}, 300);
+    expect(adapter.published.cargoDamage).toEqual({available: true, value: 0, unit: 'fraction', v0ConfigurationRevision: '1'});
+    adapter.gameplay('job.cancelled', [], 'terminated', 310);
+    adapter.frame(false, {'job.cargo.damage': 0.125}, 400);
+    expect(adapter.published.cargoDamage).toEqual(unobserved);
   });
   it('serves the break on a minor-2 connection exactly as the adapter holds it, and a lower minor never carries it (ET-052)', () => {
     const M2 = {major: 1, minor: 2} as const;

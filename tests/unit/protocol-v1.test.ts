@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {
   decodePayload, encodeFrame, EVENT_TYPES, FrameDecoder, fraction, GAP_RECORD_BYTES, kmToMetersFloat, kmToMetersU32, MAX_EVENT_SEQ, negotiateV1, PROTOCOL_V1,
-  NOT_SUPPORTED_BREAK, NOT_SUPPORTED_CRUISE_CONTROL, NOT_SUPPORTED_GEARBOX, NOT_SUPPORTED_REST_STATE, NOT_SUPPORTED_SPEED_LIMIT, ProtocolError, sdkMoney, sdkText, V1_GEARBOX, V1_LIMITS, V1_MAX_MINOR, validateLiveObservationV1, type GearboxState, type ProtocolMessage, type Sender, type ServerMessage
+  NOT_SUPPORTED_BREAK, NOT_SUPPORTED_CARGO_DAMAGE, NOT_SUPPORTED_CRUISE_CONTROL, NOT_SUPPORTED_GEARBOX, NOT_SUPPORTED_REST_STATE, NOT_SUPPORTED_SPEED_LIMIT, ProtocolError, sdkMoney, sdkText, V1_GEARBOX, V1_LIMITS, V1_MAX_MINOR, validateLiveObservationV1, type GearboxState, type ProtocolMessage, type Sender, type ServerMessage
 } from '../../packages/contracts/src/protocol-v1';
 import * as v0 from '../../packages/contracts/src/protocol-v0';
 import {Cap0Error, decodeCap0Payload, encodeCap0Hello} from '../../packages/contracts/src/capture-cap0';
@@ -425,7 +425,7 @@ describe('ET-050b protocol v1 minor-1 corpus', () => {
   // and since ET-071 and ET-084 with `NOT_SUPPORTED_CRUISE_CONTROL` and `NOT_SUPPORTED_SPEED_LIMIT` as well.
   it('requires the gearbox in the live observation and validates it with the minor-1 rules', () => {
     const m = m1Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
-    const withGearbox: Partial<typeof m.data.state> = {...m.data.state, nextMandatoryBreak: NOT_SUPPORTED_BREAK, cruiseControl: NOT_SUPPORTED_CRUISE_CONTROL, speedLimit: NOT_SUPPORTED_SPEED_LIMIT, restState: NOT_SUPPORTED_REST_STATE}; delete withGearbox.window;
+    const withGearbox: Partial<typeof m.data.state> = {...m.data.state, nextMandatoryBreak: NOT_SUPPORTED_BREAK, cruiseControl: NOT_SUPPORTED_CRUISE_CONTROL, speedLimit: NOT_SUPPORTED_SPEED_LIMIT, restState: NOT_SUPPORTED_REST_STATE, cargoDamage: NOT_SUPPORTED_CARGO_DAMAGE}; delete withGearbox.window;
     const withoutGearbox = {...withGearbox}; delete withoutGearbox.gearbox;
     const live = (state: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss},
       receivedMonotonicMs: 0, hydration: true});
@@ -586,7 +586,7 @@ describe('ET-052 protocol v1 minor-2 corpus', () => {
   });
   // ET-084: minor 4 exists, so the first unsupported caller maximum is 5 (it was 3 in ET-052 and 4 in ET-071).
   it('rejects a caller maximum minor above the highest implemented one and accepts 0, 1 and 2', () => {
-    for (const maxMinor of [6, -1, 0.5]) {
+    for (const maxMinor of [7, -1, 0.5]) {
       expect(() => decodePayload(bytes('welcome'), 'server', {maxMinor})).toThrow(ProtocolError);
       expect(() => new FrameDecoder('server', {maxMinor})).toThrow(ProtocolError);
       expect(() => negotiateV1(client('hello'), {allowDurable: true, maxMinor})).toThrow(ProtocolError);
@@ -599,7 +599,7 @@ describe('ET-052 protocol v1 minor-2 corpus', () => {
   // `NOT_SUPPORTED_CRUISE_CONTROL` and `NOT_SUPPORTED_SPEED_LIMIT`.
   it('requires the next mandatory break in the live observation and validates it with the minor-2 rules', () => {
     const m = m2Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
-    const state: Partial<typeof m.data.state> = {...m.data.state, cruiseControl: NOT_SUPPORTED_CRUISE_CONTROL, speedLimit: NOT_SUPPORTED_SPEED_LIMIT, restState: NOT_SUPPORTED_REST_STATE}; delete state.window;
+    const state: Partial<typeof m.data.state> = {...m.data.state, cruiseControl: NOT_SUPPORTED_CRUISE_CONTROL, speedLimit: NOT_SUPPORTED_SPEED_LIMIT, restState: NOT_SUPPORTED_REST_STATE, cargoDamage: NOT_SUPPORTED_CARGO_DAMAGE}; delete state.window;
     const live = (s: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state: s, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss}, receivedMonotonicMs: 0, hydration: true});
     expect(validateLiveObservationV1(live(state)).state).toEqual(state);
     // The break is required: a minor-1 shaped state is no longer a live observation.
@@ -772,7 +772,7 @@ describe('ET-071 protocol v1 minor-3 corpus', () => {
   });
   // ET-084: minor 4 exists, so the first unsupported caller maximum is 5 (it was 4 in ET-071).
   it('rejects a caller maximum minor above the highest implemented one and accepts 0 to 3', () => {
-    for (const maxMinor of [6, -1, 0.5]) {
+    for (const maxMinor of [7, -1, 0.5]) {
       expect(() => decodePayload(bytes('welcome'), 'server', {maxMinor})).toThrow(ProtocolError);
       expect(() => new FrameDecoder('server', {maxMinor})).toThrow(ProtocolError);
       expect(() => negotiateV1(client('hello'), {allowDurable: true, maxMinor})).toThrow(ProtocolError);
@@ -785,7 +785,7 @@ describe('ET-071 protocol v1 minor-3 corpus', () => {
   it('requires cruise control in the live observation and validates it with the minor-3 rules', () => {
     const m = m3Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
     // Since ET-084 the live state also always carries the speed limit, so this minor-3 state gets `NOT_SUPPORTED_SPEED_LIMIT`.
-    const state: Partial<typeof m.data.state> = {...m.data.state, speedLimit: NOT_SUPPORTED_SPEED_LIMIT, restState: NOT_SUPPORTED_REST_STATE}; delete state.window;
+    const state: Partial<typeof m.data.state> = {...m.data.state, speedLimit: NOT_SUPPORTED_SPEED_LIMIT, restState: NOT_SUPPORTED_REST_STATE, cargoDamage: NOT_SUPPORTED_CARGO_DAMAGE}; delete state.window;
     const live = (s: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state: s, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss}, receivedMonotonicMs: 0, hydration: true});
     expect(validateLiveObservationV1(live(state)).state).toEqual(state);
     const without = {...state}; delete without.cruiseControl;
@@ -922,8 +922,8 @@ describe('ET-084 protocol v1 minor-4 corpus', () => {
     for (const b of encodeFrame(m4Server('checkpoint-worst'), M4)) decoder.push(Uint8Array.of(b), m => found.push(m));
     decoder.end(); expect(found).toEqual([m4Server('checkpoint-worst')]);
   });
-  it('declares minor 5 as the highest implemented minor and a not-supported limit for older minors', () => {
-    expect(V1_MAX_MINOR).toBe(5); expect(PROTOCOL_V1).toEqual({major: 1, minor: 0});
+  it('declares the latest supported minor and a not-supported limit for older minors', () => {
+    expect(V1_MAX_MINOR).toBe(6); expect(PROTOCOL_V1).toEqual({major: 1, minor: 0});
     expect(NOT_SUPPORTED_SPEED_LIMIT).toEqual({available: false, reason: 'not-supported', unit: 'm/s'}); expect(Object.isFrozen(NOT_SUPPORTED_SPEED_LIMIT)).toBe(true);
     const snapshot = structuredClone(m4Server('snapshot')) as Extract<ServerMessage, {kind: 'snapshot'}>;
     snapshot.data.state.speedLimit = {...NOT_SUPPORTED_SPEED_LIMIT}; expect(() => encodeFrame(snapshot, M4)).not.toThrow();
@@ -955,18 +955,18 @@ describe('ET-084 protocol v1 minor-4 corpus', () => {
     expect(() => decodePayload(m4Bytes('hello-envelope-minor-4'), 'client', M4)).toThrow(/Unsupported protocol version/);
     expect(() => decodePayload(m4Bytes('ack-minor-5'), 'client', M4)).toThrow(/Unsupported protocol version/);
   });
-  it('rejects a caller maximum minor above 5 and accepts 0 to 5', () => {
-    for (const maxMinor of [6, -1, 0.5]) {
+  it('rejects a caller maximum minor above 6 and accepts 0 to 6', () => {
+    for (const maxMinor of [7, -1, 0.5]) {
       expect(() => decodePayload(bytes('welcome'), 'server', {maxMinor})).toThrow(ProtocolError);
       expect(() => new FrameDecoder('server', {maxMinor})).toThrow(ProtocolError);
       expect(() => negotiateV1(client('hello'), {allowDurable: true, maxMinor})).toThrow(ProtocolError);
     }
-    for (const maxMinor of [0, 1, 2, 3, 4, 5]) expect(() => new FrameDecoder('client', {maxMinor})).not.toThrow();
+    for (const maxMinor of [0, 1, 2, 3, 4, 5, 6]) expect(() => new FrameDecoder('client', {maxMinor})).not.toThrow();
   });
   // The live observation requires the later-minor fields even when the producer cannot supply a reading.
   it('requires the limit in the live observation and validates it with the minor-4 rules', () => {
     const m = m4Server('checkpoint'); if (m.kind !== 'checkpoint') throw new Error('fixture');
-    const state: Partial<typeof m.data.state> = {...m.data.state, restState: NOT_SUPPORTED_REST_STATE}; delete state.window;
+    const state: Partial<typeof m.data.state> = {...m.data.state, restState: NOT_SUPPORTED_REST_STATE, cargoDamage: NOT_SUPPORTED_CARGO_DAMAGE}; delete state.window;
     const live = (s: unknown) => ({source: m.source, seq: m.seq, capture: m.capture, state: s, sourceStatus: {gameMode: m.data.status.gameMode, eventLoss: m.data.status.eventLoss}, receivedMonotonicMs: 0, hydration: true});
     expect(validateLiveObservationV1(live(state)).state).toEqual(state);
     const without = {...state}; delete without.speedLimit;
@@ -995,6 +995,39 @@ describe('ET-084 minor negotiation', () => {
     expect(negotiateV1(decodePayload(m4Bytes('hello'), 'client'), {allowDurable: true, maxMinor: 4}).minor).toBe(4);
     expect(negotiateV1(decodePayload(m4Bytes('hello'), 'client'), {allowDurable: false, maxMinor: 3})).toEqual({version: {major: 1, minor: 3}, minor: 3, durableEvents: false});
     expect(negotiateV1(decodePayload(m4Bytes('hello-offer-3'), 'client'), {allowDurable: true, maxMinor: 4})).toEqual({version: {major: 1, minor: 3}, minor: 3, durableEvents: true});
+  });
+});
+
+describe('ET-121 protocol v1 minor 6', () => {
+  const directory = resolve(dir, 'minor6'), options = {maxMinor: 6};
+  const payload = (name: string) => new Uint8Array(readFileSync(resolve(directory, name)));
+  for (const [name, outcome] of rows(readFileSync(resolve(directory, 'manifest.txt'), 'utf8'))) {
+    it(`${outcome} at maxMinor 6: ${name}`, () => {
+      const sender = ['hello.json', 'ack-1.json', 'clock-probe.json'].includes(name) ? 'client' : 'server';
+      const decode = () => decodePayload(payload(name), sender, options);
+      if (outcome === 'invalid') { expect(decode).toThrow(ProtocolError); return; }
+      expect(outcome).toBe('valid');
+      const message = decode(), frame = encodeFrame(message, options);
+      const decoder = new FrameDecoder(sender, options), found: ProtocolMessage[] = [];
+      decoder.push(frame, m => found.push(m)); decoder.end();
+      expect(found).toEqual([message]);
+    });
+  }
+  it('negotiates both ways with minor 5 and extends its state by exactly one field', () => {
+    const oldOptions = {maxMinor: 5};
+    const oldPayload = (name: string) => new Uint8Array(readFileSync(resolve(dir, 'minor5', name)));
+    const oldHello = decodePayload(oldPayload('hello.json'), 'client'), newHello = decodePayload(payload('hello.json'), 'client');
+    expect(negotiateV1(oldHello, {allowDurable: true, maxMinor: 6}).minor).toBe(5);
+    expect(negotiateV1(newHello, {allowDurable: true, maxMinor: 5}).minor).toBe(5);
+    expect(negotiateV1(newHello, {allowDurable: true, maxMinor: 6}).minor).toBe(6);
+    expect(() => decodePayload(payload('snapshot.json'), 'server', oldOptions)).toThrow(/Unsupported protocol version/);
+    const old = decodePayload(oldPayload('snapshot.json'), 'server', oldOptions);
+    const current = decodePayload(payload('snapshot.json'), 'server', options);
+    if (old.kind !== 'snapshot' || current.kind !== 'snapshot') throw new Error('Expected snapshots');
+    expect(current.data.state).toEqual({...old.data.state,
+      cargoDamage: {available: true, value: 0.125, unit: 'fraction', v0ConfigurationRevision: '9007199254740993'}});
+    const worst = decodePayload(payload('checkpoint-worst.json'), 'server', options);
+    expect(encodeFrame(worst, options).length - 4).toBeLessThanOrEqual(V1_LIMITS.serverFrameBytes);
   });
 });
 
@@ -1040,7 +1073,8 @@ describe('ET-118 protocol v1 minor 5', () => {
 
   it('keeps the signed game minutes and validates the required field of the renderer projection', () => {
     const m = asState('checkpoint-worst');
-    const {window, ...state} = m.data.state;
+    const {window, ...previousState} = m.data.state;
+    const state = {...previousState, cargoDamage: NOT_SUPPORTED_CARGO_DAMAGE};
     expect(state.restState).toEqual({available: true, value: -2147483648, unit: 'min'});
     expect(asState('snapshot-max').data.state.restState).toEqual({available: true, value: 2147483647, unit: 'min'});
     expect(asState('snapshot-zero').data.state.restState).toEqual({available: true, value: 0, unit: 'min'});

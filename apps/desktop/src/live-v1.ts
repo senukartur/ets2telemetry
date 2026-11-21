@@ -1,6 +1,6 @@
 import {sameGameSource} from './live-state';
 import type {LiveTelemetry, LiveTelemetryV1, LiveV1Status, SourceSelection} from '../../../packages/contracts/src';
-import {NOT_SUPPORTED_BREAK, NOT_SUPPORTED_CRUISE_CONTROL, NOT_SUPPORTED_GEARBOX, NOT_SUPPORTED_REST_STATE, NOT_SUPPORTED_SPEED_LIMIT, validateLiveObservationV1, type CurrentState, type LiveStateV1} from '../../../packages/contracts/src/protocol-v1';
+import {NOT_SUPPORTED_BREAK, NOT_SUPPORTED_CARGO_DAMAGE, NOT_SUPPORTED_CRUISE_CONTROL, NOT_SUPPORTED_GEARBOX, NOT_SUPPORTED_REST_STATE, NOT_SUPPORTED_SPEED_LIMIT, validateLiveObservationV1, type CurrentState, type LiveStateV1} from '../../../packages/contracts/src/protocol-v1';
 import type {V1SourceState} from './v1-ingestion';
 
 // The protocol v1 live projection (ET-010c, decisions F1-F3). The telemetry service builds it from its service-internal
@@ -22,7 +22,7 @@ const CONTROL = /[\u0000-\u001f\u007f]/u;
  * `not-supported`. The next mandatory break (ET-052 MB5) is a minor-2 or higher connection's own raw reading, signed and
  * unclamped (clamping and urgency are display rules in telemetry-core); a minor-0 or minor-1 state carries none, so it is
  * `NOT_SUPPORTED_BREAK`. The cruise speed and speed limit carry the raw SDK values from minors 3 and 4 onward.
- * Rest State carries the game's signed minutes from minor 5 onward. An older connection projects each absent field as
+ * From minor 5 Rest State carries signed minutes. From minor 6 cargo damage carries the active job fraction. Older connections project absent fields as
  * `not-supported`.
  */
 function liveState(state: CurrentState): LiveStateV1 {
@@ -35,7 +35,8 @@ function liveState(state: CurrentState): LiveStateV1 {
     nextMandatoryBreak: state.nextMandatoryBreak ?? NOT_SUPPORTED_BREAK,
     cruiseControl: state.cruiseControl ?? NOT_SUPPORTED_CRUISE_CONTROL,
     speedLimit: state.speedLimit ?? NOT_SUPPORTED_SPEED_LIMIT,
-    restState: state.restState ?? NOT_SUPPORTED_REST_STATE
+    restState: state.restState ?? NOT_SUPPORTED_REST_STATE,
+    cargoDamage: state.cargoDamage ?? NOT_SUPPORTED_CARGO_DAMAGE
   };
 }
 

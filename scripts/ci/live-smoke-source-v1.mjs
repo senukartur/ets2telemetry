@@ -22,7 +22,7 @@ const CLIENT_FRAME_BYTES = 4096;
 /** Every capture is at least snapshot-live's own capture, so its oldest retained event never lies in the future. */
 const CAPTURE_BASE_NS = 1_000_250_000_000n;
 /** The protocol v1 minor this source selects (ET-050b minor 1, ET-052 minor 2, ET-071 minor 3, ET-084 minor 4). */
-const MINOR = 5;
+const MINOR = 6;
 /** The next mandatory break every state carries until `setBreak` changes it: 1 h 35 min, which is soon (ET-052 D3). */
 const DEFAULT_BREAK = Object.freeze({available: true, value: 95, unit: 'min'});
 /** The cruise control set speed every state carries until `setCruiseControl` changes it: 25 m/s, 90 km/h (ET-071). */
@@ -36,6 +36,7 @@ export async function startLiveSmokeSourceV1(checkout) {
   const fixture = async name => JSON.parse(await readFile(`${checkout}/tests/fixtures/protocol-v1/${name}.json`, 'utf8'));
   const [welcome, checkpoint, snapshot, mack] = await Promise.all([fixture('welcome-live'), fixture('checkpoint-live'), fixture('snapshot-live'),
     fixture('minor1/checkpoint-ats-mack')]);
+  const {data: {state: {configuration: {revision: v0ConfigurationRevision}}}} = JSON.parse(await readFile(`${checkout}/tests/fixtures/protocol-v0/checkpoint.json`, 'utf8'));
   welcome.data.minor = MINOR;
   const fixtureTruckId = checkpoint.data.state.configuration.truck.value.id.value;
   const source = {...welcome.source, pluginSessionId: randomUUID(), processInstanceId: randomUUID(), processId: process.pid};
@@ -49,6 +50,7 @@ export async function startLiveSmokeSourceV1(checkout) {
     message.data.state.cruiseControl = structuredClone(DEFAULT_CRUISE);
     message.data.state.speedLimit = structuredClone(DEFAULT_LIMIT);
     message.data.state.restState = structuredClone(DEFAULT_REST_STATE);
+    message.data.state.cargoDamage = {available: true, value: 0.125, unit: 'fraction', v0ConfigurationRevision};
   }
   let seq = 0n, boundary = BigInt(checkpoint.data.state.boundaryOrder), connections = 0, frames = 0, probes = 0, stopped = false, held = false;
   const origin = performance.now(), clients = new Set();

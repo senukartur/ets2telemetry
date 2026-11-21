@@ -1,4 +1,5 @@
 import type {TrailerBaselineInput} from './api';
+import type {CargoOpening, FillCargoClassification, FillCargoResult} from './api';
 import {QUALIFICATION_COMMAND_NAMES,isQualificationCommand,type QualificationCommands} from './qualification';
 import {UPLOAD_SYNC_NAMES,isUploadSyncRequest,type UploadSyncCommands} from './upload-sync';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
@@ -125,7 +126,7 @@ export class StorageClient {
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation, fresh});}
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
   recordTrailerBaseline(input: TrailerBaselineInput): Promise<Result<undefined>> {return this.#request({name:'recordTrailerBaseline',input});}
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation; cargoOpening?: CargoOpening}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
   commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   /**
    * Only `uniqueSeconds` of the options crosses the worker boundary (ET-015b). A value that is not an object is forwarded
@@ -150,8 +151,10 @@ export class StorageClient {
   openAttachedTrip(input: AttachInput): Promise<Result<AttachResult>> {
     return this.#request({name: 'openAttachedTrip', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq, job: input.job, effects: input.effects,
       ...(input.profile?{profile:input.profile}:{}),...(input.sourceClockId?{sourceClockId:input.sourceClockId}:{}),...(input.monotonicNs?{monotonicNs:input.monotonicNs}:{}),
-      ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{}),...(input.endpoint!==undefined?{endpoint:structuredClone(input.endpoint)}:{})} : input});
+      ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{}),...(input.endpoint!==undefined?{endpoint:structuredClone(input.endpoint)}:{}),
+      ...(input.cargoOpening!==undefined?{cargoOpening:input.cargoOpening}:{})} : input});
   }
+  fillCargoClassification(input: FillCargoClassification): Promise<Result<FillCargoResult>> { return this.#request({name: 'fillCargoClassification', input}); }
   /**
    * ET-112b2b: resolves closed pending membership decisions with a later proof. Exactly the five input fields are copied;
    * a value that is not an object is forwarded as given, so the worker's request parser refuses it with INVALID_INPUT.

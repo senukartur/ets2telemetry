@@ -255,7 +255,7 @@ describe('ET-112g interrupted repair (REG-006)', () => {
     expect(interrupted.ok).toBe(false);
     // The failure after the pre-repair backup names it, for the recovery guidance.
     const backupFileName = interrupted.ok ? undefined : interrupted.error.backupFileName;
-    expect(backupFileName).toMatch(/^repair-[0-9a-f]{8}-v11-[0-9]{8}T[0-9]{9}Z\.sqlite$/);
+    expect(backupFileName).toMatch(/^repair-[0-9a-f]{8}-v12-[0-9]{8}T[0-9]{9}Z\.sqlite$/);
     expect(existsSync(path.join(backups(), backupFileName!))).toBe(true);
     expect(membership(copy, S)).toMatchObject({logical_ref: 1});
     expect(membership(copy, S2nd)).toMatchObject({id: 6, logical_ref: 6, previous_logical_ref: null});
@@ -456,9 +456,9 @@ describe('ET-112g backups and refusals', () => {
     await legacy();
     const before = digestOf(ws.database), {plan, out} = await dryRun(ws.database, [S]);
     const result = await applied(ws.database, out, plan.confirmation);
-    expect(result.backupFileName).toMatch(/^repair-[0-9a-f]{8}-v11-[0-9]{8}T[0-9]{9}Z\.sqlite$/);
+    expect(result.backupFileName).toMatch(/^repair-[0-9a-f]{8}-v12-[0-9]{8}T[0-9]{9}Z\.sqlite$/);
     const backup = path.join(backups(), result.backupFileName), manifest = JSON.parse(readFileSync(backup.replace(/\.sqlite$/, '.json'), 'utf8'));
-    expect(manifest).toMatchObject({format: 'ets2telemetry-backup-1', reason: 'pre-repair', databaseUuid: result.databaseUuid, fromVersion: 11, fileName: result.backupFileName,
+    expect(manifest).toMatchObject({format: 'ets2telemetry-backup-1', reason: 'pre-repair', databaseUuid: result.databaseUuid, fromVersion: 12, fileName: result.backupFileName,
       fileSha256: sha256(backup), size: statSync(backup).size, logicalDigest: before.logicalDigest, rowCounts: before.rowCounts});
     expect(JSON.parse(readFileSync(backup.replace(/\.sqlite$/, '.result.json'), 'utf8'))).toEqual(result);
     const restored = fresh('restored.sqlite');

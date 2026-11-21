@@ -123,8 +123,8 @@ function policy(v: unknown, path: string, connectAt: number): ClientPolicy & {pr
   const probes = opt(o, 'probes', raw => arr(raw, `${path}.probes`, 100).map((t, i) => {
     const at = int(t, `${path}.probes[${i}]`, connectAt + 1, MAX_AT_MS); if (at < last + 1_000) fail(`${path}.probes[${i}]`, 'probes must be at least 1,000 ms apart'); last = at; return at;
   }), []);
-  // ET-050b B1, ET-052, ET-071, ET-084: the hello's offer, 0 to 4; omitted, the client offers minor 4.
-  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 5) as V1Minor : undefined;
+  // ET-050b B1, ET-052, ET-071, ET-084: the hello's offer, 0 to 6; omitted, the client offers minor 6.
+  const maxMinor = Object.hasOwn(o, 'maxMinor') ? int(o.maxMinor, `${path}.maxMinor`, 0, 6) as V1Minor : undefined;
   return {durable, commit, ack, probes, ...(maxMinor === undefined ? {} : {maxMinor})};
 }
 
@@ -156,6 +156,7 @@ export function sourceStep(v: unknown, path: string, source: Scenario['source'])
       if (source.cruiseControl === 'not-supported' && Object.hasOwn(frame, 'cruise_control')) fail(path, 'the cruise_control callback is not registered in this session');
       if (source.speedLimit === 'not-supported' && Object.hasOwn(frame, 'navigation.speed.limit')) fail(path, 'the navigation.speed.limit callback is not registered in this session');
       if (source.restState === 'not-supported' && Object.hasOwn(frame, 'rest.stop')) fail(path, 'the rest.stop callback is not registered in this session');
+      if (source.cargoDamage === 'not-supported' && Object.hasOwn(frame, 'job.cargo.damage')) fail(path, 'the job.cargo.damage callback is not registered in this session');
       return {atMs: at(o), action, timerRestart: opt(o, 'timerRestart', raw => bool(raw, `${path}.timerRestart`), false), channels: frame};
     }
     case 'gameMode': {
@@ -205,7 +206,7 @@ export function validateScenario(input: unknown): Scenario {
   if (origin === 'replay' && !provenance) fail('$.provenance', 'replay requires capture provenance');
   const reg = arr(o.reg, '$.reg', 18).map((r, i) => { const s = str(r, `$.reg[${i}]`); if (!/^REG-0(0[1-9]|1[0-8])$/.test(s)) fail(`$.reg[${i}]`); return s; });
   if (!reg.length || new Set(reg).size !== reg.length) fail('$.reg', 'unique REG identifiers expected');
-  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq', 'mandatoryBreak', 'cruiseControl', 'speedLimit', 'restState', 'highestMinor']);
+  const s = obj(o.source, '$.source', ['versions', 'gameplayEvents', 'currency', 'gameMode'], ['startEventSeq', 'mandatoryBreak', 'cruiseControl', 'speedLimit', 'restState', 'cargoDamage', 'highestMinor']);
   const v = obj(s.versions, '$.source.versions', ['telemetryApi', 'gameTelemetry', 'sdkArchive']);
   const pair = (p: unknown, path: string) => { const x = obj(p, path, ['major', 'minor']); return {major: int(x.major, `${path}.major`, 0, 65_535), minor: int(x.minor, `${path}.minor`, 0, 65_535)}; };
   const sdkArchive = str(v.sdkArchive, '$.source.versions.sdkArchive');
@@ -223,8 +224,9 @@ export function validateScenario(input: unknown): Scenario {
     // ET-084: omitted, the channel is registered.
     ...(Object.hasOwn(s, 'speedLimit') ? {speedLimit: oneOf(s.speedLimit, '$.source.speedLimit', ['registered', 'not-supported'] as const)} : {}),
     ...(Object.hasOwn(s, 'restState') ? {restState: oneOf(s.restState, '$.source.restState', ['registered', 'not-supported'] as const)} : {}),
-    // A simulated older plugin; omitted, the plugin serves up to minor 5.
-    ...(Object.hasOwn(s, 'highestMinor') ? {highestMinor: int(s.highestMinor, '$.source.highestMinor', 0, 5) as V1Minor} : {})
+    ...(Object.hasOwn(s, 'cargoDamage') ? {cargoDamage: oneOf(s.cargoDamage, '$.source.cargoDamage', ['registered', 'not-supported'] as const)} : {}),
+    // A simulated older plugin; omitted, the plugin serves up to minor 6.
+    ...(Object.hasOwn(s, 'highestMinor') ? {highestMinor: int(s.highestMinor, '$.source.highestMinor', 0, 6) as V1Minor} : {})
   };
   const steps = arr(o.steps, '$.steps', MAX_STEPS).map((x, i) => sourceStep(x, `$.steps[${i}]`, source));
   const faultInjection = opt(o, 'faultInjection', raw => bool(raw, '$.faultInjection'), false);

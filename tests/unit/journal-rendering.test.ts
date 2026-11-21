@@ -1,7 +1,7 @@
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {describe, expect, it, vi} from 'vitest';
-import type {AppLanguage, JournalTripListItem, JournalTripPage} from '../../packages/contracts/src';
+import type {AppLanguage, CargoClassification, JournalTripListItem, JournalTripPage} from '../../packages/contracts/src';
 import {TripTable} from '../../apps/desktop/src/journal-table';
 import {JobTypeBadge, ModeBadge} from '../../apps/desktop/src/trip-badges';
 import {journalListText} from '../../apps/desktop/src/journal-view';
@@ -97,7 +97,28 @@ describe('TripTable (ET-076)', () => {
     expect(render([special], 'en')).toContain('data-testid="journal-row-special"');
     expect(render([special], 'en')).toContain('Special transport');
     expect(render([ITEM], 'en')).not.toContain('journal-row-special');
+    expect(render([special], 'en')).not.toContain('data-cargo-classification="heavy"');
   });
+
+  it.each([['en', 'ADR 8: Corrosive substances', 'Heavy', 'Fragile', 'Valuable'],
+    ['ru', 'ADR 8: Едкие вещества', 'Тяжёлый', 'Хрупкий', 'Ценный']] as const)(
+    'places accessible compact cargo badges beside the cargo name in %s', (language, adr, heavy, fragile, valuable) => {
+      const cargoClassification: CargoClassification = {version: 1, fragility: 0.8, fragile: true, valuable: true,
+        adr: {state: 'class', class: 8}, overweight: true, oversize: null, groups: ['machinery']};
+      const item = {...ITEM, cargoClassification, job: {...ITEM.job, cargo: {available: true as const, value: 'Steel'}}};
+      const html = render([item], language);
+      const cargo = html.match(/data-testid="journal-row-cargo"><span>Steel<\/span>(.*?)<\/div>/)?.[1] ?? '';
+      expect(cargo).toContain('data-layout="compact"');
+      expect([...cargo.matchAll(/data-cargo-classification="([^"]+)"/g)].map(match => match[1])).toEqual(['adr', 'heavy', 'fragile', 'valuable']);
+      for (const [label, icon, variant] of [[adr, 'diamond', 'warn'], [heavy, 'weight', 'neutral'],
+        [fragile, 'wine', 'neutral'], [valuable, 'gem', 'neutral']]) {
+        expect(cargo).toMatch(new RegExp(`data-variant="${variant}"[^>]*role="img" aria-label="${label}" title="${label}"[^>]*><svg[^>]*lucide-${icon}`));
+        expect(cargo).not.toContain(`<span>${label}</span>`);
+      }
+      expect(cargo).toContain('</svg><span>8</span>');
+      expect(render([ITEM], language)).not.toContain('cargo-badges');
+      expect(render([ITEM], language)).not.toContain('cargo-unknown');
+    });
 
   it('names the trip in its Open control and shows only the odometer distance', () => {
     const cargo = {...ITEM, job: {...ITEM.job, cargo: {available: true as const, value: 'Steel'}, sourceCompany: {available: true as const, value: 'Vltava'}, destinationCompany: {available: true as const, value: 'Donau'}}};

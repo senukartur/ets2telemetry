@@ -138,13 +138,14 @@ struct GearboxPod { Field<std::uint32_t> forward_gears, reverse_gears; Field<HSh
 // `gearbox` is encoded from minor 1, `next_mandatory_break_min` (SDK s32 game minutes, negative is overdue and zero is a
 // value) from minor 2, `cruise_control_mps` (SDK float m/s, zero is off and a value, ET-071) from minor 3 and
 // `speed_limit_mps` (SDK float m/s, zero and negative mean no limit and are values, ET-084) from minor 4, and `rest_state_min`
-// (SDK s32 game minutes) from minor 5. A lower minor leaves each later field out.
+// (SDK s32 game minutes) from minor 5. Minor 6 carries live job cargo damage with the matching v0 configuration revision.
 struct StatePod {
   SimulationState simulation = SimulationState::unavailable;
   Field<double> speed_mps, fuel_l, fuel_capacity_l, engine_rpm; Field<std::int32_t> gear;
   Field<double> odometer_km, average_consumption_l_per_km, estimated_range_km, navigation_distance_m;
   GameTimePod game_time; Field<std::uint64_t> capture_utc_unix_ms; std::uint64_t boundary_order = 0;
   Field<PlacementPod> world_placement; ConfigurationPod configuration; Field<WindowPod> window; GearboxPod gearbox; Field<std::int32_t> next_mandatory_break_min, rest_state_min;
+  Field<double> cargo_damage_fraction; std::uint64_t v0_configuration_revision = 0;
   Field<double> cruise_control_mps, speed_limit_mps;
 };
 enum class GameId : std::uint8_t { ets2 = 0, ats = 1 };

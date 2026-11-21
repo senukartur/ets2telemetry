@@ -306,6 +306,7 @@ export function recorderClient(storage: {readonly client: StorageClient | undefi
     listEvents: (session, page) => storage.client?.listEvents(session, page) ?? closed(),
     appendSamples: (session, rows, options) => storage.client?.appendSamples(session, rows, options) ?? closed(),
     openAttachedTrip: input => storage.client?.openAttachedTrip(input) ?? closed(),
+    fillCargoClassification: input => storage.client?.fillCargoClassification(input) ?? closed(),
     resolvePendingMemberships: input => storage.client?.resolvePendingMemberships(input) ?? closed()
   };
 }

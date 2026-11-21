@@ -1,5 +1,6 @@
 // Private service/worker contract. No renderer DTOs or durable publication authority.
 import {EVENT_TYPES, type Available, type GameMode, type JobConfiguration, type Measure, type Money} from '../../contracts/src/protocol-v1';
+import {isCargoClassification, type CargoClassification} from '../../contracts/src/cargo-classification';
 import type {CloseReason, RecordingCompleteness, TripOutcome} from './api';
 
 export const MAX_UPLOAD_PROJECTION_PINS=8;
@@ -28,6 +29,8 @@ export interface UploadFacts {
   hardModeResult: 'qualified' | 'not-qualified';
   /** Engine-1 accounting at the snapshot ledger head. Absent in pins prepared before it existed, which map to unknown. */
   accounting?: UploadAccounting;
+  /** Opening evidence of the pinned logical root. Only pins prepared before cargo support omit it. */
+  cargoClassification?: CargoClassification | null;
 }
 export interface UploadProjection {
   requestedTripUuid: string; rootTripUuid: string; readiness: UploadReadiness | 'redirected'; rootReadiness: UploadReadiness;
@@ -87,11 +90,12 @@ const factsShape = shape({game: one('ets2','ats'), pluginSessionId: isUploadUuid
   openedBy: one('event','checkpoint'), checkpointNextEventSeq: nullable(sequence), checkpointUtcMs: nullable(count), opening: nullable(occurrence), outcomeOccurrence: nullable(occurrence), close: nullable(occurrence),
   gameMode: mode, job: jobCheck, observedDistance: available(real,'m'), fuelUsed: available(real,'L'), deliveredDistance: available(real,'m'), cargoDamage: available(real,'fraction'),
   revenue: moneyOf('s64'), penalty: moneyOf('s64'), moneyIncomplete: bool, clockAnomaly: bool, hardModeResult: one('qualified', 'not-qualified')});
-// Facts persisted before the accounting status existed omit it; a present value must be valid.
+// Retained work may predate new evidence keys. A present value must validate.
 const facts: Check = v => {
   if (!record(v)) return false;
-  const {accounting, ...rest} = v;
-  return (!Object.hasOwn(v, 'accounting') || accountingCheck(accounting)) && factsShape(rest);
+  const {accounting, cargoClassification, ...rest} = v;
+  return (!Object.hasOwn(v, 'accounting') || accountingCheck(accounting))
+    && (!Object.hasOwn(v, 'cargoClassification') || nullable(isCargoClassification)(cargoClassification)) && factsShape(rest);
 };
 const totals = shape({members: count, configurations: count, intervals: count});
 const readiness = one('ready','identity-pending');
@@ -154,8 +158,10 @@ export interface UploadSummary {
     expectedIncome: Available<Money>; revenue: Available<Money>; penalty: Available<Money>;
     evidence: {startObserved: boolean; endObserved: boolean; ruleContextComplete: boolean; clockAnomaly: boolean; reasons: string[]};
     hardModeResult?: 'qualified' | 'not-qualified';
-    /** Required in v1.2 and forbidden in v1.0 and v1.1. */
+    /** Required from v1.2. */
     accounting?: UploadAccounting;
+    /** Required in v1.3, with null for unavailable opening evidence. */
+    cargoClassification?: CargoClassification | null;
   };
 }
 interface UploadPlace {cityId: Available<string>; cityName: Available<string>; companyId: Available<string>; companyName: Available<string>}
@@ -239,7 +245,8 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,po
     evidence: {startObserved: start.basis === 'event' && !clockAnomaly, endObserved: !!f.outcomeOccurrence && end?.basis === 'event' && !clockAnomaly,
       ruleContextComplete: reasons.size===0, clockAnomaly, reasons: [...reasons].sort()},
     hardModeResult: f.hardModeResult,
-    accounting: f.accounting ?? {distance: 'unknown', fuel: 'unknown'}
+    accounting: f.accounting ?? {distance: 'unknown', fuel: 'unknown'},
+    ...(f.cargoClassification === undefined ? {} : {cargoClassification: f.cargoClassification})
   }};
   // Validate the exact allowlisted wire subset, including Dashboard's UTF-8, numeric and money limits.
   if (!wireValuesFit(summary)) return hold('unrepresentable');
@@ -262,9 +269,11 @@ function wireValuesFit(summary: UploadSummary): boolean {
     }
     return Object.entries(v).every(([k, value]) => walk(value, k));
   };
-  const m = summary.snapshot.gameMode;
+  const {cargoClassification, ...snapshot} = summary.snapshot;
+  const base = {source: summary.source, snapshot}, m = snapshot.gameMode;
   return (m.mode === 'unknown' ? m.method === 'none' && m.confidence === 'none' : m.method !== 'none' && m.confidence !== 'none' && (m.mode !== 'single-player' || m.confidence === 'weak'))
-    && walk(summary) && Buffer.byteLength(JSON.stringify(summary)) < 60_000;
+    && (cargoClassification == null || isCargoClassification(cargoClassification))
+    && walk(base) && Buffer.byteLength(JSON.stringify(base)) < 60_000;
 }
 
 /** Constant-size durable fold: at most ten trailer slots and three occurrence checks, never full history arrays. */
@@ -328,7 +337,10 @@ export function isUploadSummary(value:unknown, minor = 0):value is UploadSummary
     evidence:shape({startObserved:bool,endObserved:bool,ruleContextComplete:bool,clockAnomaly:bool,reasons:v=>Array.isArray(v)&&v.length<=32&&new Set(v).size===v.length&&v.every(x=>typeof x==='string'&&/^[a-z][a-z0-9-]{0,63}$/.test(x))})
   };
   if(minor >= 1) snapshotFields.hardModeResult = one('qualified', 'not-qualified');
-  if(minor === 2) snapshotFields.accounting = accountingCheck;
+  if(minor >= 2) snapshotFields.accounting = accountingCheck;
+  // Dashboard's raw JSON parser rejects numeric magnitudes above MAX_SAFE_INTEGER.
+  if(minor === 3) snapshotFields.cargoClassification = nullable(value => isCargoClassification(value)
+    && (value.fragility === null || value.fragility <= Number.MAX_SAFE_INTEGER));
   const check=shape({source:shape({provider:one('ets2telemetry'),game:one('ets2','ats'),tripId:isUploadUuid,pluginSessionId:isUploadUuid,databaseUuid:isUploadUuid,origin:one('game')}),
     snapshot:shape(snapshotFields)});
   if(!check(value))return false;

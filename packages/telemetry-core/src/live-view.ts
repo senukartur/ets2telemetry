@@ -274,7 +274,7 @@ function unknownState(): NormalizedLiveState {
   return {
     protocol: 'v0', simulation: 'unavailable', speed: none, gear: none, engineRpm: none, fuel: none, fuelCapacity: none, averageConsumption: none,
     estimatedRange: none, odometer: none, navigationDistance: none, gameTime: {minutes: none, clockId: ''}, worldPlacement: none, job: none,
-    truck: none, trailers: none, gameMode: none, eventLoss: none, gearbox: none, nextMandatoryBreak: none, cruiseControl: none, speedLimit: none, restState: none,
+    truck: none, trailers: none, gameMode: none, eventLoss: none, gearbox: none, nextMandatoryBreak: none, cruiseControl: none, speedLimit: none, restState: none, cargoDamage: none,
     configurationRevision: '0'
   };
 }

@@ -17,7 +17,7 @@ import {randomUUID} from 'node:crypto';
 import Database from 'better-sqlite3';
 import {afterAll, afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AppHealth, RecordingHealth} from '../../packages/contracts/src';
-import {FrameDecoder, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
+import {V1_MAX_MINOR, FrameDecoder, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
 import {initialHealth, reduceHealth} from '../../apps/desktop/src/app-health';
 import {JournalBroker, type JournalServiceChannel} from '../../apps/desktop/src/journal-broker';
 import type {JournalQuery} from '../../apps/desktop/src/journal-contract';
@@ -222,7 +222,7 @@ async function controlledRecoverySource(timeline: string[]) {
   const server = net.createServer(incoming => {
     socket = incoming; producer.open();
     // ET-050b, ET-052, ET-071, ET-084: the ingestion offers minor 4, so this producer selects it and the ACKs carry {1,4}.
-    const decoder = new FrameDecoder('client', {maxMinor: 5}); let record: typeof connections[number] | undefined;
+    const decoder = new FrameDecoder('client', {maxMinor: V1_MAX_MINOR}); let record: typeof connections[number] | undefined;
     incoming.on('error', error => {failures.push(String((error as NodeJS.ErrnoException).code));});
     incoming.on('data', bytes => {
       try {
