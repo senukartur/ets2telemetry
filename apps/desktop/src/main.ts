@@ -4,6 +4,8 @@ import {QualificationServiceBridge} from './qualification/service-bridge';
 import {QUALIFICATION_CHANNELS,type QualificationAction} from './qualification/contract';
 import {sameDashboardOwner} from '../../../packages/contracts/src/dashboard-upload';
 import type {QualificationGame,QualificationState,QualificationCue} from '../../../packages/contracts/src/qualification';
+import {qualificationGuideCue} from './overlay-qualification';
+import type {HardModeAssessment} from '../../../packages/contracts/src/hard-mode';
 import {readJournalWithSync} from './dashboard-upload/journal-sync-guard';
 import {UploadServiceBridge} from './dashboard-upload/service-bridge';
 import {UploadCredentialStore,CredentialFiles} from './dashboard-upload/credential-store';
@@ -535,9 +537,10 @@ function runApplication(profileError: unknown): void {
   }, (code, error) => log(code, error)) : undefined;
   function publishOverlay(live: LiveTelemetry, units: UnitProfiles, settings: OverlaySettings, language: AppLanguage = settingsStore.view().language,
     gearDisplay: GearDisplayModes = settingsStore.view().gearDisplay): void {
+    const currentHardMode=hardMode.status(serviceReady && !supervisor.stopping);
     lastOverlay = {...overlayPresentation(live, units, settings, lastOverlay, overlayEdit.active, language, gearDisplay),
-      contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y, hardMode: overlayHardModeNow()};
-    const qualificationCue=overlayQualificationNow(live);if(qualificationCue===undefined)delete lastOverlay.qualification;else lastOverlay.qualification=qualificationCue;
+      contentAnchorY: overlayController?.contentAnchorY ?? settings.placements[settings.layout].y, hardMode: overlayHardMode(currentHardMode)};
+    const qualificationCue=overlayQualificationNow(live,currentHardMode.assessment.state);if(qualificationCue===undefined)delete lastOverlay.qualification;else lastOverlay.qualification=qualificationCue;
     if (latency) lastOverlay = latency.project(lastOverlay, live, Boolean(overlay && !overlay.isDestroyed() && overlay.isVisible()));
     overlaySubscriptions.publish(lastOverlay);
   }
@@ -546,27 +549,29 @@ function runApplication(profileError: unknown): void {
     // Preserve the existing projection/capture/diagnostic token and the normal credit/coalescing/epoch path.
     lastOverlay = {...lastOverlay, contentAnchorY}; overlaySubscriptions.publish(lastOverlay);
   }
-  /** ET-070: the overlay's Hard Mode indicator from main's lease-checked status, the same source as the dashboard's chip. */
-  function overlayHardModeNow() {return overlayHardMode(hardMode.status(serviceReady && !supervisor.stopping));}
-  function overlayQualificationNow(live:LiveTelemetry=lastLive):QualificationCue|undefined {
+  function overlayQualificationNow(live:LiveTelemetry, hardModeState:HardModeAssessment['state']):QualificationCue|undefined {
     const status=upload.status,game=live.v1?.observation?.source.game??live.observation?.source.game,state=game?qualificationStates[game]:undefined;
     if(!status.owner||!status.origin||!['connected','paused'].includes(status.state)||status.candidateId||!state?.owner||!sameDashboardOwner(status.owner,state.owner)||['disabled','unsupported','permission-required','unavailable','disconnected'].includes(state.availability))return;
-    if(!serviceReady||supervisor.stopping||!live.fresh||state.stale||!state.preview)return 'neutral';
-    return state.preview.outcome==='unknown'?'neutral':state.preview.outcome;
+    if(!serviceReady||supervisor.stopping||!live.v1?.fresh||state.stale||!state.activeJob||!state.preview)return 'neutral';
+    return qualificationGuideCue(state.preview,hardModeState);
   }
   function publishOverlayQualification():void {
-    if(lifecycle.exiting)return;const next=overlayQualificationNow();if(lastOverlay.qualification===next)return;
+    if(lifecycle.exiting)return;
+    const next=overlayQualificationNow(lastLive,hardMode.status(serviceReady && !supervisor.stopping).assessment.state);
+    if(lastOverlay.qualification===next)return;
     lastOverlay={...lastOverlay};if(next===undefined)delete lastOverlay.qualification;else lastOverlay.qualification=next;overlaySubscriptions.publish(lastOverlay);
   }
   /**
-   * Republishes only the Hard Mode indicator when it changed, like the content anchor: it renews no telemetry, freshness
-   * or window authority, and a non-current projection keeps its shape (root dimming applies to the indicator too).
+   * Republish both cues when Hard Mode changes without renewing telemetry freshness or window authority.
    */
   function publishOverlayHardMode(): void {
     if (lifecycle.exiting) return;
-    const next = overlayHardModeNow();
-    if (sameOverlayHardMode(lastOverlay.hardMode, next)) return;
-    lastOverlay = {...lastOverlay, hardMode: next}; overlaySubscriptions.publish(lastOverlay);
+    const current=hardMode.status(serviceReady && !supervisor.stopping), next=overlayHardMode(current);
+    const cue=overlayQualificationNow(lastLive,current.assessment.state);
+    if (sameOverlayHardMode(lastOverlay.hardMode,next)&&lastOverlay.qualification===cue) return;
+    lastOverlay={...lastOverlay,hardMode:next};
+    if(cue===undefined)delete lastOverlay.qualification;else lastOverlay.qualification=cue;
+    overlaySubscriptions.publish(lastOverlay);
   }
   const freshness = new LiveFreshness(update => {
     const view = settingsStore.view();

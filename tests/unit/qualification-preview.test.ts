@@ -1,6 +1,6 @@
 import {readFileSync} from 'node:fs';
 import {describe,expect,it,vi} from 'vitest';
-import {qualificationLeaseCue,type QualificationLease} from '../../apps/desktop/src/overlay-qualification';
+import {isFreshQualificationReply,qualificationGuideCue,qualificationPreviewApplies,type QualificationLease} from '../../apps/desktop/src/overlay-qualification';
 import {previewDecimal,qualificationTrailerFacts,QualificationPreviewFacts,type PreviewStorage,type QualificationLive} from '../../apps/desktop/src/qualification/preview-facts';
 import {trailer,Script,ETS2_A,job} from '../shared/trip-messages';
 import type {UploadProjection} from '../../packages/storage/src/upload-projection';
@@ -12,8 +12,10 @@ describe('server provisional applicability timelines (REG-003/008/009/010)',()=>
     const input=fixture<QualificationPreviewInput>(`${name}-body-code-input`),reply=fixture<QualificationPreview>(name);
     expect(input.actualDistance.metres).toBe('100000');expect(input.hardMode).toEqual({result:'qualified',final:true});expect(reply.applicability.minimumDistanceM).toBe('100000');
     expect(reply.requestId).toBe(input.requestId);expect(reply.rules.find(rule=>rule.rule==='hard_mode')?.result).toBe('pass');
-    const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0};expect(qualificationLeaseCue(lease,input,reply.securityScope,reply.applicability.qualificationRevision,1)).toBe(reply.outcome==='unknown'?'neutral':reply.outcome);
-    const older=structuredClone(input);older.actualDistance.metres='99999';older.evidenceRevision++;expect(qualificationLeaseCue(lease,older,reply.securityScope,reply.applicability.qualificationRevision,1)).toBe('neutral');
+    const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0};
+    expect(qualificationPreviewApplies(lease,input,reply.securityScope,reply.applicability.qualificationRevision)).toBe(true);
+    const older=structuredClone(input);older.actualDistance.metres='99999';older.evidenceRevision++;
+    expect(qualificationPreviewApplies(lease,older,reply.securityScope,reply.applicability.qualificationRevision)).toBe(false);
   });
   it('separates growing evidence from context and releases its exact pin when an active job disappears during preparation',async()=>{
     const script=new Script(ETS2_A),checkpoint=script.checkpoint(job()),live:QualificationLive={source:{...checkpoint.source,origin:'game'},capture:checkpoint.capture,state:checkpoint.data.state};
@@ -43,39 +45,41 @@ describe('server provisional applicability timelines (REG-003/008/009/010)',()=>
     const reply=fixture<QualificationPreview>('maximum-guard-delayed-positive'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');
     input.actualDistance.metres='499999';input.hardMode.final=true;
     const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:1000};
-    const cue=(current:QualificationPreviewInput|null,now=1100,scope=reply.securityScope,revision='12')=>qualificationLeaseCue(lease,current,scope,revision,now);
-    expect(cue(input)).toBe('pass');
-    const current=structuredClone(input);current.evidenceRevision++;current.actualDistance.metres='500000';expect(cue(current)).toBe('pass');
-    current.actualDistance.metres='500001';expect(cue(current)).toBe('neutral');
-    current.actualDistance.metres='499998';expect(cue(current)).toBe('neutral');
-    current.actualDistance.metres='499999';current.actualDistance.support='partial';expect(cue(current)).toBe('neutral');
-    current.actualDistance.support='whole-trip';current.contextRevision++;expect(cue(current)).toBe('neutral');
-    expect(cue(null)).toBe('neutral');expect(cue(input,1100,'b'.repeat(43))).toBe('neutral');expect(cue(input,1100,reply.securityScope,'13')).toBe('neutral');
-    expect(cue(input,6000)).toBe('neutral');expect(cue(input,5999)).toBe('pass');
+    const applies=(current:QualificationPreviewInput|null,scope=reply.securityScope,revision='12')=>qualificationPreviewApplies(lease,current,scope,revision);
+    expect(applies(input)).toBe(true);
+    const current=structuredClone(input);current.evidenceRevision++;current.actualDistance.metres='500000';expect(applies(current)).toBe(true);
+    current.actualDistance.metres='500001';expect(applies(current)).toBe(false);
+    current.actualDistance.metres='499998';expect(applies(current)).toBe(false);
+    current.actualDistance.metres='499999';current.actualDistance.support='partial';expect(applies(current)).toBe(false);
+    current.actualDistance.support='whole-trip';current.contextRevision++;expect(applies(current)).toBe(false);
+    expect(applies(null)).toBe(false);expect(applies(input,'b'.repeat(43))).toBe(false);
+    expect(applies(input,reply.securityScope,'11')).toBe(true);expect(applies(input,reply.securityScope,'13')).toBe(false);
+    expect(isFreshQualificationReply(lease,6000)).toBe(false);expect(isFreshQualificationReply(lease,5999)).toBe(true);
   });
   it('never changes a server pending below-minimum result into passing as metres grow',()=>{
     const reply=fixture<QualificationPreview>('below-minimum-crossed-while-in-flight'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');
     const lease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0},current=structuredClone(input);current.actualDistance.metres='100001';current.evidenceRevision++;
     expect(input.hardMode.final).toBe(false);expect(reply.rules.find(rule=>rule.rule==='hard_mode')?.result).toBe('unknown');
-    expect(qualificationLeaseCue(lease,current,reply.securityScope,'12',1)).toBe('neutral');
+    expect(qualificationPreviewApplies(lease,current,reply.securityScope,'12')).toBe(true);
+    expect(qualificationGuideCue(reply,'pass')).toBe('neutral');
   });
   it('keeps a server-issued proven partial-distance failure within its envelope and rejects unknown or changed support',()=>{
     const reply=fixture<QualificationPreview>('already-over-maximum-proven-violation-lease'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');
     input.actualDistance={availability:'known',support:'partial',metres:'500001',final:false};
     const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0};
-    const cue=(current:QualificationPreviewInput)=>qualificationLeaseCue(lease,current,reply.securityScope,'12',1);
-    expect(reply.outcome).toBe('fail');expect(reply.applicability.maximumDistanceM).toBeNull();expect(cue(input)).toBe('fail');
-    const current=structuredClone(input);current.evidenceRevision++;current.actualDistance.metres='600000';expect(cue(current)).toBe('fail');
-    current.actualDistance.metres='500000';expect(cue(current)).toBe('neutral');
-    current.actualDistance.metres='600000';current.actualDistance.support='unknown';expect(cue(current)).toBe('neutral');
-    current.actualDistance.support='whole-trip';expect(cue(current)).toBe('neutral');
+    const applies=(current:QualificationPreviewInput)=>qualificationPreviewApplies(lease,current,reply.securityScope,'12');
+    expect(reply.outcome).toBe('fail');expect(reply.applicability.maximumDistanceM).toBeNull();expect(applies(input)).toBe(true);
+    const current=structuredClone(input);current.evidenceRevision++;current.actualDistance.metres='600000';expect(applies(current)).toBe(true);
+    current.actualDistance.metres='500000';expect(applies(current)).toBe(false);
+    current.actualDistance.metres='600000';current.actualDistance.support='unknown';expect(applies(current)).toBe(false);
+    current.actualDistance.support='whole-trip';expect(applies(current)).toBe(false);
   });
   it('requires the exact issued final distance and retires it on a corrected context',()=>{
     const reply=fixture<QualificationPreview>('final-distance-correction-exact-guard'),input=fixture<QualificationPreviewInput>('fictional-PreviewInput-5');input.actualDistance.final=true;
     const lease:QualificationLease={reply,input,authority:reply.securityScope,dispatchMonotonicMs:0};
-    expect(qualificationLeaseCue(lease,input,reply.securityScope,'12',1)).toBe('fail');
-    const corrected=structuredClone(input);corrected.actualDistance.metres='100000';expect(qualificationLeaseCue(lease,corrected,reply.securityScope,'12',1)).toBe('neutral');
-    corrected.actualDistance.metres=input.actualDistance.metres;corrected.contextRevision++;expect(qualificationLeaseCue(lease,corrected,reply.securityScope,'12',1)).toBe('neutral');
+    expect(qualificationPreviewApplies(lease,input,reply.securityScope,'12')).toBe(true);
+    const corrected=structuredClone(input);corrected.actualDistance.metres='100000';expect(qualificationPreviewApplies(lease,corrected,reply.securityScope,'12')).toBe(false);
+    corrected.actualDistance.metres=input.actualDistance.metres;corrected.contextRevision++;expect(qualificationPreviewApplies(lease,corrected,reply.securityScope,'12')).toBe(false);
   });
   it('preserves zero and canonical tiny numeric SDK facts without borrowing planned distance',()=>{
     expect(previewDecimal(0)).toBe('0');expect(previewDecimal(1e-7)).toBe('0.0000001');expect(previewDecimal(-1)).toBeNull();expect(previewDecimal(NaN)).toBeNull();expect(previewDecimal(1e21)).toBeNull();

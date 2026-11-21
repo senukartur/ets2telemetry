@@ -29,7 +29,10 @@ export function previewDecimal(value:number):string|null {
   const expanded=point<=0?`0.${'0'.repeat(-point)}${digits}`:point>=digits.length?digits+'0'.repeat(point-digits.length):digits.slice(0,point)+'.'+digits.slice(point);
   return isQualificationDecimal(expanded)?expanded:null;
 }
-const sourceKey=(live:QualificationLive|null)=>live?`${live.source.game}:${live.source.pluginSessionId}:${live.source.processInstanceId}:${live.capture.clockId}`:'';
+export const qualificationSourceKey=(live:QualificationLive|null)=>live?`${live.source.game}:${live.source.pluginSessionId}:${live.source.processInstanceId}:${live.capture.clockId}`:'';
+export function resumedQualificationSource(before:QualificationLive|null,live:QualificationLive|null):boolean {
+  return before?.state.simulation==='paused'&&live?.state.simulation==='running'&&qualificationSourceKey(before)===qualificationSourceKey(live);
+}
 /** Owns one uniquely named preparation pin. It never freezes an envelope or consumes another owner's pin. */
 export class QualificationPreviewFacts {
   #live:QualificationLive|null=null;#generation=0;#pin:string|null=null;#proof:{key:string;projection:UploadProjection}|null=null;
@@ -38,14 +41,19 @@ export class QualificationPreviewFacts {
   #job='';#couplings:(string|null)[]=[];
   constructor(private readonly db:PreviewStorage,private readonly authority:QualificationAuthority){}
   get current():QualificationPreviewInput|null{return this.#current?structuredClone(this.#current):null;}
-  observe(live:QualificationLive|null):void {
-    const before=this.#live,changed=sourceKey(before)!==sourceKey(live)||JSON.stringify(before?.state.configuration)!==JSON.stringify(live?.state.configuration);
+  observe(live:QualificationLive|null):boolean {
+    const before=this.#live;
+    const sourceChanged=qualificationSourceKey(before)!==qualificationSourceKey(live);
+    const trailerChanged=JSON.stringify(before?.state.configuration.trailers[0])!==JSON.stringify(live?.state.configuration.trailers[0]);
+    const jobChanged=JSON.stringify(before?.state.configuration.job)!==JSON.stringify(live?.state.configuration.job);
     this.#live=live;
-    if(sourceKey(before)!==sourceKey(live)||!live?.state.configuration.job.available){this.#couplings=[];this.#job='';this.#proof=null;}
-    else if(before&&this.#job&&JSON.stringify(before.state.configuration.trailers[0])!==JSON.stringify(live.state.configuration.trailers[0])){
+    if(sourceChanged||!live?.state.configuration.job.available){this.#couplings=[];this.#job='';this.#proof=null;}
+    else if(before&&this.#job&&trailerChanged){
       if(this.#couplings.length<9)this.#couplings.push(firstBody(before.state.configuration.trailers));else this.#couplings[8]=null;
     }
-    if(changed||!live?.state.configuration.job.available){this.#generation++;this.#current=null;this.#context='';}
+    const changed=sourceChanged||jobChanged||trailerChanged;
+    if(changed){this.#generation++;this.#current=null;this.#context='';}
+    return changed;
   }
   async #release():Promise<void>{const pin=this.#pin;if(!pin)return;for(let turn=0;turn<64;turn++){const value=await this.db.releaseQualificationPreview({...this.authority,pinId:pin});if(!value.ok)throw Error('PREVIEW_RELEASE_FAILED');if(value.value.state==='released'){this.#pin=null;return;}}throw Error('PREVIEW_RELEASE_PENDING');}
   read():Promise<QualificationPreviewInput|null>{
@@ -56,8 +64,9 @@ export class QualificationPreviewFacts {
     const live=this.#live,generation=this.#generation;if(!live||live.source.origin!=='game'||!live.state.configuration.job.available){this.#current=null;return null;}
     const local=await stored(this.db.readQualificationPreview({...this.authority,game:live.source.game,pluginSessionId:live.source.pluginSessionId}));
     if(generation!==this.#generation||!local.current){this.#current=null;return null;}
-    const current=local.current,key=`${sourceKey(live)}:${current.tripUuid}:${current.rawTripUuid}:${current.materialVersion}`;
-    const jobKey=`${sourceKey(live)}:${current.tripUuid}`;if(this.#job!==jobKey){this.#couplings=[];this.#job=jobKey;}
+    const current=local.current,tripKey=`${qualificationSourceKey(live)}:${current.tripUuid}:${current.rawTripUuid}`;
+    const key=`${tripKey}:${current.materialVersion}`;
+    const jobKey=`${qualificationSourceKey(live)}:${current.tripUuid}`;if(this.#job!==jobKey){this.#couplings=[];this.#job=jobKey;}
     if(this.#proof?.key!==key){
       await this.#release();const pin=randomUUID();this.#pin=pin;
       try{
@@ -80,7 +89,7 @@ export class QualificationPreviewFacts {
     const trailers=qualificationTrailerFacts(live.state.configuration.trailers,this.#couplings);
     const started=projection.facts.opening?.utcMs;
     const facts={game:live.source.game,cargo:{availability:cargo?'known' as const:'unknown' as const,code:cargo},cargoMassKg:{availability:mass!==null?'known' as const:'unknown' as const,value:mass},trailers,actualDistance:current.actualDistance,hardMode:{final:false,result:'unknown' as const},start:started!==null&&started!==undefined?{basis:'actual' as const,utc:new Date(started).toISOString()}:null,eventId:null};
-    const context=JSON.stringify({key,...facts,actualDistance:{...facts.actualDistance,metres:null}}),evidence=JSON.stringify(facts.actualDistance);
+    const context=JSON.stringify({tripKey,...facts,actualDistance:{...facts.actualDistance,metres:null}}),evidence=JSON.stringify(facts.actualDistance);
     if(context!==this.#context){this.#context=context;this.#contextRevision++;}
     if(evidence!==this.#evidence){this.#evidence=evidence;this.#evidenceRevision++;}
     const input={...facts,requestId:randomUUID(),contextRevision:this.#contextRevision,evidenceRevision:this.#evidenceRevision};

@@ -22,6 +22,14 @@ describe('qualification presentation (REG-009/014/016)',()=>{
     const html=renderToStaticMarkup(React.createElement(QualificationScreenView,{state,language:'en',onGame:()=>undefined,onRefresh:()=>undefined}));
     expect(html).toContain('Current level A');expect(html).toContain('Assessed level: Assessed level B');expect(html).toContain('Assignment at actual trip start');
   });
+  it('shows the current Hard Mode check in the active-trip requirements',()=>{
+    const preview=structuredClone(fixtures.find(f=>f.schema==='Preview')!.value) as QualificationPreview;
+    const state={...initialQualificationState('ets2',owner),snapshot,preview,activeJob:true};
+    const render=(hardMode:'pass'|'unknown')=>renderToStaticMarkup(React.createElement(QualificationScreenView,{state,hardMode,language:'en',onGame:()=>undefined,onRefresh:()=>undefined}));
+    expect(render('unknown')).toContain('Hard Mode audit is not final');
+    expect(render('pass')).toMatch(/data-testid="qualification-rule-hard_mode".*?Observed: <\/span>Current settings pass.*?data-state="pass"/);
+    expect(render('pass')).not.toContain('Hard Mode audit is not final');
+  });
   it.each(['en','ru'] as const)('shows server totals, five named limits and no invented no-job verdict in %s',language=>{
     const state={...initialQualificationState('ets2',owner),snapshot,availability:'ready' as const,stale:false};
     const html=renderToStaticMarkup(React.createElement(QualificationScreenView,{state,language,onGame:()=>undefined,onRefresh:()=>undefined}));

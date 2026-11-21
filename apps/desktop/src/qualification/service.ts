@@ -6,42 +6,78 @@ import type {UploadActiveConfiguration} from '../../../../packages/storage/src/u
 import type {DashboardOwner} from '../../../../packages/contracts/src/dashboard-upload';
 import {jsonBody} from '../dashboard-upload/control-response';
 import {stored} from '../dashboard-upload/scheduler';
-import {qualificationLeaseCue,type QualificationLease} from '../overlay-qualification';
-import {QualificationPreviewFacts,type PreviewStorage,type QualificationLive} from './preview-facts';
+import {isFreshQualificationReply,qualificationPreviewApplies,type QualificationLease} from '../overlay-qualification';
+import {QualificationPreviewFacts,qualificationSourceKey,resumedQualificationSource,type PreviewStorage,type QualificationLive} from './preview-facts';
 import {QualificationScheduler,qualificationRetry,qualificationClock,type QualificationClock,type QualificationTask} from './scheduler';
 import type {QualificationTransport,QualificationRoute,QualificationHttpResult} from './http';
 export type QualificationStorage=Pick<StorageClient,QualificationCommandName>&PreviewStorage;
-interface Active {authority:QualificationAuthority;owner:DashboardOwner;token:string;scope:string|null;capabilities:QualificationWire['Capabilities']|null;refresh:QualificationRefresh;facts:QualificationPreviewFacts;scheduler:QualificationScheduler;resultLimit:number;resultsHeld:boolean}
+interface PreviewRequest {source:string;retried:boolean}
+interface Active {authority:QualificationAuthority;owner:DashboardOwner;token:string;scope:string|null;capabilities:QualificationWire['Capabilities']|null;refresh:QualificationRefresh;facts:QualificationPreviewFacts;scheduler:QualificationScheduler;resultLimit:number;resultsHeld:boolean;previewRequest:PreviewRequest|null}
 /** Companion lifecycle is independent of recorder admission, upload requests and durable receipts. */
 export class QualificationService {
   #active:Active|null=null;#states={ets2:initialQualificationState('ets2'),ats:initialQualificationState('ats')};#generation=0;#abort=new AbortController();
-  #live:QualificationLive|null=null;#lease:QualificationLease|null=null;#sampleTimer:unknown;#sampling=false;#stopped=false;
-  #leaseTimer:unknown;
+  #live:QualificationLive|null=null;#preview:QualificationLease|null=null;#sampleTimer:unknown;#stopped=false;
   #startup:Promise<void>;
   constructor(private readonly db:QualificationStorage,private readonly http:QualificationTransport,private readonly publish:(state:QualificationState,connectionVersion:string|null)=>void,private readonly clock:QualificationClock=qualificationClock,private readonly monotonic:()=>number=()=>performance.now()){this.#startup=this.#recoverPins();this.#startup.catch(()=>undefined);}
   async #recoverPins():Promise<void>{const retained=await stored(this.db.readQualificationPreviewPins({}));for(const pin of retained.items){let complete=false;for(let turn=0;turn<64;turn++){const released=await stored(this.db.releaseQualificationPreview(pin));if(released.state==='released'){complete=true;break;}}if(!complete)throw Error('PREVIEW_RELEASE_PENDING');}}
   get(game:QualificationGame):QualificationState{return structuredClone(this.#states[game]);}
   get connectionVersion():string|null{return this.#active?.authority.connectionVersion??null;}
-  refresh(game:QualificationGame):QualificationState{const active=this.#active;if(active?.capabilities?.qualificationEnabled&&!active.refresh.suspended){this.#emit(game,{refreshing:true});active.scheduler.request(game);}return this.get(game);}
+  refresh(game:QualificationGame):QualificationState{
+    const active=this.#active;
+    if(active?.capabilities?.qualificationEnabled&&!active.refresh.suspended){
+      this.#emit(game,{refreshing:true});active.scheduler.request(game);
+      if(this.#live?.source.game===game&&this.#live.state.simulation==='running'&&this.#states[game].activeJob)this.#requestPreview(active,this.#live);
+    }
+    return this.get(game);
+  }
   uploaded():void{this.#active?.scheduler.request('results');}
   #emit(game:QualificationGame,change:Partial<QualificationState>):void{this.#states[game]={...this.#states[game],...change};this.publish(this.get(game),this.connectionVersion);}
   #revision(scope:string):string|null{let latest:string|null=null;for(const state of Object.values(this.#states)){const snapshot=state.snapshot;if(snapshot?.securityScope===scope&&(latest===null||compareQualificationCounter(snapshot.progressRevision,latest)>0))latest=snapshot.progressRevision;}return latest;}
-  observe(live:QualificationLive|null):void{this.#live=live;this.#active?.facts.observe(live);if(!this.#active?.facts.current)this.#clearPreview();if(this.#active)for(const game of ['ets2','ats'] as const){const activeJob=live?.source.game===game&&live.state.configuration.job.available;if(this.#states[game].activeJob!==activeJob)this.#emit(game,{activeJob});}}
-  #clearPreview():void{this.clock.clearTimeout(this.#leaseTimer);this.#lease=null;for(const game of ['ets2','ats'] as const)if(this.#states[game].preview)this.#emit(game,{preview:null});}
+  observe(live:QualificationLive|null):void{
+    const resumed=resumedQualificationSource(this.#live,live);
+    this.#live=live;
+    const active=this.#active;if(!active)return;
+    const changed=active.facts.observe(live);
+    if(active.previewRequest&&(!live?.state.configuration.job.available||active.previewRequest.source!==qualificationSourceKey(live)))active.previewRequest=null;
+    if(this.#preview&&changed)this.#clearPreview();
+    for(const game of ['ets2','ats'] as const){
+      const activeJob=live?.source.game===game&&live.state.configuration.job.available;
+      if(this.#states[game].activeJob!==activeJob)this.#emit(game,{activeJob});
+    }
+    if(resumed&&live?.state.configuration.job.available)this.#requestPreview(active,live);
+  }
+  #requestPreview(active:Active,live:QualificationLive):void{
+    active.previewRequest={source:qualificationSourceKey(live),retried:false};
+    active.scheduler.request('preview');
+  }
+  #runningSource(request:PreviewRequest):boolean{
+    return this.#live?.state.simulation==='running'&&this.#live.state.configuration.job.available&&request.source===qualificationSourceKey(this.#live);
+  }
+  #retryPreview(active:Active,request:PreviewRequest|null,delay:number):number{
+    if(this.#active!==active||active.previewRequest||!request||request.retried||!Number.isFinite(delay)||!this.#runningSource(request))return Infinity;
+    active.previewRequest={...request,retried:true};
+    return delay;
+  }
+  #clearPreview():void{
+    this.clock.clearTimeout(this.#sampleTimer);
+    const preview=this.#preview;this.#preview=null;
+    if(preview)this.#emit(preview.input.game,{preview:null});
+  }
   async activate(configuration:UploadActiveConfiguration,token:string):Promise<void>{
     await this.retire();await this.#startup;if(this.#stopped||configuration.status!=='ready'||configuration.purpose!=='history'||!configuration.registration)return;
     const registration=configuration.registration,authority={registrationId:registration.registrationId,connectionVersion:configuration.version};
     const owner:DashboardOwner={origin:registration.origin,accountId:registration.accountId,companyId:registration.companyId,identityEpoch:registration.identityEpoch};
     const generation=++this.#generation;this.#abort=new AbortController();
     const facts=new QualificationPreviewFacts(this.db,authority),scheduler=new QualificationScheduler(task=>this.#run(task,generation),this.clock);
-    const active:Active={authority,owner,token,scope:null,capabilities:null,refresh:{afterEvent:null,retryAtMs:0,failureStreak:0,suspended:false},facts,scheduler,resultLimit:25,resultsHeld:false};this.#active=active;facts.observe(this.#live);
-    for(const game of ['ets2','ats'] as const)this.#emit(game,{...initialQualificationState(game,owner),refreshing:true});
+    const active:Active={authority,owner,token,scope:null,capabilities:null,refresh:{afterEvent:null,retryAtMs:0,failureStreak:0,suspended:false},facts,scheduler,resultLimit:25,resultsHeld:false,previewRequest:null};this.#active=active;facts.observe(this.#live);
+    for(const game of ['ets2','ats'] as const)this.#emit(game,{...initialQualificationState(game,owner),refreshing:true,
+      activeJob:this.#live?.source.game===game&&this.#live.state.configuration.job.available});
     try{
       const cached=await stored(this.db.readQualificationCache(authority));if(this.#active!==active||!cached.active)return;
       active.scope=cached.securityScope;active.refresh={...cached.refresh,suspended:false};
       for(const cache of cached.caches)this.#emit(cache.snapshot.game,{snapshot:cache.snapshot,fetchedUtcMs:cache.fetchedUtcMs,availability:'offline',stale:true,refreshing:false});
       // An explicit activation is an access/configuration change and may resume a previously suspended lane.
-      scheduler.request('capabilities');this.#sample(generation);
+      scheduler.request('capabilities');
     }catch{if(this.#active===active)for(const game of ['ets2','ats'] as const)this.#emit(game,{availability:'unavailable',refreshing:false});}
   }
   async #request(route:QualificationRoute,body:unknown,active:Active):Promise<QualificationHttpResult>{
@@ -63,6 +99,7 @@ export class QualificationService {
     const active=this.#active;if(!active||generation!==this.#generation)return Infinity;
     if(active.refresh.suspended)return Infinity;
     if(active.refresh.retryAtMs>this.clock.now())return active.refresh.retryAtMs-this.clock.now();
+    let previewRequest:PreviewRequest|null=null;
     try{
       if(task==='capabilities'){
         const response=await this.#request('capabilities',undefined,active);if(this.#active!==active)return Infinity;
@@ -72,7 +109,15 @@ export class QualificationService {
         const scope=await stored(this.db.setQualificationScope({...active.authority,securityScope:value.securityScope}));if(this.#active!==active||!scope.active)return Infinity;
         active.scope=value.securityScope;active.capabilities=value;active.refresh.suspended=false;active.refresh.failureStreak=0;active.refresh.retryAtMs=0;
         for(const game of ['ets2','ats'] as const){if(value.qualificationEnabled&&value.games.includes(game))active.scheduler.request(game);else this.#emit(game,{availability:'disabled',stale:true,refreshing:false});}
-        if(value.resultsEnabled)active.scheduler.request('results');if(value.previewEnabled)active.scheduler.request('preview');return 60000;
+        if(value.resultsEnabled)active.scheduler.request('results');
+        if(!value.previewEnabled||!value.qualificationEnabled){
+          active.previewRequest=null;
+          this.#clearPreview();
+        }else{
+          if(active.previewRequest)active.scheduler.request('preview');
+          if(this.#preview&&!value.games.includes(this.#preview.input.game))this.#clearPreview();
+        }
+        return 60000;
       }
       if(!active.scope||!active.capabilities)return Infinity;
       if(task==='ets2'||task==='ats'){
@@ -82,7 +127,7 @@ export class QualificationService {
         const value=jsonBody(response.body,1048576);if(!isQualificationWire('Qualification',value)||value.game!==task||value.securityScope!==active.scope||value.ownerId!==active.owner.accountId)throw Error('INVALID_COMPANION_RESPONSE');
         const old=this.#states[task].snapshot;if(old&&compareQualificationCounter(value.progressRevision,old.progressRevision)<0)throw Error('INVALID_COMPANION_RESPONSE');
         const saved=await stored(this.db.saveQualificationCache({...active.authority,snapshot:value,fetchedUtcMs:this.clock.now()}));if(this.#active!==active||!saved.saved)return Infinity;
-        if(old?.progressRevision!==value.progressRevision)this.#clearPreview();
+        if(this.#preview&&compareQualificationCounter(value.progressRevision,this.#preview.reply.applicability.qualificationRevision)>0)this.#clearPreview();
         this.#emit(task,{snapshot:value,fetchedUtcMs:this.clock.now(),availability:value.state==='unavailable'?'disabled':'ready',stale:false,refreshing:false});return Math.max(5000,value.refreshAfterSeconds*1000);
       }
       if(task==='results'){
@@ -106,35 +151,41 @@ export class QualificationService {
         active.refresh.afterEvent=saved.missingBase.length?null:page.next;active.refresh.failureStreak=0;active.refresh.retryAtMs=0;
         await stored(this.db.saveQualificationRefresh({...active.authority,securityScope:active.scope,refresh:active.refresh}));return Math.max(5000,batch.refreshAfterSeconds*1000);
       }
-      if(!active.capabilities.previewEnabled)return Infinity;
-      const input=await active.facts.read();if(this.#active!==active)return Infinity;if(!input){this.#clearPreview();return 5000;}
+      previewRequest=active.previewRequest;active.previewRequest=null;
+      if(!active.capabilities.previewEnabled||!active.capabilities.qualificationEnabled||!previewRequest||!this.#runningSource(previewRequest))return Infinity;
+      const input=await active.facts.refresh();if(this.#active!==active||!this.#runningSource(previewRequest))return Infinity;
+      if(!input)return this.#retryPreview(active,previewRequest,5000);
       const dispatched=this.monotonic(),response=await this.#request('preview',input,active);if(this.#active!==active)return Infinity;
-      if(!response.ok||response.statusCode!==200)return this.#failed(response,active);
+      if(!response.ok||response.statusCode!==200)return this.#retryPreview(active,previewRequest,await this.#failed(response,active));
       const reply=jsonBody(response.body,1048576);if(!isQualificationWire('Preview',reply)||reply.securityScope!==active.scope||reply.requestId!==input.requestId||reply.contextRevision!==input.contextRevision||reply.evidenceRevision!==input.evidenceRevision)throw Error('INVALID_COMPANION_RESPONSE');
       const current=await active.facts.refresh();if(this.#active!==active)return Infinity;
-      const lease:QualificationLease={reply,input,dispatchMonotonicMs:dispatched,authority:active.scope};
-      const cue=qualificationLeaseCue(lease,current,active.scope,this.#revision(active.scope),this.monotonic());
-      if(cue!=='neutral'||reply.outcome==='unknown'&&current?.contextRevision===input.contextRevision){
-        this.clock.clearTimeout(this.#leaseTimer);this.#lease=lease;this.#emit(input.game,{preview:reply});
-        const ttl=Math.min(5000,Date.parse(reply.applicability.expiresAt)-Date.parse(reply.evaluatedAt));
-        this.#leaseTimer=this.clock.setTimeout(()=>{if(this.#lease===lease)this.#clearPreview();},Math.max(0,dispatched+ttl-this.monotonic()));
-      }else this.#clearPreview();
-      if(reply.applicability.requiresQualificationRefresh)active.scheduler.request(input.game);return 5000;
-    }catch{if(this.#active!==active)return Infinity;return this.#failed({ok:false,code:'INVALID_RESPONSE',statusCode:null,retryAfter:null},active);}
+      const preview:QualificationLease={reply,input,dispatchMonotonicMs:dispatched,authority:active.scope};
+      if(this.#states[input.game].snapshot?.securityScope===active.scope&&isFreshQualificationReply(preview,this.monotonic())&&
+        qualificationPreviewApplies(preview,current,active.scope,this.#revision(active.scope))){
+        this.clock.clearTimeout(this.#sampleTimer);this.#preview=preview;this.#emit(input.game,{preview:reply});
+        this.#sample(active,preview);
+      }
+      if(reply.applicability.requiresQualificationRefresh||this.#states[input.game].stale)active.scheduler.request(input.game);
+      return Infinity;
+    }catch{
+      if(this.#active!==active)return Infinity;
+      const delay=await this.#failed({ok:false,code:'INVALID_RESPONSE',statusCode:null,retryAfter:null},active);
+      return task==='preview'?this.#retryPreview(active,previewRequest,delay):delay;
+    }
   }
-  #sample(generation:number):void {
+  #sample(active:Active,preview:QualificationLease,missing=false):void {
     this.#sampleTimer=this.clock.setTimeout(()=>{
-      const active=this.#active;if(!active||generation!==this.#generation)return;
       const sample=async()=>{
-        if(this.#sampling)return;this.#sampling=true;
-        try{const current=await active.facts.read();if(this.#active!==active)return;
-          if(this.#lease&&(!current||current.contextRevision!==this.#lease.input.contextRevision))this.#clearPreview();
-          if(this.#lease&&qualificationLeaseCue(this.#lease,current,active.scope??'',this.#revision(active.scope??''),this.monotonic())==='neutral'&&this.#lease.reply.outcome!=='unknown')this.#clearPreview();
-          if(this.#lease&&this.monotonic()>=this.#lease.dispatchMonotonicMs+5000)this.#clearPreview();
-        }catch{if(this.#active===active)this.#clearPreview();}finally{this.#sampling=false;if(this.#active===active)this.#sample(generation);}
+        try{
+          const current=await active.facts.read();
+          if(this.#preview!==preview)return;
+          if(!current&&!missing)this.#sample(active,preview,true);
+          else if(active.scope&&qualificationPreviewApplies(preview,current,active.scope,this.#revision(active.scope)))this.#sample(active,preview);
+          else this.#clearPreview();
+        }catch{if(this.#preview===preview)this.#clearPreview();}
       };void sample();
     },1000);
   }
-  async retire():Promise<void>{this.#generation++;this.#abort.abort();this.http.abort();this.clock.clearTimeout(this.#sampleTimer);this.clock.clearTimeout(this.#leaseTimer);const active=this.#active;this.#active=null;active?.scheduler.stop();this.#lease=null;for(const game of ['ets2','ats'] as const)this.#emit(game,initialQualificationState(game));await active?.facts.close();}
+  async retire():Promise<void>{this.#generation++;this.#abort.abort();this.http.abort();const active=this.#active;this.#active=null;active?.scheduler.stop();this.clock.clearTimeout(this.#sampleTimer);this.#preview=null;for(const game of ['ets2','ats'] as const)this.#emit(game,initialQualificationState(game));await active?.facts.close();}
   async stop():Promise<void>{this.#stopped=true;await this.retire();this.http.close();}
 }
