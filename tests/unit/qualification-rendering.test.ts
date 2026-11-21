@@ -27,7 +27,7 @@ describe('qualification presentation (REG-009/014/016)',()=>{
     const state={...initialQualificationState('ets2',owner),snapshot,preview,activeJob:true};
     const render=(hardMode:'pass'|'unknown')=>renderToStaticMarkup(React.createElement(QualificationScreenView,{state,hardMode,language:'en',onGame:()=>undefined,onRefresh:()=>undefined}));
     expect(render('unknown')).toContain('Hard Mode audit is not final');
-    expect(render('pass')).toMatch(/data-testid="qualification-rule-hard_mode".*?Observed: <\/span>Yes.*?data-state="pass"/);
+    expect(render('pass')).toMatch(/data-testid="qualification-rule-hard_mode".*?Observed: <\/span>Current settings pass.*?data-state="pass"/);
     expect(render('pass')).not.toContain('Hard Mode audit is not final');
   });
   it.each(['en','ru'] as const)('shows server totals, five named limits and no invented no-job verdict in %s',language=>{

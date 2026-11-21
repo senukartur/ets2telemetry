@@ -7,9 +7,9 @@ import {Card,CardContent,CardHeader,CardTitle} from '../components/ui/card';
 import {qualificationCopy,qualificationNumber,qualificationRuleRows,qualificationKilometres} from './view';
 import {QualificationMedal} from './medal';
 import {useQualification} from './use-qualification';
-import {qualificationGuideCue,qualificationGuideRules} from '../overlay-qualification';
-export function QualificationRules({limits,rules,display,language}:{limits:QualificationWire['Limits'];rules:QualificationWire['Rule'][]|null;display:QualificationWire['TrailerDisplay'][];language:AppLanguage}){
-  const c=qualificationCopy[language];return <div className="qualification-rules">{qualificationRuleRows(limits,rules,display,language).map(row=><div key={row.id} className="qualification-rule" data-testid={`qualification-rule-${row.id}`}>
+import {qualificationCurrentHardMode,qualificationGuideCue} from '../overlay-qualification';
+export function QualificationRules({limits,rules,display,language,currentHardMode}:{limits:QualificationWire['Limits'];rules:QualificationWire['Rule'][]|null;display:QualificationWire['TrailerDisplay'][];language:AppLanguage;currentHardMode?:'pass'|'fail'}){
+  const c=qualificationCopy[language];return <div className="qualification-rules">{qualificationRuleRows(limits,rules,display,language,currentHardMode).map(row=><div key={row.id} className="qualification-rule" data-testid={`qualification-rule-${row.id}`}>
     <strong>{row.label}</strong><div><span className="text-muted-foreground">{c.limits}: </span>{row.limit}{row.observed!==null?<p><span className="text-muted-foreground">{c.observed}: </span>{row.observed}</p>:null}</div>
     {row.result?<div className="qualification-check"><QualificationMedal cue={row.result==='unknown'?'neutral':row.result} label={row.result==='pass'?c.pass:row.result==='fail'?c.fail:c.unknown}/><span>{row.result==='pass'?c.pass:row.result==='fail'?c.fail:c.unknown}</span>{row.reasons.map(reason=><small key={reason}>{reason}</small>)}</div>:null}
   </div>)}</div>;
@@ -31,7 +31,7 @@ export function QualificationScreenView({state,language,onGame,onRefresh,hardMod
       {progress?<><h2>{progress.terminal?c.terminal:`${c.next}: ${progress.nextLevel?.name??c.unavailable}`}</h2>{!progress.terminal?<p className="text-muted-foreground">{c.both}</p>:null}<div className="qualification-progress-grid"><Progress label={c.trips} credited={progress.creditedTrips} required={progress.terminal?null:progress.conditions.requiredTrips} remaining={progress.remainingTrips} language={language}/><Progress distance label={`${c.distance} (${language==='ru'?'км':'km'})`} credited={progress.creditedDistanceM} required={progress.terminal?null:progress.conditions.requiredDistanceM} remaining={progress.remainingDistanceM} language={language}/></div></>:null}
     </CardContent></Card><Card><CardHeader><CardTitle>{c.requirements}</CardTitle></CardHeader><CardContent><p className="text-muted-foreground">{preview?c.provisional:state.activeJob?c.resumeToCheck:c.noJob}</p>
       {preview?<p data-testid="qualification-preview-basis"><strong>{c.assessed}: {preview.assignment?.level.name??c.unavailable}</strong> · {preview.basis==='historical_assignment'?(language==='ru'?'Назначение на фактическое начало рейса':'Assignment at actual trip start'):preview.basis==='current_projection'?(language==='ru'?'Текущие ограничения (предварительный расчёт)':'Current limits (projection)'):c.unavailable}</p>:null}
-      <QualificationRules limits={preview?.assignment?.limits??assignment.limits} rules={preview?qualificationGuideRules(preview,hardMode):null} display={preview?.trailerDisplay??assignment.trailerDisplay} language={language}/>{preview?.eventExempt?<p>{c.exempt}</p>:null}</CardContent></Card></>:null}
+      <QualificationRules limits={preview?.assignment?.limits??assignment.limits} rules={preview?.rules??null} currentHardMode={preview?qualificationCurrentHardMode(preview,hardMode):undefined} display={preview?.trailerDisplay??assignment.trailerDisplay} language={language}/>{preview?.eventExempt?<p>{c.exempt}</p>:null}</CardContent></Card></>:null}
     <p className="text-muted-foreground">{c.notAcceptance}</p>
   </div>;
 }

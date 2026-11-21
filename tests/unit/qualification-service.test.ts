@@ -48,14 +48,18 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
     const root=randomUUID(),jobConfig=job(),checkpoint=new Script(ETS2_A).checkpoint(jobConfig);
     const live={source:{...checkpoint.source,origin:'game' as const},capture:checkpoint.capture,state:checkpoint.data.state};
     const template=fixtures.find(f=>f.schema==='Preview')!.value as QualificationWire['Preview'];
-    let metres='99999',materialVersion='1';
+    let metres='99999',materialVersion='1',missingLocalReads=1,previewFailures=0;
     const f=harness((route,body)=>{
       if(route!=='preview')return Promise.resolve(success(route==='capabilities'?cap:{...snapshot,game:route.endsWith('ats')?'ats':'ets2'}));
+      if(previewFailures>0){previewFailures--;return Promise.resolve({...success({}),statusCode:503});}
       const input=JSON.parse(new TextDecoder().decode(body)) as QualificationWire['PreviewInput'];
       return Promise.resolve(success({...template,requestId:input.requestId,contextRevision:input.contextRevision,evidenceRevision:input.evidenceRevision,
         applicability:{...template.applicability,contextRevision:input.contextRevision,qualificationRevision:snapshot.progressRevision}}));
     },{
-      readQualificationPreview:()=>stored({current:{tripUuid:root,rawTripUuid:root,materialVersion,actualDistance:{availability:'known',metres,support:'whole-trip',final:false}}}),
+      readQualificationPreview:()=>{
+        if(missingLocalReads>0){missingLocalReads--;return stored({current:null});}
+        return stored({current:{tripUuid:root,rawTripUuid:root,materialVersion,actualDistance:{availability:'known',metres,support:'whole-trip',final:false}}});
+      },
       beginQualificationPreview:({pinId})=>stored({pinId,state:'ready',examined:1,projection:{rootTripUuid:root,purpose:'history',facts:{job:jobConfig,opening:{utcMs:1000}}} as import('../../packages/storage/src/upload-projection').UploadProjection}),
       releaseQualificationPreview:({pinId})=>stored({pinId,state:'released',examined:1,projection:null})
     });
@@ -66,8 +70,11 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
       observe('running');await vi.advanceTimersByTimeAsync(10000);
       expect(previews()).toHaveLength(0);
       observe('paused');await vi.advanceTimersByTimeAsync(5000);expect(previews()).toHaveLength(0);
-      observe('running');await vi.advanceTimersByTimeAsync(10000);expect(previews()).toHaveLength(1);
+      observe('running');await vi.advanceTimersByTimeAsync(4000);expect(previews()).toHaveLength(0);expect(missingLocalReads).toBe(0);
+      await vi.advanceTimersByTimeAsync(6000);expect(previews()).toHaveLength(1);
       const first=f.service.get('ets2').preview;expect(first).not.toBeNull();
+      missingLocalReads=1;await vi.advanceTimersByTimeAsync(1000);
+      expect(missingLocalReads).toBe(0);expect(f.service.get('ets2').preview).toEqual(first);
       metres='100000';materialVersion='2';observe('running');await vi.advanceTimersByTimeAsync(20000);
       expect(f.service.get('ets2').preview).toEqual(first);expect(previews()).toHaveLength(1);
       observe('paused');observe('running');await vi.advanceTimersByTimeAsync(10000);
@@ -77,8 +84,11 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
       observe('paused');observe('running');f.service.observe(null);
       const replacement={...live,source:{...live.source,pluginSessionId:randomUUID()}};
       f.service.observe(replacement);await vi.advanceTimersByTimeAsync(10000);expect(previews()).toHaveLength(2);
-      metres='100002';f.service.refresh('ets2');await vi.advanceTimersByTimeAsync(10000);
-      expect(previews()).toHaveLength(3);expect(f.service.get('ets2').preview).not.toBeNull();
+      metres='100002';previewFailures=2;
+      f.service.refresh('ets2');await vi.advanceTimersByTimeAsync(30000);
+      expect(previews()).toHaveLength(4);expect(f.service.get('ets2').preview).toBeNull();
+      f.service.refresh('ets2');await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(5);expect(f.service.get('ets2').preview).not.toBeNull();
       f.service.observe(null);expect(f.service.get('ets2').preview).toBeNull();
     }finally{await f.service.stop();}
   });

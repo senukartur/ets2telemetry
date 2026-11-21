@@ -1,5 +1,5 @@
 import type {HardModeAssessment} from '../../../packages/contracts/src/hard-mode';
-import {compareQualificationCounter,compareQualificationDecimal,type QualificationCue,type QualificationPreview,type QualificationPreviewInput,type QualificationWire} from '../../../packages/contracts/src/qualification';
+import {compareQualificationCounter,compareQualificationDecimal,type QualificationCue,type QualificationPreview,type QualificationPreviewInput} from '../../../packages/contracts/src/qualification';
 export interface QualificationLease {reply:QualificationPreview;input:QualificationPreviewInput;dispatchMonotonicMs:number;authority:string}
 export const sanitizeOverlayQualification=(value:unknown):QualificationCue=>value==='pass'||value==='fail'?value:'neutral';
 /** Accept a fresh response only within the server's request lifetime. */
@@ -25,20 +25,18 @@ export function qualificationPreviewApplies(lease:QualificationLease,current:Qua
   return true;
 }
 
-export function qualificationGuideRules(preview:QualificationPreview,hardMode:HardModeAssessment['state']):QualificationWire['Rule'][] {
-  if(hardMode==='unknown'||preview.eventExempt)return preview.rules;
-  const pending=preview.rules.find(rule=>rule.rule==='hard_mode'&&rule.required&&rule.result==='unknown'&&rule.reasons.includes('hard_mode_not_final'));
-  if(pending?.rule!=='hard_mode')return preview.rules;
-  return preview.rules.map(rule=>rule===pending
-    ? {...pending,result:hardMode,observed:hardMode==='pass'?'qualified':'not-qualified',reasons:[]}
-    : rule);
+export function qualificationCurrentHardMode(preview:QualificationPreview,hardMode:HardModeAssessment['state']):'pass'|'fail'|undefined {
+  if(hardMode==='unknown'||preview.eventExempt)return;
+  const rule=preview.rules.find(rule=>rule.rule==='hard_mode');
+  if(rule?.required&&rule.result==='unknown'&&rule.reasons.includes('hard_mode_not_final'))return hardMode;
 }
 
 export function qualificationGuideCue(preview:QualificationPreview,hardMode:HardModeAssessment['state']):QualificationCue {
   if(!preview.assignment)return 'neutral';
-  const rules=qualificationGuideRules(preview,hardMode);
-  if(preview.outcome==='fail'||rules.some(rule=>rule.result==='fail'))return 'fail';
-  if(preview.outcome==='pass'||(rules!==preview.rules&&rules.every(rule=>rule.result==='pass')&&
-    preview.reasons.every(reason=>reason==='hard_mode_not_final')))return 'pass';
+  if(preview.outcome!=='unknown')return preview.outcome;
+  const currentHardMode=qualificationCurrentHardMode(preview,hardMode);
+  if(currentHardMode==='fail')return 'fail';
+  if(currentHardMode==='pass'&&preview.rules.every(rule=>rule.rule==='hard_mode'||rule.result==='pass')&&
+    preview.reasons.every(reason=>reason==='hard_mode_not_final'))return 'pass';
   return 'neutral';
 }

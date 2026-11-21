@@ -11,7 +11,8 @@ import {QualificationPreviewFacts,qualificationSourceKey,resumedQualificationSou
 import {QualificationScheduler,qualificationRetry,qualificationClock,type QualificationClock,type QualificationTask} from './scheduler';
 import type {QualificationTransport,QualificationRoute,QualificationHttpResult} from './http';
 export type QualificationStorage=Pick<StorageClient,QualificationCommandName>&PreviewStorage;
-interface Active {authority:QualificationAuthority;owner:DashboardOwner;token:string;scope:string|null;capabilities:QualificationWire['Capabilities']|null;refresh:QualificationRefresh;facts:QualificationPreviewFacts;scheduler:QualificationScheduler;resultLimit:number;resultsHeld:boolean;previewSource:string|null}
+interface PreviewRequest {source:string;retried:boolean}
+interface Active {authority:QualificationAuthority;owner:DashboardOwner;token:string;scope:string|null;capabilities:QualificationWire['Capabilities']|null;refresh:QualificationRefresh;facts:QualificationPreviewFacts;scheduler:QualificationScheduler;resultLimit:number;resultsHeld:boolean;previewRequest:PreviewRequest|null}
 /** Companion lifecycle is independent of recorder admission, upload requests and durable receipts. */
 export class QualificationService {
   #active:Active|null=null;#states={ets2:initialQualificationState('ets2'),ats:initialQualificationState('ats')};#generation=0;#abort=new AbortController();
@@ -36,9 +37,9 @@ export class QualificationService {
     const resumed=resumedQualificationSource(this.#live,live);
     this.#live=live;
     const active=this.#active;if(!active)return;
-    active.facts.observe(live);
-    if(active.previewSource&&(!live?.state.configuration.job.available||active.previewSource!==qualificationSourceKey(live)))active.previewSource=null;
-    if(this.#preview&&!active.facts.hasCurrent)this.#clearPreview();
+    const changed=active.facts.observe(live);
+    if(active.previewRequest&&(!live?.state.configuration.job.available||active.previewRequest.source!==qualificationSourceKey(live)))active.previewRequest=null;
+    if(this.#preview&&changed)this.#clearPreview();
     for(const game of ['ets2','ats'] as const){
       const activeJob=live?.source.game===game&&live.state.configuration.job.available;
       if(this.#states[game].activeJob!==activeJob)this.#emit(game,{activeJob});
@@ -46,8 +47,16 @@ export class QualificationService {
     if(resumed&&live?.state.configuration.job.available)this.#requestPreview(active,live);
   }
   #requestPreview(active:Active,live:QualificationLive):void{
-    active.previewSource=qualificationSourceKey(live);
+    active.previewRequest={source:qualificationSourceKey(live),retried:false};
     active.scheduler.request('preview');
+  }
+  #runningSource(request:PreviewRequest):boolean{
+    return this.#live?.state.simulation==='running'&&this.#live.state.configuration.job.available&&request.source===qualificationSourceKey(this.#live);
+  }
+  #retryPreview(active:Active,request:PreviewRequest|null,delay:number):number{
+    if(this.#active!==active||active.previewRequest||!request||request.retried||!Number.isFinite(delay)||!this.#runningSource(request))return Infinity;
+    active.previewRequest={...request,retried:true};
+    return delay;
   }
   #clearPreview():void{
     this.clock.clearTimeout(this.#sampleTimer);
@@ -60,7 +69,7 @@ export class QualificationService {
     const owner:DashboardOwner={origin:registration.origin,accountId:registration.accountId,companyId:registration.companyId,identityEpoch:registration.identityEpoch};
     const generation=++this.#generation;this.#abort=new AbortController();
     const facts=new QualificationPreviewFacts(this.db,authority),scheduler=new QualificationScheduler(task=>this.#run(task,generation),this.clock);
-    const active:Active={authority,owner,token,scope:null,capabilities:null,refresh:{afterEvent:null,retryAtMs:0,failureStreak:0,suspended:false},facts,scheduler,resultLimit:25,resultsHeld:false,previewSource:null};this.#active=active;facts.observe(this.#live);
+    const active:Active={authority,owner,token,scope:null,capabilities:null,refresh:{afterEvent:null,retryAtMs:0,failureStreak:0,suspended:false},facts,scheduler,resultLimit:25,resultsHeld:false,previewRequest:null};this.#active=active;facts.observe(this.#live);
     for(const game of ['ets2','ats'] as const)this.#emit(game,{...initialQualificationState(game,owner),refreshing:true,
       activeJob:this.#live?.source.game===game&&this.#live.state.configuration.job.available});
     try{
@@ -90,6 +99,7 @@ export class QualificationService {
     const active=this.#active;if(!active||generation!==this.#generation)return Infinity;
     if(active.refresh.suspended)return Infinity;
     if(active.refresh.retryAtMs>this.clock.now())return active.refresh.retryAtMs-this.clock.now();
+    let previewRequest:PreviewRequest|null=null;
     try{
       if(task==='capabilities'){
         const response=await this.#request('capabilities',undefined,active);if(this.#active!==active)return Infinity;
@@ -100,7 +110,13 @@ export class QualificationService {
         active.scope=value.securityScope;active.capabilities=value;active.refresh.suspended=false;active.refresh.failureStreak=0;active.refresh.retryAtMs=0;
         for(const game of ['ets2','ats'] as const){if(value.qualificationEnabled&&value.games.includes(game))active.scheduler.request(game);else this.#emit(game,{availability:'disabled',stale:true,refreshing:false});}
         if(value.resultsEnabled)active.scheduler.request('results');
-        if(!value.previewEnabled||!value.qualificationEnabled||this.#preview&&!value.games.includes(this.#preview.input.game))this.#clearPreview();
+        if(!value.previewEnabled||!value.qualificationEnabled){
+          active.previewRequest=null;
+          this.#clearPreview();
+        }else{
+          if(active.previewRequest)active.scheduler.request('preview');
+          if(this.#preview&&!value.games.includes(this.#preview.input.game))this.#clearPreview();
+        }
         return 60000;
       }
       if(!active.scope||!active.capabilities)return Infinity;
@@ -135,13 +151,12 @@ export class QualificationService {
         active.refresh.afterEvent=saved.missingBase.length?null:page.next;active.refresh.failureStreak=0;active.refresh.retryAtMs=0;
         await stored(this.db.saveQualificationRefresh({...active.authority,securityScope:active.scope,refresh:active.refresh}));return Math.max(5000,batch.refreshAfterSeconds*1000);
       }
-      const source=active.previewSource;active.previewSource=null;
-      const stillRunning=()=>this.#live?.state.simulation==='running'&&source===qualificationSourceKey(this.#live);
-      if(!active.capabilities.previewEnabled||!active.capabilities.qualificationEnabled||!stillRunning())return Infinity;
-      const input=await active.facts.refresh();if(this.#active!==active||!stillRunning())return Infinity;
-      if(!input){this.#clearPreview();return Infinity;}
+      previewRequest=active.previewRequest;active.previewRequest=null;
+      if(!active.capabilities.previewEnabled||!active.capabilities.qualificationEnabled||!previewRequest||!this.#runningSource(previewRequest))return Infinity;
+      const input=await active.facts.refresh();if(this.#active!==active||!this.#runningSource(previewRequest))return Infinity;
+      if(!input)return this.#retryPreview(active,previewRequest,5000);
       const dispatched=this.monotonic(),response=await this.#request('preview',input,active);if(this.#active!==active)return Infinity;
-      if(!response.ok||response.statusCode!==200){await this.#failed(response,active);return Infinity;}
+      if(!response.ok||response.statusCode!==200)return this.#retryPreview(active,previewRequest,await this.#failed(response,active));
       const reply=jsonBody(response.body,1048576);if(!isQualificationWire('Preview',reply)||reply.securityScope!==active.scope||reply.requestId!==input.requestId||reply.contextRevision!==input.contextRevision||reply.evidenceRevision!==input.evidenceRevision)throw Error('INVALID_COMPANION_RESPONSE');
       const current=await active.facts.refresh();if(this.#active!==active)return Infinity;
       const preview:QualificationLease={reply,input,dispatchMonotonicMs:dispatched,authority:active.scope};
@@ -150,21 +165,22 @@ export class QualificationService {
         this.clock.clearTimeout(this.#sampleTimer);this.#preview=preview;this.#emit(input.game,{preview:reply});
         this.#sample(active,preview);
       }
-      if(reply.applicability.requiresQualificationRefresh)active.scheduler.request(input.game);
+      if(reply.applicability.requiresQualificationRefresh||this.#states[input.game].stale)active.scheduler.request(input.game);
       return Infinity;
     }catch{
       if(this.#active!==active)return Infinity;
       const delay=await this.#failed({ok:false,code:'INVALID_RESPONSE',statusCode:null,retryAfter:null},active);
-      return task==='preview'?Infinity:delay;
+      return task==='preview'?this.#retryPreview(active,previewRequest,delay):delay;
     }
   }
-  #sample(active:Active,preview:QualificationLease):void {
+  #sample(active:Active,preview:QualificationLease,missing=false):void {
     this.#sampleTimer=this.clock.setTimeout(()=>{
       const sample=async()=>{
         try{
           const current=await active.facts.read();
           if(this.#preview!==preview)return;
-          if(active.scope&&qualificationPreviewApplies(preview,current,active.scope,this.#revision(active.scope)))this.#sample(active,preview);
+          if(!current&&!missing)this.#sample(active,preview,true);
+          else if(active.scope&&qualificationPreviewApplies(preview,current,active.scope,this.#revision(active.scope)))this.#sample(active,preview);
           else this.#clearPreview();
         }catch{if(this.#preview===preview)this.#clearPreview();}
       };void sample();
