@@ -533,33 +533,33 @@ describe('completeness intervals and timeline (J7, J13)', () => {
 
 describe('one-second samples (J14; REG-009, REG-017)', () => {
   const COLUMNS = [{label: 'Time'}, {label: 'Speed'}, {label: 'Fuel'}, {label: 'Gear'}, {label: 'Engine RPM'}, {label: 'Odometer'}, {label: 'Estimated range'},
-    {label: 'SDK average consumption', note: 'SDK mean, not a trip average'}, {label: 'Game time'}, {label: 'World position', note: 'game-world coordinates, not GPS'}];
+    {label: 'SDK average consumption', note: 'SDK mean, not a trip average'}, {label: 'Game time'}, {label: 'World position', note: 'game-world coordinates, not GPS'}, {label: 'Cargo damage'}];
   const OTHER_CLOCK = '2c000000-0000-4000-8000-00000000000b';
   const sample = (id: string, second: number, rest: Partial<JournalSample> = {}, clock = CLOCK): JournalSample => ({powertrain: 'diesel', id, tripUuid: T.delivered, utcMs: BASE_UTC + 4_000 + second * 1_000,
     sourceClockId: clock, monotonicNs: (5_000_000_000_000n + BigInt(second) * 1_000_000_000n + 250_000_000n).toString(), gameTime: null, speed: NO, fuel: NO,
     averageConsumption: NO, estimatedRange: NO, engineRpm: NO, gear: NO, odometer: NO, position: NO, ...rest});
   // The delivered anchor's samples (seconds 1, 2 and 4), then a restarted source on another clock.
   const page: JournalSamplePage = {database: DATABASE, nextCursor: '5', samples: [
-    sample('2', 1, {speed: value(22.25), fuel: value(410.5), averageConsumption: value(32.5), estimatedRange: value(1_263_000), engineRpm: value(1_450.5), gear: value(12),
+    sample('2', 1, {cargoDamage: 0.0125, speed: value(22.25), fuel: value(410.5), averageConsumption: value(32.5), estimatedRange: value(1_263_000), engineRpm: value(1_450.5), gear: value(12),
       odometer: value(1_234_590), position: value({x: -31_212.25, y: 42.5, z: 18_801.5}), gameTime: {minutes: value(12_345), clockId: CLOCK}}),
-    sample('3', 2, {speed: value(0), fuel: {available: false, reason: 'not-supported'}, gear: value(0)}),
+    sample('3', 2, {cargoDamage: 0, speed: value(0), fuel: {available: false, reason: 'not-supported'}, gear: value(0)}),
     sample('4', 4, {speed: {available: false, reason: 'invalid'}, engineRpm: value(0)}),
     sample('5', 4, {gear: value(-1), averageConsumption: value(0)}, OTHER_CLOCK)]};
   it('shows the samples with a no-samples separator and a source restart in metric', () => {
     expect(journalSampleText(page, 'ets2', {units: DEFAULT, timeZone: ZONE})).toEqual({columns: COLUMNS, empty: null, hasNext: true, rows: [
       {kind: 'sample', key: '2', time: '2026-10-11 02:00:05', speed: '80.1 km/h', fuel: '410.5 L', consumption: '32.5 L/100 km', range: '1263.0 km', rpm: '1451 rpm', gear: '12',
-        odometer: '1234.6 km', gameTime: 'Day 9, 13:45', position: 'x -31212.3, y 42.5, z 18801.5'},
+        odometer: '1234.6 km', gameTime: 'Day 9, 13:45', position: 'x -31212.3, y 42.5, z 18801.5', cargoDamage: '1.25%'},
       {kind: 'sample', key: '3', time: '2026-10-11 02:00:06', speed: '0.0 km/h', fuel: 'unavailable (not provided by the game)', consumption: 'unavailable (not observed)',
         range: 'unavailable (not observed)', rpm: 'unavailable (not observed)', gear: 'N', odometer: 'unavailable (not observed)', gameTime: 'unavailable (not observed)',
-        position: 'unavailable (not observed)'},
+        position: 'unavailable (not observed)', cargoDamage: '0%'},
       {kind: 'gap', key: 'gap-4', text: 'no samples for 1 s'},
       {kind: 'sample', key: '4', time: '2026-10-11 02:00:08', speed: 'unavailable (invalid reading)', fuel: 'unavailable (not observed)', consumption: 'unavailable (not observed)',
         range: 'unavailable (not observed)', rpm: '0 rpm', gear: 'unavailable (not observed)', odometer: 'unavailable (not observed)', gameTime: 'unavailable (not observed)',
-        position: 'unavailable (not observed)'},
+        position: 'unavailable (not observed)', cargoDamage: 'unavailable (not observed)'},
       {kind: 'restart', key: 'restart-5', text: 'source restarted'},
       {kind: 'sample', key: '5', time: '2026-10-11 02:00:08', speed: 'unavailable (not observed)', fuel: 'unavailable (not observed)', consumption: '0.0 L/100 km',
         range: 'unavailable (not observed)', rpm: 'unavailable (not observed)', gear: 'R1', odometer: 'unavailable (not observed)', gameTime: 'unavailable (not observed)',
-        position: 'unavailable (not observed)'}]});
+        position: 'unavailable (not observed)', cargoDamage: 'unavailable (not observed)'}]});
   });
   it('converts samples to US customary, with no mpg value for zero consumption', () => {
     const rows = journalSampleText(page, 'ets2', {units: SWAPPED, timeZone: ZONE}).rows.filter(row => row.kind === 'sample');
@@ -574,7 +574,7 @@ describe('one-second samples (J14; REG-009, REG-017)', () => {
       engineRpm: value(0), gear: value(0), position: value({x: 0, y: 0, z: 0}), gameTime: {minutes: value(0), clockId: CLOCK}});
     expect(journalSampleText({database: DATABASE, nextCursor: null, samples: [zero]}, 'ats', {timeZone: ZONE}).rows).toEqual([{kind: 'sample', key: '9',
       time: '2026-10-11 02:00:05', speed: '0.0 mph', fuel: '0.0 US gal', consumption: 'unavailable (not provided by the game)', range: 'unavailable (invalid reading)', rpm: '0 rpm',
-      gear: 'N', odometer: 'unavailable (not observed)', gameTime: 'Day 1, 00:00', position: 'x 0.0, y 0.0, z 0.0'}]);
+      gear: 'N', odometer: 'unavailable (not observed)', gameTime: 'Day 1, 00:00', position: 'x 0.0, y 0.0, z 0.0', cargoDamage: 'unavailable (not observed)'}]);
     expect(journalSampleText({database: DATABASE, nextCursor: null, samples: []}, 'ats')).toEqual({columns: COLUMNS, rows: [], empty: 'No one-second samples were recorded for this trip.',
       hasNext: false});
   });

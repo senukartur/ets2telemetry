@@ -108,7 +108,7 @@ describe('cargo classification in game-shaped history (REG-003/005/006/008/013/0
       gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, startedUtcMs: 1000, recordingCompleteness: 'complete'}]}));
     ok(storage.close());
     const upgraded = await ws.open({purpose: 'history'});
-    expect(upgraded.summary).toMatchObject({schemaVersion: 12, migratedFrom: 11});
+    expect(upgraded.summary).toMatchObject({schemaVersion: 13, migratedFrom: 11});
     expect(ok(upgraded.journalTrip(tripUuid)).trip.cargoClassification).toBeUndefined();
     expect(ok(upgraded.fillCargoClassification({game: 'ets2', pluginSessionId: script.session, tripUuid, cargoId, generation,
       opening: 'event', boundary: message.data.eventSeq, classification: cargo}))).toBe('retired');

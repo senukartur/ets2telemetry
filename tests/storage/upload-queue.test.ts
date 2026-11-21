@@ -68,6 +68,41 @@ async function complete(client:Storage|StorageClient,input:{tripUuid:string;regi
   expect(work.status).toBe('complete');return workId;
 }
 const response=(eventId:string,receiptId=randomUUID(),status='stored')=>new TextEncoder().encode(JSON.stringify({contract:{major:1,minor:0},eventId,receiptId,status,firstReceivedAtUtcMs:5000}));
+
+it.each([
+  ['delivered', {available: true, value: 0.025, unit: 'fraction'}, 'trip.completed'],
+  ['delivered', {available: true, value: 0, unit: 'fraction'}, 'trip.completed'],
+  ['delivered', {available: false, reason: 'not-observed', unit: 'fraction'}, 'trip.completed'],
+  ['cancelled', {available: false, reason: 'not-observed', unit: 'fraction'}, 'trip.cancelled'],
+  ['none', {available: false, reason: 'not-observed', unit: 'fraction'}, 'trip.closed']
+] as const)('REG-004/005/009 sends terminal cargo damage from %s evidence and freezes it across retries (%j)', async (outcome, expected, type) => {
+  const storage = await ws.open({purpose: 'history'}), source = await setup(storage);
+  const unavailable = {available: false, reason: 'not-observed'} as const;
+  ok(storage.appendSamples(source.s.session, [{tripUuid: source.tripUuid, sourceClockId: source.s.clockId, monotonicNs: '1001000000000',
+    utcMs: 1500, gameTime: null, speed: unavailable, fuel: unavailable, averageConsumption: unavailable, estimatedRange: unavailable,
+    engineRpm: unavailable, gear: unavailable, odometer: unavailable, position: unavailable, cargoDamage: 0.875}]));
+
+  const delivery = r.delivered();
+  if (delivery.type !== 'job.delivered') throw new Error('Expected delivered fixture');
+  const record = outcome === 'delivered' ? {...delivery, cargoDamage: expected} : outcome === 'cancelled' ? r.cancelled()
+    : r.jobConfigured(job({cargoId: {available: true, value: 'replacement-cargo'}}));
+  const message = game(source.s.event(record));
+  ok(storage.commitEvent({message, effects: [{kind: 'trip.close', tripUuid: source.tripUuid, outcome,
+    ...(outcome === 'none' ? {closeReason: 'different-job'} as const : {closeReason: 'outcome', outcomeEvent: 'this-event'} as const),
+    recordingCompleteness: 'partial', endedUtcMs: 2000}]}));
+  const workId = await complete(storage, source);
+  const frozen = ok(storage.freezeUploadMaterialization({workId, producerVersion: 'test', createdUtcMs: 2000}));
+  const claim = () => ok(storage.claimUploadAttempt({attemptId: randomUUID(), registrationId: source.registrationId, expectedVersion: '1', mode: 'any', nowMs: 5000}));
+  const first = claim();
+  expect(first).toMatchObject({status: 'claimed', eventId: frozen.eventId});
+  const payload: unknown = JSON.parse(Buffer.from(first.payload!).toString());
+  expect(validateUploadEnvelope(payload)).toBe(true);
+  expect(payload).toMatchObject({type, source: {tripId: source.tripUuid}, snapshot: {cargoDamage: expected}});
+  expect(payload).not.toHaveProperty('snapshot.samples');
+  ok(storage.recordUploadAttemptOutcome({attemptId: first.attemptId!, kind: 'retry', retryAtMs: 5000, nowMs: 5000}));
+  expect(claim()).toMatchObject({status: 'claimed', eventId: first.eventId, payload: first.payload});
+});
+
 function schedulerTurns(){
   let now=1000,pending:{run:()=>void;at:number}|undefined,scheduled:(()=>void)|undefined;
   const time:UploadClock={now:()=>now,random:()=>.5,schedule(run,ms){pending={run,at:now+ms};scheduled?.();return run;},cancel(id){if(pending?.run===id)pending=undefined;}};

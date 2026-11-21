@@ -164,7 +164,8 @@ export function listSamples(conn: StorageConnection, scope: {tripUuid: string} |
       id: String(r.id), tripUuid: logicalUuid ?? tripUuid(r.trip_ref), utcMs: toSafeNumber(r.utc_ms), sourceClockId: clock(r.source_clock_ref), monotonicNs: String(r.monotonic_ns),
       gameTime: r.game_clock_ref === null ? null : {minutes, clockId: clock(r.game_clock_ref)},
       speed: field('speed'), fuel: field('fuel'), averageConsumption: field('averageConsumption'), estimatedRange: field('estimatedRange'),
-      engineRpm: field('engineRpm'), gear: field('gear'), odometer: field('odometer'), position
+      engineRpm: field('engineRpm'), gear: field('gear'), odometer: field('odometer'), position,
+      ...(r.cargo_damage_fraction != null ? {cargoDamage: toReal(r.cargo_damage_fraction)} : {})
     };
   });
 }

@@ -91,8 +91,12 @@ async function main() {
       check(storage.commitEvent({message: toll, effects: [{kind: 'event.attribute', tripUuid: PAGING_TRIP, attribution: 'trip'},
         {kind: 'completeness.add', interval: {tripUuid: PAGING_TRIP, ...(boundaryIntervals[i] ?? {kind: 'discontinuity', detail: {cause: 'truck-change', annotation: true, atEventSeq}})}}]}), `paging toll ${atEventSeq}`);
     }
+    const signed = variant === '--ui-signed', cargoDamage = [0, 0.125, undefined, 0.25];
     check(storage.appendSamples(PAGING_SESSION, Array.from({length: PAGING_SAMPLES}, (_, second) =>
-      seedSample(script, PAGING_TRIP, second, PAGING_UTC + 200_000 + second * 1_000, {speed: {available: true, value: variant === '--ui-signed' ? [-20, 0, 20][second % 3] : 20 + (second % 5)}}))), 'paging samples');
+      seedSample(script, PAGING_TRIP, second, PAGING_UTC + 200_000 + second * 1_000, {
+        speed: {available: true, value: signed ? [-20, 0, 20][second % 3] : 20 + (second % 5)},
+        ...(signed && cargoDamage[second] !== undefined ? {cargoDamage: cargoDamage[second]} : {})
+      }))), 'paging samples');
     process.stdout.write(JSON.stringify({trips: 8 + fillers.length + 2,logicalTripUuid:logicalUuid, fillers: fillers.length, pagingTolls: PAGING_TOLLS, pagingSamples: PAGING_SAMPLES,
       elapsedMs: Math.round(performance.now() - started)}) + '\n');
   } finally {

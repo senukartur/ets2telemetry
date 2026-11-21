@@ -4,7 +4,7 @@ ET-013 adds the local history database: a SQLite file written through [better-sq
 
 Status (October 15, 2026): PR-1 added the in-process storage core in [packages/storage](../packages/storage) and its tests. PR-2 runs it in the storage worker of the telemetry utilityProcess, opens the production database at service start ([below](#history-database-in-the-telemetry-service)) and measured its size ([disk budgets](#disk-budgets)). The desktop application stays on protocol v0, records nothing and sends no ACK; recording starts with ET-015a. ET-006b PR-1 adds a [durable sink](#durable-sink-for-protocol-v1-ingestion-et-006b) for protocol v1 ingestion that only tests use with temporary synthetic databases; production durable delivery stays off. See [ET-013 validation](validation/et-013.md) for the checks performed.
 
-Current schema is **12**, with [recorded cargo classifications](#schema-version-12-et-120) and [retained qualification snapshots](#qualification-snapshots-schema-11).
+Current schema is **13**, with nullable cargo damage on trip samples, [recorded cargo classifications](#schema-version-12-et-120) and [retained qualification snapshots](#qualification-snapshots-schema-11).
 
 The agreed [Dashboard upload specification](dashboard-upload.md#durable-local-state-and-transaction-contract) defines synchronization metadata. Schema 5 prepares immutable private projection copies; schema 6 adds local ownership, discovery, freezing and delivery state; schema 7 retains checkpoint trailer baselines; schema 8 adds HaulMP game mode support; schema 9 records trip membership decisions and per-session profile boundaries; schema 10 adds the logical trip's distance and fuel engine and its ledger flags. Network upload remains a future extension. Raw recorder reads and logical Journal snapshots retain their existing contracts.
 
@@ -72,7 +72,7 @@ The schema text is frozen in [schema-v1.ts](../packages/storage/src/sqlite/schem
 | `event_amounts`, `job_deliveries` | Money of revenue, penalty, fine, toll, ferry and train events, and delivery details |
 | `trips` | Project-generated trip UUID, game, game-mode evidence, configuration references, outcome, close reason, recording completeness and times |
 | `trip_trailers`, `event_attributions`, `completeness_intervals` | Trip trailers, per-event trip attribution, and known missing or discontinuous intervals |
-| `samples` | One-second samples with numeric session, trip and clock references |
+| `samples` | One-second samples with numeric session, trip and clock references. `cargo_damage_fraction` is nullable and accepts 0 through 1. Migration `0013-sample-cargo-damage` adds the column after a verified backup. Existing rows have no observed value. |
 
 Conventions (OD-3, OD-6, OD-7):
 

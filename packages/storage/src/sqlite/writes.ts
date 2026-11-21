@@ -468,7 +468,7 @@ function availability(input: unknown): Available<unknown> {
   return o as Available<unknown>;
 }
 /** Validates one sample and returns its column values; nothing is written for a batch with any invalid sample. */
-function sampleColumns(row: SampleInput): {trip: string | null; clock: string; gameClock: string | null; monotonic: bigint; values: unknown[]} {
+function sampleColumns(row: SampleInput, recordsCargoDamage: boolean): {trip: string | null; clock: string; gameClock: string | null; monotonic: bigint; values: unknown[]} {
   if (typeof row !== 'object' || row === null || !isUuid(row.sourceClockId)) fail('INVALID_INPUT');
   if(row.recording!==undefined){
     const evidence=row.recording;
@@ -512,6 +512,11 @@ function sampleColumns(row: SampleInput): {trip: string | null; clock: string; g
     }
   }
   values.push(BigInt(notSupported), BigInt(invalid));
+  if (row.cargoDamage !== undefined) {
+    const damage = finiteNumber(row.cargoDamage);
+    if (!recordsCargoDamage || row.tripUuid == null || damage < 0 || damage > 1) fail('INVALID_INPUT');
+  }
+  if (recordsCargoDamage) values.push(row.cargoDamage ?? null);
   return {trip: row.tripUuid ?? null, clock: row.sourceClockId, gameClock: game === null ? null : game.clockId, monotonic, values};
 }
 const SAMPLE_COLUMNS = ['utc_ms', 'monotonic_ns', ...SAMPLE_FIELDS.flatMap(f => f.columns), 'not_supported_mask', 'invalid_mask'];
@@ -525,11 +530,13 @@ export function appendSamples(conn: StorageConnection, pluginSessionId: string, 
   if (!Array.isArray(rows) || rows.length > MAX_SAMPLE_BATCH) fail('INVALID_INPUT');
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.uniqueSeconds !== undefined && typeof options.uniqueSeconds !== 'boolean')) fail('INVALID_INPUT');
   const uniqueSeconds = options.uniqueSeconds === true;
-  const prepared = rows.map(sampleColumns);
+  const recordsCargoDamage = conn.summary.schemaVersion >= 13;
+  const prepared = rows.map(row => sampleColumns(row, recordsCargoDamage));
   return transact(conn, db => {
     const session = sessionByUuid(db, pluginSessionId), trips = new Map<string, bigint>();
     const c: EffectContext = {db, session, game: session.game, now: conn.now()};
-    const sql = insert('samples', ['plugin_session_ref', 'trip_ref', 'source_clock_ref', 'game_clock_ref', ...SAMPLE_COLUMNS]);
+    const sql = insert('samples', ['plugin_session_ref', 'trip_ref', 'source_clock_ref', 'game_clock_ref', ...SAMPLE_COLUMNS,
+      ...(recordsCargoDamage ? ['cargo_damage_fraction'] : [])]);
     // The last accepted source second per source clock UUID, seeded with the session's latest stored row.
     const lastSecond = new Map<string, bigint>();
     if (uniqueSeconds) {

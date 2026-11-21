@@ -1306,6 +1306,11 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           });
         });
         assert.equal(signed, true, 'UI_SIGNED_CHART_SVG'); record.flags.signedChart = true;
+        const damage = dashboard.getByTestId('trip.damage-chart');
+        assert.deepEqual(await damage.locator('[data-damage]').evaluateAll(points => points.map(point => Number(point.getAttribute('data-damage')))), [0, 0.125, 0.25]);
+        assert.equal(await damage.getByTestId('trip.damage-chart.segment').count(), 2);
+        assert.equal(await damage.locator('[data-testid="trip.damage-chart.gap"][data-kind="no-cargo-damage"]').count(), 2);
+        assert.match(await damage.getByTestId('trip.damage-chart.gaps').innerText(), language === 'en' ? /no cargo damage reading/ : /нет показаний повреждения груза/);
         await dashboard.getByTestId('trip.chart').scrollIntoViewIfNeeded({timeout: 5000});
         assert.equal(await dashboard.getByTestId('trip.chart').locator('svg').evaluate(node => {const box = node.getBoundingClientRect(); return box.top >= 84 && box.bottom <= globalThis.innerHeight && box.left >= 0 && box.right <= globalThis.innerWidth;}), true, 'UI_SIGNED_CHART_NOT_VISIBLE');
         await save('samples', language, size);
@@ -1314,6 +1319,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached', timeout: 5000});
         await dashboard.getByTestId('trip.chart').locator('svg').waitFor({state: 'attached', timeout: 5000});
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
+        assert.equal(await damage.locator('svg').count(), 0, 'UI_DAMAGE_CHART_UNAVAILABLE_ON_OLDER_SAMPLE_PAGE');
         await dashboard.getByTestId('journal-back').click();
         Object.assign(record.flags, {syntheticBanner: true, pageReturn: true, chartBounded: true, rawTabs: true, noPlannedSearch: true, tripRegions: true, tableReadable: true});
       } else if (config.uiCase === 'settings') {

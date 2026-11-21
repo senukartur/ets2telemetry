@@ -4,6 +4,7 @@ import {compatibleContinuation} from '../../../packages/telemetry-core/src/trips
 import type {ProfileObserverStatus} from './profile-observation';
 import {truckKey} from '../../../packages/telemetry-core/src/derived';
 import {classifyStep} from '../../../packages/telemetry-core/src/trips/accounting';
+import {jobKey} from '../../../packages/telemetry-core/src/trips/identity';
 // The trip recorder of protocol v1 ingestion (ET-015a, R2): a DurableSink that owns the ET-014 TripState and commits
 // each event or gap together with its trip effects in one storage transaction, so the ACK pipeline acknowledges an item
 // only after its effects are stored. DurableDelivery stays the only FIFO and runs one command at a time; the recorder
@@ -599,6 +600,13 @@ export class TripRecorderSink implements DurableSink {
     if (sampled.row) {
       if(!replayDrained)sampled.row.tripUuid=null;
       if (current.available && replayDrained && sampled.row.tripUuid) {
+        const damage = message.data.state.cargoDamage, trip = this.state.games[message.source.game].trip;
+        // Use the snapshot's job only after the FIFO has applied its event prefix. An earlier committed trip may
+        // still own the sample while a replacement job or its terminal event is waiting to be applied.
+        const eventsApplied = BigInt(session.processedThrough) + 1n >= BigInt(message.data.status.delivery.nextEventSeq);
+        if (damage?.available && eventsApplied && trip?.pluginSessionId === message.source.pluginSessionId && trip.jobKey === jobKey(current.value)) {
+          sampled.row.cargoDamage = damage.value;
+        }
         const normalized = normalizeV1State(message.data.state, message.data.status), t = normalized.truck;
         sampled.row.recording = {job: structuredClone(current.value), processInstanceId: message.source.processInstanceId,
           truck: t.state === 'value' && t.value.brand.id.state === 'value' && t.value.model.id.state === 'value' && t.value.licensePlate.state === 'value' ? truckKey(normalized) : null,

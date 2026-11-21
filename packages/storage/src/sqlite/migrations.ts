@@ -41,6 +41,9 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
     db.exec(`ALTER TABLE trips ADD COLUMN cargo_classification TEXT CHECK (cargo_classification IS NULL OR
       (length(cargo_classification) <= 1024 AND json_valid(cargo_classification) AND json_type(cargo_classification) = 'object'));
       ALTER TABLE trips ADD COLUMN cargo_classification_generation TEXT CHECK (cargo_classification_generation IS NULL OR length(cargo_classification_generation) = 36);`);
+  }}),
+  Object.freeze({version: 13, name: '0013-sample-cargo-damage', up(db: Database.Database) {
+    db.exec('ALTER TABLE samples ADD COLUMN cargo_damage_fraction REAL CHECK (cargo_damage_fraction BETWEEN 0 AND 1)');
   }})
 ]);
 
