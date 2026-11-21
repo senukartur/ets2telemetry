@@ -17,7 +17,7 @@ vi.mock('@/components/ui/badge', () => ({
   Badge: ({variant, children, ...props}: {variant?: string; children?: React.ReactNode}) => React.createElement('span', {...props, 'data-variant': variant}, children)
 }));
 
-const ROUTES: readonly ShellRoute[] = ['live', 'hardMode', 'journal', 'settings', 'account'];
+const ROUTES = ['live', 'hardMode', 'journal', 'settings', 'account'] as const satisfies readonly ShellRoute[];
 const nav = (route: ShellRoute, language: AppLanguage) => renderToStaticMarkup(React.createElement(SidebarNav, {route, language, onNavigate: () => undefined}));
 const chips = {connection: {text: 'ETS2 · Single-player', tone: 'ok'}, plugin: {text: 'Plugin 2/2', tone: 'ok'}, hardMode: {text: 'Hard Mode 10/12', tone: 'warn'}} as const;
 const bar = (route: ShellRoute, language: AppLanguage, sync?: React.ReactNode) => renderToStaticMarkup(React.createElement(TopBar, {route, language, ...chips}, sync));

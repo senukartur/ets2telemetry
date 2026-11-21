@@ -20,7 +20,7 @@ import {ATS_A, BASE_UTC, ETS2_A, ETS2_B, GAME_CLOCK_1, GAME_CLOCK_2, job, money,
 import type {ProfileObservation} from '../../packages/telemetry-core/src';
 import {failed, ok, REPRESENTATIVE, workspace} from './helpers';
 
-const DATABASE = {purpose: 'synthetic', schemaVersion: 10};
+const DATABASE = {purpose: 'synthetic', schemaVersion: 13};
 const NOT_OBSERVED = {available: false, reason: 'not-observed'} as const;
 const text = (value: string) => ({available: true as const, value});
 /** The job market and special-job flag of every seeded job and of the version 1 fixture's job: stored before ET-072, read without a migration. */
@@ -34,7 +34,7 @@ beforeAll(async () => {
   ws.copyFixture(REPRESENTATIVE, ws.database);
   // The seed sets its distance totals through trip.update, the raw-total selection of legacy engine 0 (ET-112c).
   storage = await ws.open({accountingEngine: 0});
-  expect(storage.summary).toMatchObject({schemaVersion: 10, migratedFrom: 1});
+  expect(storage.summary).toMatchObject({schemaVersion: 13, migratedFrom: 1});
   await seedJournalAnchors(storage);
   fillers = await seedJournalFillers(storage, 110);
 }, 120_000);

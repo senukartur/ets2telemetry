@@ -16,6 +16,7 @@ import {
 } from '../../../contracts/src/journal';
 import type {EventOccurrence, EventRecord, JobConfiguration, TrailerConfiguration, TruckConfiguration, UnavailableReason} from '../../../contracts/src/protocol-v1';
 import type {Purpose} from '../api';
+import {readCargoClassification} from '../cargo-classification';
 import {fromAvailability, fromU64Key, isUuid, JOB_FIELDS, moneyFromColumns, specRecord, toReal, toSafeNumber, u64Key, type AvailabilityState} from '../codec';
 import {fail} from '../errors';
 import {readHardModeDetails} from './hard-mode';
@@ -149,11 +150,13 @@ export function listItem(db: Database.Database, r: Row, progress?: {logical: unk
   const job = get(db, JOURNAL_QUERIES.job, r.job_configuration_ref);
   if (!job) fail('DATABASE_CORRUPT');
   const values = jobValues(job);
+  const cargoClassification = readCargoClassification(r.cargo_classification);
   const observedDistanceM = fromAvailability(r.observed_distance_m, r.observed_distance_m_state, toReal), fuelUsedL = fromAvailability(r.fuel_used_l, r.fuel_used_l_state, toReal);
   const accounting = progress && journalAccounting(db, progress.logical, progress.head, observedDistanceM.available, fuelUsedL.available);
   const pending = decisionsEnabled(db) && get(db, `SELECT 1 AS pending FROM logical_membership_decisions WHERE trip_ref=? AND state='pending' AND reason='profile-unverified' AND raw_closed_event_seq IS NOT NULL`, r.id) !== undefined;
   return {
     isHardMode: r.is_hard_mode === 1n || r.is_hard_mode === 1, hardModeDetails: readHardModeDetails(r.hard_mode_details),
+    ...(cargoClassification ? {cargoClassification} : {}),
     tripUuid: String(r.trip_uuid), game: r.game as JournalTripListItem['game'],
     gameMode: {mode: r.game_mode, method: r.game_mode_method, confidence: r.game_mode_confidence} as JournalTripListItem['gameMode'],
     gameModeAmbiguous: toSafeNumber(r.game_mode_ambiguous, 1, 0) === 1, outcome: r.outcome as JournalTripListItem['outcome'],
@@ -482,7 +485,9 @@ export function journalTrip(conn: StorageConnection, tripUuid: string): JournalT
     :all(db,JOURNAL_QUERIES.trailers,id,JOURNAL_DETAIL_TRAILERS);
   const qualifiedTrailers=snap && Number(get(db,`SELECT count(*) AS total FROM logical_snapshot_memberships WHERE logical_ref=? AND trip_ref<=? AND from_revision<? AND (through_revision IS NULL OR through_revision>=?)`,...trailerArgs.slice(0,4))!.total)>1;
   const refuels = journalRefuels(db, id, snap);
+  const qualification=journalSync(db,[tripUuid],true);
   return {
+    ...(qualification?.rows[0].qualification?{qualification:{owner:qualification.owner,connectionVersion:qualification.connectionVersion,row:qualification.rows[0]}}:{}),
     database: database(db),
     trip: {...listItem(db, trip, snap ? {logical: snap.logical, head: snap.head} : undefined), pluginSessionId: String(session.plugin_session_uuid), openedBy: trip.opened_by as 'event' | 'checkpoint',
       openedEventSeq: trip.opened_event_ref === null ? null : fromU64Key(event(trip.opened_event_ref).event_seq),

@@ -66,6 +66,7 @@ struct Host {
   std::optional<float> limit_mps; bool limit_null = false;
   std::optional<std::int32_t> rest_minutes;
   bool rest_null = false;
+  std::optional<float> damage_fraction;
   Host() { active = this; }
   static void check() { if (active->caller != std::this_thread::get_id()) ++active->wrong_thread; }
   static SCSAPI_VOID log(scs_log_type_t type, scs_string_t message) { check(); active->log_types.push_back(type); active->logs.emplace_back(message); }
@@ -102,6 +103,10 @@ struct Host {
     if (channels.count("rest.stop")) {
       if (rest_null) { const auto entry = channels.at("rest.stop"); entry.cb("rest.stop", SCS_U32_NIL, nullptr, entry.ctx); }
       else if (rest_minutes) { scs_value_t r{}; r.type = SCS_VALUE_TYPE_s32; r.value_s32.value = *rest_minutes; channel("rest.stop", r); }
+    }
+    if (damage_fraction && channels.count("job.cargo.damage")) {
+      scs_value_t damage{}; damage.type = SCS_VALUE_TYPE_float; damage.value_float.value = *damage_fraction;
+      channel("job.cargo.damage", damage);
     }
     event(SCS_TELEMETRY_EVENT_frame_end);
   }
@@ -806,9 +811,9 @@ void rest_state() {
     require(old->status_until(f.host, [](const v1::StateView& s) { return !s.rest_state; }), "minor-4 snapshots omit Rest State");
     old.reset(); require(f.listening(), "endpoint relistens");
 
-    auto current = f.client(true, 5); current->max_minor = 6; current->handshake();
+    auto current = f.client(true, 5); current->handshake();
     const auto checkpoint = current->messages[1];
-    require(checkpoint.minor == 5 && checkpoint.state->rest_state && checkpoint.state->rest_state->unit == "min", "wide offer selects minor 5 with Rest State in game minutes");
+    require(checkpoint.minor == 5 && checkpoint.state->rest_state && checkpoint.state->rest_state->unit == "min", "minor-5 offer selects minor 5 with Rest State in game minutes");
     auto keys = state_keys(previous); keys.insert("restState");
     require(state_keys(checkpoint) == keys, "minor 5 only adds restState");
     require(checkpoint.state->next_mandatory_break->reading.value == 95, "mandatory break stays independent");
@@ -826,6 +831,32 @@ void rest_state() {
     require(current->read_until([&] { return current->count("clock.reply") == 1; }), "a minor-5 probe receives its reply");
   }
   require(v0_snapshot_bytes(false, "rest.stop") == v0_snapshot_bytes(true, "rest.stop"), "Rest State does not enter v0 snapshot bytes");
+}
+
+void cargo_damage() {
+  Fixture f;
+  scs_named_value_t job[]{named("cargo.id", text("cargo.a")), named("destination.city.id", text("city.b")), {}};
+  f.host.event(SCS_TELEMETRY_EVENT_started); f.host.config("job", job);
+  f.host.damage_fraction = 0.125F; f.host.frame(); f.start();
+  auto old = f.client(true, 5); old->handshake();
+  const auto previous = old->messages[1];
+  require(previous.minor == 5 && !previous.state->cargo_damage, "minor-5 checkpoint omits live damage");
+  require(old->status_until(f.host, [](const v1::StateView& state) { return !state.cargo_damage; }), "minor-5 snapshots omit live damage");
+  old.reset(); require(f.listening(), "endpoint relistens");
+  auto current = f.client(true, 6); current->handshake();
+  const auto checkpoint = current->messages[1];
+  require(checkpoint.minor == 6 && checkpoint.state->cargo_damage && checkpoint.state->cargo_damage->reading.value == 0.125 &&
+    checkpoint.state->cargo_damage->v0_configuration_revision == 1, "minor-6 checkpoint contains live damage with the v0 revision");
+  auto keys = state_keys(previous); keys.insert("cargoDamage");
+  require(state_keys(checkpoint) == keys, "the v1.6 state adds only cargoDamage");
+  f.host.damage_fraction = 0.0F;
+  require(current->status_until(f.host, [](const v1::StateView& state) { return state.cargo_damage && state.cargo_damage->reading.value == 0; }), "zero arrives as an available reading");
+  f.host.damage_fraction.reset();
+  require(current->status_until(f.host, [](const v1::StateView& state) {
+    return state.cargo_damage && !state.cargo_damage->reading.value && !state.cargo_damage->v0_configuration_revision;
+  }), "a frame without the channel clears the reading and revision");
+  current->consumer.expect_clock_reply(1); send(current->pipe.get(), framed(probe_payload(1, 6)));
+  require(current->read_until([&] { return current->count("clock.reply") == 1; }), "minor-6 probe receives its reply");
 }
 
 void live_only() {
@@ -1679,7 +1710,7 @@ void dll_lifecycle(const char* path) {
 int main(int argc, char** argv) {
   try {
     const std::map<std::string, std::function<void()>> cases{
-      {"game-mode", game_mode_evidence}, {"handshake", handshake}, {"gearbox", gearbox}, {"mandatory-break", mandatory_break}, {"mandatory-break-unsupported", mandatory_break_unsupported}, {"mandatory-break-v0", mandatory_break_v0}, {"cruise-control", cruise_control}, {"cruise-control-unsupported", cruise_control_unsupported}, {"cruise-control-v0", cruise_control_v0}, {"speed-limit", speed_limit}, {"speed-limit-unsupported", speed_limit_unsupported}, {"speed-limit-v0", speed_limit_v0}, {"rest-state", rest_state}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
+      {"game-mode", game_mode_evidence}, {"handshake", handshake}, {"gearbox", gearbox}, {"mandatory-break", mandatory_break}, {"mandatory-break-unsupported", mandatory_break_unsupported}, {"mandatory-break-v0", mandatory_break_v0}, {"cruise-control", cruise_control}, {"cruise-control-unsupported", cruise_control_unsupported}, {"cruise-control-v0", cruise_control_v0}, {"speed-limit", speed_limit}, {"speed-limit-unsupported", speed_limit_unsupported}, {"speed-limit-v0", speed_limit_v0}, {"rest-state", rest_state}, {"cargo-damage", cargo_damage}, {"live-only", live_only}, {"durable", durable_delivery}, {"redelivery", redelivery}, {"stalled-reader", stalled_reader},
       {"fuzz", fuzz}, {"rejection", rejection}, {"collision", collision}, {"policy", policy}, {"v0-isolation", v0_isolation}, {"cap0-isolation", cap0_isolation}, {"shutdown", shutdown}
 #ifdef ETS2TELEMETRY_TRANSPORT_TEST_HOOKS
       , {"retention", [] { retention(); Fixture clamp; clamp.start(); capture_clamp(clamp); }}, {"overflow", overflow}, {"ack-control", ack_control}, {"exhaustion", exhaustion}, {"invariant", [] { invariant(); invariant_at_shutdown(); invariant_end_failed(); invariant_stop_budget(); }}

@@ -50,7 +50,7 @@ const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
 export const ENUMS = Object.freeze({
   serviceHealth: ['starting', 'ready', 'restarting', 'failed', 'stopping'],
   storageHealth: ['pending', 'verified', 'failed'],
-  recordingState: ['disabled', 'unknown', 'opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'not-recorded-source', 'live-only', 'stopped'],
+  recordingState: ['disabled', 'unknown', 'opening', 'waiting', 'recording', 'paused', 'interrupted', 'retrying', 'buffering', 'not-recorded-source', 'live-only', 'stopped'],
   recordingTarget: ['history', 'synthetic', 'replay'],
   tripPhase: ['idle', 'active', 'awaiting-outcome', 'reload-check'],
   tripCompleteness: ['unknown', 'partial', 'complete'],
@@ -60,7 +60,7 @@ export const ENUMS = Object.freeze({
   gearDisplay: ['automatic', 'manual', 'crawler'],
   overlayLayout: ['strip', 'card', 'cluster', 'hud'],
   overlaySection: ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining',
-    'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state'],
+    'deadline', 'expected-income', 'cargo-damage', 'game-time', 'mandatory-break', 'rest-state'],
   settingsState: ['loading', 'defaults', 'loaded', 'loaded-with-fallbacks', 'invalid-file', 'unsupported-older', 'newer-version', 'unreadable', 'unavailable'],
   pluginMode: ['active', 'test-root', 'disabled'],
   pluginGame: ['ets2', 'ats'],

@@ -281,6 +281,8 @@ export function projectionRow(db: Database.Database, id: bigint, includeProgress
   const row: LogicalRow = {...last, id, trip_uuid: first.trip_uuid, plugin_session_ref: first.plugin_session_ref, job_configuration_ref: first.job_configuration_ref,
     opened_by: first.opened_by, opened_event_ref: first.opened_event_ref, started_utc_ms: first.started_utc_ms, created_utc_ms: first.created_utc_ms,
     game_mode: first.game_mode, game_mode_method: first.game_mode_method, game_mode_confidence: first.game_mode_confidence};
+  if (Object.hasOwn(first, 'cargo_classification')) row.cargo_classification = first.cargo_classification;
+  delete row.cargo_classification_generation;
   const rawPath=Number(group.member_count)===1 && group.accounting_rebased===0n;
   row._moneyIncomplete=group.reconciliation_unknown===1n;
   row._currentProgress=group.progress_head===null || get(db,'SELECT trip_ref FROM logical_progress WHERE id=?',group.progress_head)!.trip_ref===group.latest_trip_ref;

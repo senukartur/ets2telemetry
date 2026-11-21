@@ -280,6 +280,7 @@ export const RECORDING_STATE_TEXT: Readonly<Record<RecordingHealth['state'], str
   'paused': 'Game paused; recording continues when it resumes',
   'interrupted': 'Connection lost; recording resumes on reconnection, and the missing time is recorded as a gap',
   'retrying': 'Retrying: {cause}. Nothing is acknowledged until storage commits; events while reconnecting are recorded as a gap',
+  'buffering': 'Saving to the emergency journal while the history database catches up',
   'stopped': 'Stopped: {cause}. Restart Yukon Union Telemetry after fixing it',
   'live-only': 'Not recording this game session: the database is behind the plugin (restored database); recording resumes with the next game session',
   'not-recorded-source': 'Not recording the selected source'
@@ -293,6 +294,7 @@ export const RECORDING_STATE_TEXT_RU: Readonly<Record<RecordingHealth['state'], 
   'paused': 'Игра на паузе; запись продолжится после снятия с паузы',
   'interrupted': 'Соединение потеряно; запись возобновится при повторном подключении, а пропущенное время запишется как пропуск',
   'retrying': 'Повторная попытка: {cause}. Данные не подтверждаются до фиксации в хранилище; события во время переподключения записываются как пропуск',
+  'buffering': 'Данные сохраняются в аварийный журнал до переноса в историю',
   'stopped': 'Остановлено: {cause}. Перезапустите Yukon Union Telemetry после устранения причины',
   'live-only': 'Эта игровая сессия не записывается: база данных отстаёт от плагина (восстановленная база данных); запись возобновится со следующей игровой сессии',
   'not-recorded-source': 'Выбранный источник не записывается'
@@ -311,6 +313,7 @@ export const RECORDING_STATE_SHORT_TEXT: Readonly<Record<RecordingHealth['state'
   'paused': 'game paused',
   'interrupted': 'connection lost',
   'retrying': 'retrying, {cause}',
+  'buffering': 'emergency journal',
   'stopped': 'stopped, {cause}',
   'live-only': 'not this game session',
   'not-recorded-source': 'not this source'
@@ -324,6 +327,7 @@ export const RECORDING_STATE_SHORT_TEXT_RU: Readonly<Record<RecordingHealth['sta
   'paused': 'игра на паузе',
   'interrupted': 'соединение потеряно',
   'retrying': 'повтор, {cause}',
+  'buffering': 'аварийный журнал',
   'stopped': 'остановлено, {cause}',
   'live-only': 'не эта игровая сессия',
   'not-recorded-source': 'не этот источник'
@@ -342,6 +346,7 @@ export const RECORDING_STATE_LABEL_TEXT: Readonly<Record<RecordingHealth['state'
   'paused': 'Paused',
   'interrupted': 'Connection lost',
   'retrying': 'Error, retrying',
+  'buffering': 'Emergency journal',
   'stopped': 'Recording stopped',
   'live-only': 'Session not recorded',
   'not-recorded-source': 'Source not recorded'
@@ -355,6 +360,7 @@ export const RECORDING_STATE_LABEL_TEXT_RU: Readonly<Record<RecordingHealth['sta
   'paused': 'Пауза',
   'interrupted': 'Нет связи',
   'retrying': 'Ошибка, повтор',
+  'buffering': 'Аварийный журнал',
   'stopped': 'Запись остановлена',
   'live-only': 'Сессия не пишется',
   'not-recorded-source': 'Источник не пишется'
@@ -685,12 +691,12 @@ export function getOverlayLayoutText(layout: OverlayLayout, language: AppLanguag
 export const OVERLAY_SECTION_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'Engine RPM', 'cruise-control': 'Cruise control', 'speed-limit': 'Speed limit', 'fuel': 'Fuel', 'range': 'Estimated range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'Origin', 'destination': 'Destination', 'distance-driven': 'Distance driven', 'distance-remaining': 'Distance remaining',
-  'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'game-time': 'Game time', 'mandatory-break': 'Next mandatory break', 'rest-state': 'Rest State'
+  'deadline': 'Delivery deadline', 'expected-income': 'Expected income', 'cargo-damage': 'Cargo damage', 'game-time': 'Game time', 'mandatory-break': 'Next mandatory break', 'rest-state': 'Rest State'
 });
 export const OVERLAY_SECTION_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты двигателя', 'cruise-control': 'Круиз-контроль', 'speed-limit': 'Ограничение скорости', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Отправление', 'destination': 'Назначение', 'distance-driven': 'Пройденное расстояние', 'distance-remaining': 'Оставшееся расстояние',
-  'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'game-time': 'Игровое время', 'mandatory-break': 'До обязательного перерыва', 'rest-state': 'Запас бодрости'
+  'deadline': 'Срок доставки', 'expected-income': 'Ожидаемый доход', 'cargo-damage': 'Повреждение груза', 'game-time': 'Игровое время', 'mandatory-break': 'До обязательного перерыва', 'rest-state': 'Запас бодрости'
 });
 export function getOverlaySectionText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
   return language === 'ru' ? OVERLAY_SECTION_TEXT_RU[section] : OVERLAY_SECTION_TEXT[section];
@@ -700,12 +706,12 @@ export function getOverlaySectionText(section: OverlaySectionId, language: AppLa
 export const OVERLAY_SECTION_SHORT_TEXT: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Speed', 'gear': 'Gear', 'rpm': 'RPM', 'cruise-control': 'Cruise', 'speed-limit': 'Limit', 'fuel': 'Fuel', 'range': 'Range', 'sdk-consumption': 'Consumption',
   'cargo': 'Cargo', 'origin': 'From', 'destination': 'To', 'distance-driven': 'Driven', 'distance-remaining': 'Remaining',
-  'deadline': 'Due', 'expected-income': 'Expected', 'game-time': 'Time', 'mandatory-break': 'Break', 'rest-state': 'Rest State'
+  'deadline': 'Due', 'expected-income': 'Expected', 'cargo-damage': 'Damage', 'game-time': 'Time', 'mandatory-break': 'Break', 'rest-state': 'Rest State'
 });
 export const OVERLAY_SECTION_SHORT_TEXT_RU: Readonly<Record<OverlaySectionId, string>> = Object.freeze({
   'speed': 'Скорость', 'gear': 'Передача', 'rpm': 'Обороты', 'cruise-control': 'Круиз', 'speed-limit': 'Лимит', 'fuel': 'Топливо', 'range': 'Запас хода', 'sdk-consumption': 'Расход',
   'cargo': 'Груз', 'origin': 'Откуда', 'destination': 'Куда', 'distance-driven': 'Пройдено', 'distance-remaining': 'Осталось',
-  'deadline': 'Срок', 'expected-income': 'Ожидается', 'game-time': 'Время', 'mandatory-break': 'Перерыв', 'rest-state': 'Запас бодрости'
+  'deadline': 'Срок', 'expected-income': 'Ожидается', 'cargo-damage': 'Повреждение', 'game-time': 'Время', 'mandatory-break': 'Перерыв', 'rest-state': 'Запас бодрости'
 });
 export function getOverlaySectionShortText(section: OverlaySectionId, language: AppLanguage = 'en'): string {
   return language === 'ru' ? OVERLAY_SECTION_SHORT_TEXT_RU[section] : OVERLAY_SECTION_SHORT_TEXT[section];
@@ -1181,7 +1187,8 @@ export const UNINSTALL_NOTE_TEXT: Readonly<Record<FolderNote, string>> = channel
 /** A data entry that could not be deleted, by its allowlisted name. */
 export const UNINSTALL_DATA_ENTRY_TEXT: Readonly<Record<DataEntry, string>> = Object.freeze({
   data: 'trip history', backups: 'history backups', settings: 'settings', logs: 'logs', synthetic: 'synthetic recordings', plugins: 'plugin setup record',
-  captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record', updates: 'downloaded updates', credentials: 'protected upload credentials'
+  captures: 'captures', transport: 'connection settings', uninstall: 'uninstall record', updates: 'downloaded updates', credentials: 'protected upload credentials',
+  'emergency-journal': 'emergency journal'
 });
 
 export function getAutostartStatusBadgeText(status: AutostartRegistrationStatus | undefined, language: AppLanguage): string {

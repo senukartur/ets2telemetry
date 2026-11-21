@@ -115,12 +115,13 @@ export class V1Producer {
     const s = this.store.status(), p = this.adapter.published;
     return {oldest: s.oldestRetainedNs, data: {
       // B1, ET-052, ET-071, ET-084: `state.gearbox` from minor 1, `state.nextMandatoryBreak` from minor 2, `state.cruiseControl`
-      // from minor 3, `state.speedLimit` from minor 4 and `state.restState` from minor 5.
+      // from minor 3, `state.speedLimit` from minor 4, `state.restState` from minor 5 and `state.cargoDamage` from minor 6.
       state: {...structuredClone(p.state), window: {available: false, reason: 'not-supported'}, ...(this.conn!.minor >= 1 ? {gearbox: structuredClone(p.gearbox)} : {}),
         ...(this.conn!.minor >= 2 ? {nextMandatoryBreak: structuredClone(p.nextMandatoryBreak)} : {}),
         ...(this.conn!.minor >= 3 ? {cruiseControl: structuredClone(p.cruiseControl)} : {}),
         ...(this.conn!.minor >= 4 ? {speedLimit: structuredClone(p.speedLimit)} : {}),
-        ...(this.conn!.minor >= 5 ? {restState: structuredClone(p.restState)} : {})},
+        ...(this.conn!.minor >= 5 ? {restState: structuredClone(p.restState)} : {}),
+        ...(this.conn!.minor >= 6 ? {cargoDamage: structuredClone(p.cargoDamage)} : {})},
       status: {gameMode: this.adapter.gameMode, eventLoss: wireCounts(s.eventLoss), delivery: deliveryStatus(s, this.conn!.durable)},
       continuity: {coalescedSnapshots: this.coalesced.toString(), offlineTransitions: p.offlineTransitions.toString()}
     }};
@@ -175,9 +176,9 @@ export class V1Producer {
     const m = decodePayload(buffer.subarray(4), 'client'); c.helloBytes = new Uint8Array(0);
     if (m.kind !== 'hello') throw new ProtocolError('Hello expected');
     // B1, ET-052, ET-071, ET-084: the simulator selects min(hello maxMinor, its highest minor); a lower offer, or a simulated
-    // older plugin (`highestMinor`), gets the original bytes of that minor. The default highest minor is the literal 5, not
+    // older plugin (`highestMinor`), gets the original bytes of that minor. The default highest minor is the literal 6, not
     // V1_MAX_MINOR, so a future contract minor is never served before the simulator models it.
-    const negotiated = negotiateV1(m, {allowDurable: true, maxMinor: this.adapter.config.highestMinor ?? 5});
+    const negotiated = negotiateV1(m, {allowDurable: true, maxMinor: this.adapter.config.highestMinor ?? 6});
     c.durable = negotiated.durableEvents; c.minor = negotiated.minor; c.phase = 'live';
     // Client frames after the hello carry the connection's minor; the decoder and the validator refuse any other.
     c.decoder = new FrameDecoder('client', {maxMinor: c.minor});

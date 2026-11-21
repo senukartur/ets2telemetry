@@ -120,9 +120,9 @@ describe('simulator v1 mandatory break scenarios (ET-052)', () => {
     expect(() => validateScenario(withBreak(value))).toThrow(/Invalid simulator v1 scenario/);
   });
   // ET-084 widened the offer to 4; 5 is the first rejected maximum.
-  it.each([[0], [1], [2], [3], [4], [5]])('accepts the client offer maxMinor %d and rejects 6 and a fraction', maxMinor => {
+  it.each([[0], [1], [2], [3], [4], [5], [6]])('accepts the client offer maxMinor %d and rejects 7 and a fraction', maxMinor => {
     expect(validateScenario(variant(clientMinor(maxMinor))).transport[0]).toMatchObject({client: {maxMinor}});
-    expect(() => validateScenario(variant(clientMinor(6)))).toThrow(/maxMinor/);
+    expect(() => validateScenario(variant(clientMinor(7)))).toThrow(/maxMinor/);
     expect(() => validateScenario(variant(s => { (transport(s)[0].client as Json).maxMinor = 1.5; }))).toThrow(/maxMinor/);
     expect(() => validateScenario(variant(s => { (transport(s)[0].client as Json).maxMinor = '2'; }))).toThrow(/maxMinor/);
   });
@@ -133,10 +133,10 @@ describe('simulator v1 mandatory break scenarios (ET-052)', () => {
     expect(() => validateScenario(variant(s => { source(s).mandatoryBreak = 'maybe'; }))).toThrow(/one of/);
     expect(() => validateScenario(variant(s => { source(s).mandatoryBreak = 'not-supported'; (frames(s)[0].channels as Json)['mandatory.break'] = 5; }))).toThrow(/not registered/);
   });
-  it('serves a changing break on minor 5 by default: 95, then 0, with not-observed before the first callback', () => {
+  it('serves a changing break on minor 6 by default: 95, then 0, with not-observed before the first callback', () => {
     const s = withBreak(95, 0), all = states(s);
     const breaks = all.map(m => m.data.state.nextMandatoryBreak);
-    expect(all.every(m => m.version.minor === 5)).toBe(true);
+    expect(all.every(m => m.version.minor === 6)).toBe(true);
     // The checkpoint precedes the first frame; the snapshots then follow the frames at 100 ms and 200 ms.
     expect(breaks[0]).toEqual({available: false, reason: 'not-observed', unit: 'min'});
     expect(breaks).toContainEqual({available: true, value: 95, unit: 'min'});
@@ -175,8 +175,8 @@ describe('simulator v1 mandatory break scenarios (ET-052)', () => {
     expect(older.ledger).toEqual(full.ledger);
     expect(older.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : [])).toEqual(full.transcript.flatMap(l => l.message.kind === 'event' ? [l.message.data.record] : []));
   });
-  it('rejects a highest minor above 5, a fraction and a string', () => {
-    for (const value of [6, 1.5, '1', -1]) expect(() => validateScenario(variant(s => { source(s).highestMinor = value; }))).toThrow(/highestMinor/);
+  it('rejects a highest minor above 6, a fraction and a string', () => {
+    for (const value of [7, 1.5, '1', -1]) expect(() => validateScenario(variant(s => { source(s).highestMinor = value; }))).toThrow(/highestMinor/);
   });
   it('gives the same events and the same boundary orders whether or not the game provides the break channel', () => {
     const plain = replayV1(base()), withChannel = replayV1(withBreak(95, 0));
@@ -208,9 +208,9 @@ describe('simulator v1 cruise control scenarios (ET-071)', () => {
     expect(() => validateScenario(variant(s => { source(s).cruiseControl = 'maybe'; }))).toThrow(/one of/);
     expect(() => validateScenario(variant(s => { source(s).cruiseControl = 'not-supported'; (frames(s)[0].channels as Json)['cruise_control'] = 25; }))).toThrow(/not registered/);
   });
-  it('serves a set speed, then off, on minor 5 by default, with not-observed before the first callback', () => {
+  it('serves a set speed, then off, on minor 6 by default, with not-observed before the first callback', () => {
     const all = states(withCruise(25, 0)), cruise = all.map(m => m.data.state.cruiseControl);
-    expect(all.every(m => m.version.minor === 5)).toBe(true);
+    expect(all.every(m => m.version.minor === 6)).toBe(true);
     expect(cruise[0]).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
     expect(cruise).toContainEqual({available: true, value: 25, unit: 'm/s'});
     expect(cruise.at(-1)).toEqual({available: true, value: 0, unit: 'm/s'});
@@ -256,9 +256,9 @@ describe('simulator v1 speed limit scenarios (ET-084)', () => {
     expect(() => validateScenario(variant(s => { source(s).speedLimit = 'maybe'; }))).toThrow(/one of/);
     expect(() => validateScenario(variant(s => { source(s).speedLimit = 'not-supported'; (frames(s)[0].channels as Json)['navigation.speed.limit'] = 25; }))).toThrow(/not registered/);
   });
-  it('serves a limit, then no limit, on minor 5, with not-observed before the first callback', () => {
+  it('serves a limit, then no limit, on minor 6, with not-observed before the first callback', () => {
     const all = states(withLimit(25, 0)), limits = all.map(m => m.data.state.speedLimit);
-    expect(all.every(m => m.version.minor === 5)).toBe(true);
+    expect(all.every(m => m.version.minor === 6)).toBe(true);
     expect(limits[0]).toEqual({available: false, reason: 'not-observed', unit: 'm/s'});
     expect(limits).toContainEqual({available: true, value: 25, unit: 'm/s'});
     expect(limits.at(-1)).toEqual({available: true, value: 0, unit: 'm/s'});

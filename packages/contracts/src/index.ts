@@ -44,8 +44,9 @@ export interface LiveTelemetry {
   v1?: LiveTelemetryV1;
 }
 import type {DashboardUploadBridge} from './dashboard-upload';
+import type {QualificationBridge} from './qualification';
 export type {DashboardUploadBridge,DashboardUploadStatus,DashboardUploadError,DashboardOwner} from './dashboard-upload';
-export interface DesktopBridge extends DashboardUploadBridge {
+export interface DesktopBridge extends DashboardUploadBridge, QualificationBridge {
   setNowPlayingEnabled(enabled: boolean): Promise<SettingsView>;
   setNowPlayingStyle(style: NowPlayingStyle): Promise<SettingsView>;
   setNowPlayingBackgroundOpacity(opacity: number): Promise<SettingsView>;
@@ -202,6 +203,8 @@ export interface JournalSample {
   speed: Available<number>; fuel: Available<number>; averageConsumption: Available<number>; estimatedRange: Available<number>;
   engineRpm: Available<number>; gear: Available<number>; odometer: Available<number>;
   position: Available<{x: number; y: number; z: number}>;
+  /** Observed damage fraction for the recorded job, in [0, 1]. Absent when unavailable. */
+  cargoDamage?: number;
 }
 /** One page of a trip's samples in id order, and the cursor of the next page when this one is full. */
 export interface JournalSamplePage {database: JournalDatabase; samples: JournalSample[]; nextCursor: string | null}
@@ -231,6 +234,8 @@ export type OverlayHardModeState = 'active' | 'inactive' | 'lost';
 export interface OverlayHardMode {state: OverlayHardModeState; passed?: number}
 /** Read-only display projection: no source selection, HWND or native placement authority. */
 export interface OverlayPresentation {
+  /** Provisional server preview only; absence means no authorized connected qualification module. */
+  qualification?:import('./qualification').QualificationCue;
   /** Saved background opacity in whole percentages; absent legacy projections use 80%. */
   backgroundOpacity?: number;
   /** Opt-in diagnostic pixels only; no renderer command or game-protocol field. */
@@ -270,8 +275,10 @@ export type {LiveObservationV1, LiveStateV1} from './protocol-v1';
 export * from './truck-powertrain';
 export * from './journal';
 export * from './journal-export';
+export * from './cargo-classification';
 export * from './uninstall';
 
 export * from './hard-mode';
 
 export * from './now-playing';
+export * from './qualification';

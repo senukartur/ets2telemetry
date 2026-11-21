@@ -1,10 +1,17 @@
 import {expect, it, vi} from 'vitest';
 import type {JournalTripPage} from '../../packages/contracts/src/journal';
 import type {JournalCallResult} from '../../packages/contracts/src';
+import {DETAIL} from '../shared/journal-replies';
 import {guardJournalSync, readJournalWithSync, type JournalUploadScope} from '../../apps/desktop/src/dashboard-upload/journal-sync-guard';
 const owner = {origin: 'https://dashboard.example', accountId: 'a', companyId: 'c', identityEpoch: 'e'};
 const scope: JournalUploadScope = {owner, connectionVersion: '2', documentEpoch: 1, utilityGeneration: 'g'};
 const page: JournalTripPage = {database: {purpose: 'history', schemaVersion: 6}, trips: [], nextCursor: null, sync: {owner, connectionVersion: '2', rows: []}};
+it('REG-012/014 removes qualification details when owner authority retires during the read',async()=>{
+  const detail={...structuredClone(DETAIL),database:{purpose:'history' as const,schemaVersion:11},qualification:{owner,connectionVersion:'2',row:{tripUuid:DETAIL.trip.tripUuid,state:'sent' as const,materialVersion:'1',latestRevision:1,lastDurableUploadUtcMs:1,reason:null,qualification:{current:null,previous:null,awaiting:true}}}};
+  let current:JournalUploadScope|undefined=scope,resolve!:(result:JournalCallResult<unknown>)=>void;
+  const pending=readJournalWithSync({kind:'trip',tripUuid:DETAIL.trip.tripUuid},()=>new Promise(done=>{resolve=done;}),()=>current);current=undefined;resolve({ok:true,value:detail});
+  const result=await pending;expect(result.ok).toBe(true);if(result.ok)expect(result.value).toEqual({...detail,qualification:undefined});
+});
 it('REG-010/012/014 removes metadata across origin, owner, version, document and utility fences without losing Journal data', () => {
   expect(guardJournalSync(page, scope, structuredClone(scope))).toEqual(page);
   for (const after of [undefined, {...scope, owner: {...owner, origin: 'https://other.example'}}, {...scope, owner: {...owner, accountId: 'b'}}, {...scope, owner: {...owner, identityEpoch: 'new'}}, {...scope, connectionVersion: '3'}, {...scope, documentEpoch: 2}, {...scope, utilityGeneration: 'retired'}]) {
@@ -31,7 +38,7 @@ it('REG-010/012/014 wires a trips request through before/after scopes around a d
   expect(await readJournalWithSync(query, () => Promise.resolve({ok: true, value: page}), () => scope)).toEqual({ok: true, value: page});
 });
 it('REG-010/014 forwards non-trips and refusals untouched and maps defensive validation failure to fixed FAILED', async () => {
-  const query = {kind: 'trip', tripUuid: '70000000-0000-4000-8000-000000000001'} as const;
+  const query = {kind: 'events', tripUuid: '70000000-0000-4000-8000-000000000001',page:{limit:100}} as const;
   const answer = {ok: true, value: {trip: 'opaque non-trips result'}} as const, refusal = {ok: false, code: 'DATABASE_OPENING'} as const;
   const noScope = vi.fn(() => {throw Error('PRIVATE_SCOPE');});
   expect(await readJournalWithSync(query, () => Promise.resolve(answer), noScope)).toBe(answer); expect(noScope).not.toHaveBeenCalled();

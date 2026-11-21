@@ -12,6 +12,7 @@ import {SCHEMA_V7} from './schema-v7';
 import {SCHEMA_V8} from './schema-v8';
 import {SCHEMA_V9} from './schema-v9';
 import {SCHEMA_V10} from './schema-v10';
+import {SCHEMA_V11} from './schema-v11';
 
 /** PRAGMA application_id of every database this application creates: the ASCII bytes 'ETS2'. */
 export const APPLICATION_ID = 0x45545332;
@@ -34,7 +35,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
   // ET-112b2: membership decisions and per-session profile boundaries; additive, no backfill.
   Object.freeze({version: 9, name: '0009-membership-decisions', up(db: Database.Database) {for (const statement of SCHEMA_V9) db.exec(statement);}}),
   // ET-112c: the logical trip's distance and fuel engine and the engine-1 ledger flags; additive, no backfill.
-  Object.freeze({version: 10, name: '0010-quantity-engine', up(db: Database.Database) {for (const statement of SCHEMA_V10) db.exec(statement);}})
+  Object.freeze({version: 10, name: '0010-quantity-engine', up(db: Database.Database) {for (const statement of SCHEMA_V10) db.exec(statement);}}),
+  Object.freeze({version: 11, name: '0011-qualification-results', up(db: Database.Database) {for (const statement of SCHEMA_V11) db.exec(statement);}}),
+  Object.freeze({version: 12, name: '0012-cargo-classifications', up(db: Database.Database) {
+    db.exec(`ALTER TABLE trips ADD COLUMN cargo_classification TEXT CHECK (cargo_classification IS NULL OR
+      (length(cargo_classification) <= 1024 AND json_valid(cargo_classification) AND json_type(cargo_classification) = 'object'));
+      ALTER TABLE trips ADD COLUMN cargo_classification_generation TEXT CHECK (cargo_classification_generation IS NULL OR length(cargo_classification_generation) = 36);`);
+  }}),
+  Object.freeze({version: 13, name: '0013-sample-cargo-damage', up(db: Database.Database) {
+    db.exec('ALTER TABLE samples ADD COLUMN cargo_damage_fraction REAL CHECK (cargo_damage_fraction BETWEEN 0 AND 1)');
+  }})
 ]);
 
 /** The schema version a migration list produces; versions must be 1, 2, ... without gaps. */

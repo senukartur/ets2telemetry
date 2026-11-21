@@ -106,7 +106,7 @@ describe('names outside the runtime strings', () => {
     const unions: Record<keyof typeof ENUMS, Record<string, true>> = {
       serviceHealth: {starting: true, ready: true, restarting: true, failed: true, stopping: true} satisfies Record<ServiceHealth, true>,
       storageHealth: {pending: true, verified: true, failed: true} satisfies Record<StorageHealth, true>,
-      recordingState: {disabled: true, unknown: true, opening: true, waiting: true, recording: true, paused: true, interrupted: true, retrying: true, 'not-recorded-source': true,
+      recordingState: {disabled: true, unknown: true, opening: true, waiting: true, recording: true, paused: true, interrupted: true, retrying: true, buffering: true, 'not-recorded-source': true,
         'live-only': true, stopped: true} satisfies Record<RecordingHealth['state'], true>,
       recordingTarget: {history: true, synthetic: true, replay: true} satisfies Record<RecordingTarget, true>,
       tripPhase: {idle: true, active: true, 'awaiting-outcome': true, 'reload-check': true} satisfies Record<RecordingTrip['phase'], true>,
@@ -129,7 +129,7 @@ describe('names outside the runtime strings', () => {
         restarting: true} satisfies Record<LiveTelemetry['status'], true>
 ,
       overlaySection: {speed: true, gear: true, rpm: true, 'cruise-control': true, 'speed-limit': true, fuel: true, range: true, 'sdk-consumption': true, cargo: true, origin: true, destination: true,
-        'distance-driven': true, 'distance-remaining': true, deadline: true, 'expected-income': true, 'game-time': true, 'mandatory-break': true, 'rest-state': true} satisfies Record<OverlaySectionId, true>
+        'distance-driven': true, 'distance-remaining': true, deadline: true, 'expected-income': true, 'game-time': true, 'mandatory-break': true, 'rest-state': true, 'cargo-damage': true} satisfies Record<OverlaySectionId, true>
     };
     for (const [name, union] of Object.entries(unions)) expect([...ENUMS[name as keyof typeof ENUMS]].sort(), name).toEqual(Object.keys(union).sort());
     expect(Object.keys(ENUMS).sort()).toEqual(Object.keys(unions).sort());

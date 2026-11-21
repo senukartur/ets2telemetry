@@ -6,11 +6,12 @@ import {Badge} from './components/ui/badge';
 import {Button} from './components/ui/button';
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from './components/ui/table';
 import {JournalSyncBadge} from './dashboard-upload/journal-sync';
+import {JournalQualificationBadge} from './qualification/journal-result';
 import {HardModeBadge} from './hard-mode/card';
 import {t} from './i18n';
 import {InfoHint} from './info-hint';
 import type {JournalTripRow} from './journal-view';
-import {CompletenessBadge, JobTypeBadge, ModeBadge, OutcomeBadge, ProfileBadge, SpecialTransportBadge} from './trip-badges';
+import {CargoBadges, CompletenessBadge, JobTypeBadge, ModeBadge, OutcomeBadge, ProfileBadge, SpecialTransportBadge} from './trip-badges';
 
 /**
  * The compact trip table (ET-076, mockup T3). It only presents the rows of one journal page: the row texts come from
@@ -46,7 +47,10 @@ export function TripTable({rows, sync, language, onOpen, sort, onSort, busy}: {
         <TableCell data-testid="journal-row-started"><time title={row.started}>{row.startedLabel}</time></TableCell>
         <TableCell data-testid="journal-row-game"><Badge variant={row.gameId} data-testid="journal-row-game-name">{row.game}</Badge>
           <div className="yu-journal-mode-line"><ModeBadge mode={row.mode} testId="journal-row-mode" /></div></TableCell>
-        <TableCell><div data-testid="journal-row-cargo">{row.cargo}{row.isHardMode ? <> <HardModeBadge short language={language} /></> : null}</div></TableCell>
+        <TableCell><div data-testid="journal-row-cargo"><span>{row.cargo}</span>
+          <CargoBadges value={row.cargoClassification} language={language} compact />
+          {row.isHardMode ? <HardModeBadge short language={language} /> : null}
+        </div></TableCell>
         <TableCell><JobTypeBadge job={row.jobType} language={language} testId="journal-row-job-type" noteTestId="journal-row-job-sub" />
           {row.specialTransport ? <div className="yu-journal-mode-line"><SpecialTransportBadge text={row.specialTransport} testId="journal-row-special" /></div> : null}</TableCell>
         <TableCell><div data-testid="journal-row-route">{row.route}</div><small data-testid="journal-row-companies">{row.companies}</small></TableCell>
@@ -55,7 +59,7 @@ export function TripTable({rows, sync, language, onOpen, sort, onSort, busy}: {
         <TableCell data-testid="journal-row-outcome"><OutcomeBadge outcome={row.outcomeKind} text={row.outcome} /></TableCell>
         <TableCell><CompletenessBadge badge={row.completeness} testId="journal-row-completeness" />
           {row.membership ? <div className="yu-journal-mode-line"><ProfileBadge text={row.membership} testId="journal-row-membership" /><InfoHint label={t('ui.moreAbout', {v: row.membership}, language)}>{text('j.membershipPendingHint')}</InfoHint></div> : null}</TableCell>
-        {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={language} /></TableCell> : null}
+        {sync ? <TableCell><JournalSyncBadge row={sync.rows.find(item => item.tripUuid === row.tripUuid)!} language={language} /><JournalQualificationBadge row={sync.rows.find(item=>item.tripUuid===row.tripUuid)!} language={language}/></TableCell> : null}
         <TableCell><Button size="icon-sm" variant="ghost" className="yu-journal-open" aria-label={t('j.openTrip', {v: row.cargo}, language)} data-testid="journal-row-open" onClick={() => onOpen({tripUuid: row.tripUuid, game: row.gameId})}><ChevronRight aria-hidden="true" /></Button></TableCell>
       </TableRow>;
     })}

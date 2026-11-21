@@ -2,6 +2,7 @@ import {isOpacity, isStyle, isSelection} from './now-playing/contract';
 import {isHardModeStatus, type HardModeStatus} from '../../../packages/contracts/src/hard-mode';
 import {contextBridge, ipcRenderer} from 'electron';
 import {dashboardUploadPreload} from './dashboard-upload/contract';
+import {qualificationPreload} from './qualification/contract';
 import type {AppState, DesktopBridge, LiveTelemetry, UpdateView} from '../../../packages/contracts/src';
 import {initialLive, sourceSelection} from './live-state';
 import {expiredV1, liveV1Key, parseLiveV1, RENDERER_V1_EXPIRED_REASON, V1_LIVE_EXPIRY_MS} from './live-v1';
@@ -255,7 +256,8 @@ const bridge: DesktopBridge = {
   beginNowPlayingEdit: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke('now-playing-edit:begin') : Promise.reject(new Error('Invalid current track request')),
   resetNowPlayingEditPlacement: (...args: unknown[]) => args.length === 0 ? ipcRenderer.invoke('now-playing-edit:reset') : Promise.reject(new Error('Invalid current track request')),
   finishNowPlayingEdit: (...args: unknown[]) => args.length === 1 && (args[0] === 'save' || args[0] === 'cancel') ? ipcRenderer.invoke('now-playing-edit:finish', args[0]) : Promise.reject(new Error('Invalid current track request')),
-  ...dashboardUploadPreload(ipcRenderer)
+  ...dashboardUploadPreload(ipcRenderer),
+  ...qualificationPreload(ipcRenderer)
 };
 /** One page request of a trip: exactly the UUID and the cursor, or null for the first page. */
 function journalPage<T>(kind: 'events' | 'intervals' | 'samples', tripUuid: unknown, cursor: unknown): Promise<T> {

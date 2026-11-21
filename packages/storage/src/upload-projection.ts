@@ -1,6 +1,6 @@
-import {chainComplete,isRuleContext,usable,type RuleContext} from './upload-rule-context';
 // Private service/worker contract. No renderer DTOs or durable publication authority.
 import {EVENT_TYPES, type Available, type GameMode, type JobConfiguration, type Measure, type Money} from '../../contracts/src/protocol-v1';
+import {isCargoClassification, type CargoClassification} from '../../contracts/src/cargo-classification';
 import type {CloseReason, RecordingCompleteness, TripOutcome} from './api';
 
 export const MAX_UPLOAD_PROJECTION_PINS=8;
@@ -29,14 +29,14 @@ export interface UploadFacts {
   hardModeResult: 'qualified' | 'not-qualified';
   /** Engine-1 accounting at the snapshot ledger head. Absent in pins prepared before it existed, which map to unknown. */
   accounting?: UploadAccounting;
+  /** Opening evidence of the pinned logical root. Only pins prepared before cargo support omit it. */
+  cargoClassification?: CargoClassification | null;
 }
 export interface UploadProjection {
   requestedTripUuid: string; rootTripUuid: string; readiness: UploadReadiness | 'redirected'; rootReadiness: UploadReadiness;
   snapshot: string; databaseUuid: string; purpose: 'history' | 'synthetic' | 'replay'; revision: string;
   bounds: {members: string; events: string; gaps: string; samples: string; intervals: string; accountingHead: string | null};
   totals: Record<UploadPageKind, number>; facts: UploadFacts;
-  /** Optional only for retained pre-proof pins. Never part of the HTTP summary. */
-  ruleContext?: RuleContext;
 }
 export interface UploadProjectionBegin {pinId: string; tripUuid: string}
 export interface UploadProjectionPreparation {
@@ -90,11 +90,12 @@ const factsShape = shape({game: one('ets2','ats'), pluginSessionId: isUploadUuid
   openedBy: one('event','checkpoint'), checkpointNextEventSeq: nullable(sequence), checkpointUtcMs: nullable(count), opening: nullable(occurrence), outcomeOccurrence: nullable(occurrence), close: nullable(occurrence),
   gameMode: mode, job: jobCheck, observedDistance: available(real,'m'), fuelUsed: available(real,'L'), deliveredDistance: available(real,'m'), cargoDamage: available(real,'fraction'),
   revenue: moneyOf('s64'), penalty: moneyOf('s64'), moneyIncomplete: bool, clockAnomaly: bool, hardModeResult: one('qualified', 'not-qualified')});
-// Facts persisted before the accounting status existed omit it; a present value must be valid.
+// Retained work may predate new evidence keys. A present value must validate.
 const facts: Check = v => {
   if (!record(v)) return false;
-  const {accounting, ...rest} = v;
-  return (!Object.hasOwn(v, 'accounting') || accountingCheck(accounting)) && factsShape(rest);
+  const {accounting, cargoClassification, ...rest} = v;
+  return (!Object.hasOwn(v, 'accounting') || accountingCheck(accounting))
+    && (!Object.hasOwn(v, 'cargoClassification') || nullable(isCargoClassification)(cargoClassification)) && factsShape(rest);
 };
 const totals = shape({members: count, configurations: count, intervals: count});
 const readiness = one('ready','identity-pending');
@@ -113,8 +114,8 @@ export function isUploadPageQuery(v: unknown): v is UploadProjectionPageQuery {
 }
 export function isUploadProjection(v: unknown, requested?: string): v is UploadProjection {
   if (!record(v)) return false;
-  const {ruleContext,...legacy}=v;
-  if (ruleContext!==undefined&&!isRuleContext(ruleContext))return false;
+  // Pins persisted before trailers were pooled carry a retired ruleContext. It is ignored.
+  const legacy={...v};delete legacy.ruleContext;
   if (!shape({requestedTripUuid: isUploadUuid, rootTripUuid: isUploadUuid, readiness: one('ready','identity-pending','redirected'), rootReadiness: readiness,
     snapshot: v => !!uploadSnapshotParts(v), databaseUuid: isUploadUuid, purpose: one('history','synthetic','replay'), revision: positive,
     bounds: shape({members: decimal, events: decimal, gaps: decimal, samples: decimal, intervals: decimal, accountingHead: nullable(positive)}), totals, facts})(legacy)) return false;
@@ -157,14 +158,25 @@ export interface UploadSummary {
     expectedIncome: Available<Money>; revenue: Available<Money>; penalty: Available<Money>;
     evidence: {startObserved: boolean; endObserved: boolean; ruleContextComplete: boolean; clockAnomaly: boolean; reasons: string[]};
     hardModeResult?: 'qualified' | 'not-qualified';
-    /** Required in v1.2 and forbidden in v1.0 and v1.1. */
+    /** Required from v1.2. */
     accounting?: UploadAccounting;
+    /** Required in v1.3, with null for unavailable opening evidence. */
+    cargoClassification?: CargoClassification | null;
   };
 }
 interface UploadPlace {cityId: Available<string>; cityName: Available<string>; companyId: Available<string>; companyName: Available<string>}
 export type UploadMapping = {status: 'hold'; reason: 'identity-pending' | 'evidence-incomplete' | 'source-ineligible' | 'evidence-contradictory' | 'unrepresentable'}
   | {status: 'projected'; summary: UploadSummary; provenance: {snapshot: string; opening: QualifiedOccurrence | null; outcome: QualifiedOccurrence | null; close: QualifiedOccurrence | null}};
 const absent = {available: false, reason: 'not-observed'} as const;
+type UploadTrailer = UploadSummary['snapshot']['trailers']['items'][number];
+const usable = (v: Available<string>) => v.available && v.value.trim().length > 0;
+/** The lead trailer's body type is the whole rule input; the other slots are provenance. */
+const leadTrailerKnown = (items: readonly Pick<UploadTrailer, 'index' | 'bodyType'>[]) => items.some(item => item.index === 0 && usable(item.bodyType));
+/** Pools every member session's records, one per slot. A later record replaces an earlier one unless that would lose a known body type. */
+function poolTrailer(items: UploadTrailer[], c: UploadConfiguration): void {
+  const item = {index: c.index, id: c.idValue, bodyType: c.bodyType, chainType: c.chainType}, at = items.findIndex(i => i.index === c.index);
+  if (at < 0) items.push(item); else if (usable(item.bodyType) || !usable(items[at].bodyType)) items[at] = item;
+}
 
 /** Complete private pages are required. This result still needs a transactional root/owner freeze before publication. */
 export function mapUploadProjection(pin: UploadProjection, pages: readonly UploadProjectionPage[]): UploadMapping {
@@ -182,7 +194,7 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
     if (!done || collected[kind].length !== pin.totals[kind]) return hold('evidence-incomplete');
   }
   if (pages.some(p => !UPLOAD_PAGE_KINDS.includes(p.kind))) return hold('evidence-incomplete');
-  const members = collected.members as UploadMember[], configs = collected.configurations as UploadConfiguration[], intervals = collected.intervals as UploadInterval[];
+  const members = collected.members as UploadMember[], configs = collected.configurations as UploadConfiguration[];
   const f = pin.facts, openingMember = members.find(m => m.rawTripUuid === pin.rootTripUuid && m.pluginSessionId === f.pluginSessionId);
   if (!openingMember || members.some(m => m.origin !== 'game' || m.game !== f.game)) return hold('source-ineligible');
   const owned = (e: QualifiedOccurrence | null) => !e || members.some(m => m.rawTripUuid === e.rawTripUuid && m.pluginSessionId === e.pluginSessionId);
@@ -190,8 +202,9 @@ export function mapUploadProjection(pin: UploadProjection, pages: readonly Uploa
   const closeOwned = !f.close || owned(f.close) || f.closeReason === 'restart' && members.some(m => m.rawTripUuid === f.close!.rawTripUuid);
   if (![f.opening,f.outcomeOccurrence].every(owned) || !closeOwned || configs.some(c => !owned(c.occurrence))
  || !lifecycleValid(pin)) return hold('evidence-contradictory');
-  const changed=new Set(configs.map(c=>c.index)).size!==configs.length;
-  return projectedSummary(pin,openingMember.versions,changed?[]:configs.map(c=>({index:c.index,id:c.idValue,bodyType:c.bodyType,chainType:c.chainType})),configs.length>0,intervals.some(i=>i.kind!=='sample-loss'),changed);
+  const items: UploadTrailer[] = [];
+  for (const config of configs) poolTrailer(items, config);
+  return projectedSummary(pin,openingMember.versions,items);
 }
 function lifecycleValid(pin:UploadProjection):boolean {
   const f=pin.facts;
@@ -206,7 +219,7 @@ function lifecycleValid(pin:UploadProjection):boolean {
     || (f.outcome === 'delivered' || f.outcome === 'cancelled') && f.closeReason !== 'outcome'
     || f.outcome === 'none' && f.closeReason === 'outcome');
 }
-function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,items:UploadSummary['snapshot']['trailers']['items'],hasConfigurations:boolean,hasIntervals:boolean,changed:boolean):UploadMapping {
+function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,pooled:readonly UploadTrailer[]):UploadMapping {
   const f=pin.facts,j=f.job;
   const hold=(reason:Extract<UploadMapping,{status:'hold'}>['reason']):UploadMapping=>({status:'hold',reason});
   const time = (e: QualifiedOccurrence | null): UploadTime => e?.utcMs !== null && e?.utcMs !== undefined && e.utcMs <= 253_402_300_799_999
@@ -214,22 +227,12 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
   const start: UploadTime = f.openedBy === 'checkpoint' ? {utcMs: f.checkpointUtcMs, basis: 'checkpoint', eventSeq: null} : time(f.opening);
   const end = f.outcome === 'open' ? null : time(f.outcomeOccurrence ?? f.close);
   const clockAnomaly = f.clockAnomaly || start.utcMs !== null && end?.utcMs !== null && end?.utcMs !== undefined && end.utcMs < start.utcMs;
-  const proof=pin.ruleContext?.status==='proven'&&(pin.ruleContext.version===1||!chainComplete(pin.ruleContext.items))?{...pin.ruleContext,status:'unproven' as const}:pin.ruleContext,reasons=new Set<string>();
-  if(proof){
-    if(proof.status==='proven'||proof.items.length||proof.status==='changed')items=proof.items;
-    if(proof.status!=='proven')reasons.add(`trailer-context-${proof.status}`);
-    if(proof.recordingLoss)reasons.add('recording-intervals');
-  }else{
-    reasons.add('trailer-context-unproven');
-    if(changed)reasons.add('trailer-context-changed');
-    if(!hasConfigurations)reasons.add('trailer-context-unavailable');
-    if(hasIntervals)reasons.add('recording-intervals');
-  }
+  const items=[...pooled].sort((a,b)=>a.index-b.index),complete=leadTrailerKnown(items),reasons=new Set<string>();
+  if(!complete)reasons.add('trailer-context-unavailable');
   // The wire-visible reason is kept at every minor; v1.2 also carries the separate snapshot.accounting status.
   if(f.moneyIncomplete)reasons.add('accounting-unavailable');
   if(!usable(j.sourceCityId)||!usable(j.destinationCityId)||!usable(j.cargoId))reasons.add('job-context-unavailable');
   if(!j.cargoMass.available||!Number.isFinite(j.cargoMass.value)||j.cargoMass.value<0)reasons.add('cargo-mass-unavailable');
-  if (items.length > 10) return hold('unrepresentable');
   const place = (prefix: 'source' | 'destination'): UploadPlace => ({cityId: j[`${prefix}CityId`], cityName: j[`${prefix}City`], companyId: j[`${prefix}CompanyId`], companyName: j[`${prefix}Company`]});
   const summary: UploadSummary = {source: {provider: 'ets2telemetry', game: f.game, tripId: pin.rootTripUuid, pluginSessionId: f.pluginSessionId, databaseUuid: pin.databaseUuid, origin: 'game'}, snapshot: {
     outcome: f.outcome, closeReason: f.closeReason, recordingCompleteness: f.outcome === 'none' ? 'partial' : f.recordingCompleteness,
@@ -237,12 +240,13 @@ function projectedSummary(pin:UploadProjection,openingVersions:UploadVersions,it
     context: {gameBuild: absent, sourceLocale: absent, mapId: absent, dlcIds: absent, versions: openingVersions}, gameMode: f.gameMode,
     job: {origin: place('source'), destination: place('destination'), cargoId: j.cargoId, cargoName: j.cargo, cargoMass: j.cargoMass, cargoUnitMass: j.cargoUnitMass,
       cargoUnitCount: j.cargoUnitCount, market: j.market, isSpecialJob: j.isSpecialJob, cargoLoaded: j.cargoLoaded},
-    trailers: {complete: proof?.status==='proven', items}, plannedDistance: j.plannedDistance, observedDistance: f.observedDistance, deliveredDistance: f.deliveredDistance,
+    trailers: {complete, items}, plannedDistance: j.plannedDistance, observedDistance: f.observedDistance, deliveredDistance: f.deliveredDistance,
     fuelUsed: f.fuelUsed, cargoDamage: f.cargoDamage, expectedIncome: j.expectedIncome, revenue: f.revenue, penalty: f.penalty,
     evidence: {startObserved: start.basis === 'event' && !clockAnomaly, endObserved: !!f.outcomeOccurrence && end?.basis === 'event' && !clockAnomaly,
       ruleContextComplete: reasons.size===0, clockAnomaly, reasons: [...reasons].sort()},
     hardModeResult: f.hardModeResult,
-    accounting: f.accounting ?? {distance: 'unknown', fuel: 'unknown'}
+    accounting: f.accounting ?? {distance: 'unknown', fuel: 'unknown'},
+    ...(f.cargoClassification === undefined ? {} : {cargoClassification: f.cargoClassification})
   }};
   // Validate the exact allowlisted wire subset, including Dashboard's UTF-8, numeric and money limits.
   if (!wireValuesFit(summary)) return hold('unrepresentable');
@@ -265,20 +269,24 @@ function wireValuesFit(summary: UploadSummary): boolean {
     }
     return Object.entries(v).every(([k, value]) => walk(value, k));
   };
-  const m = summary.snapshot.gameMode;
+  const {cargoClassification, ...snapshot} = summary.snapshot;
+  const base = {source: summary.source, snapshot}, m = snapshot.gameMode;
   return (m.mode === 'unknown' ? m.method === 'none' && m.confidence === 'none' : m.method !== 'none' && m.confidence !== 'none' && (m.mode !== 'single-player' || m.confidence === 'weak'))
-    && walk(summary) && Buffer.byteLength(JSON.stringify(summary)) < 60_000;
+    && (cargoClassification == null || isCargoClassification(cargoClassification))
+    && walk(base) && Buffer.byteLength(JSON.stringify(base)) < 60_000;
 }
 
 /** Constant-size durable fold: at most ten trailer slots and three occurrence checks, never full history arrays. */
 export interface UploadFold {
-  ruleContextVersion?:1;kind:number;cursor:string|null;counts:Record<UploadPageKind,number>;openingVersions:UploadVersions|null;
-  openingOwned:boolean;outcomeOwned:boolean;closeOwned:boolean;hasIntervals:boolean;changed:boolean;
-  items:UploadSummary['snapshot']['trailers']['items'];invalid:Extract<UploadMapping,{status:'hold'}>['reason']|null;
+  kind:number;cursor:string|null;counts:Record<UploadPageKind,number>;openingVersions:UploadVersions|null;
+  openingOwned:boolean;outcomeOwned:boolean;closeOwned:boolean;
+  items:UploadTrailer[];invalid:Extract<UploadMapping,{status:'hold'}>['reason']|null;
 }
+/** A fold begun before trailers were pooled dropped its items on a repeated slot, so it cannot be finished. */
+export const isRetiredUploadFold=(fold:object):boolean=>Object.hasOwn(fold,'changed');
 export function beginUploadFold(pin:UploadProjection):UploadFold {
-  return {ruleContextVersion:1,kind:0,cursor:null,counts:{members:0,configurations:0,intervals:0},openingVersions:null,openingOwned:pin.facts.opening===null,
-    outcomeOwned:pin.facts.outcomeOccurrence===null,closeOwned:pin.facts.close===null,hasIntervals:false,changed:false,items:[],invalid:null};
+  return {kind:0,cursor:null,counts:{members:0,configurations:0,intervals:0},openingVersions:null,openingOwned:pin.facts.opening===null,
+    outcomeOwned:pin.facts.outcomeOccurrence===null,closeOwned:pin.facts.close===null,items:[],invalid:null};
 }
 export function advanceUploadFold(pin:UploadProjection,prior:UploadFold,page:UploadProjectionPage,isMember:(rawTripUuid:string,pluginSessionId:string)=>boolean):UploadFold {
   const fold=structuredClone(prior),kind=UPLOAD_PAGE_KINDS[fold.kind];
@@ -296,11 +304,8 @@ export function advanceUploadFold(pin:UploadProjection,prior:UploadFold,page:Upl
     }else if(kind==='configurations'){
       const config=row as UploadConfiguration;
       if(!isMember(config.occurrence.rawTripUuid,config.occurrence.pluginSessionId))fold.invalid='evidence-contradictory';
-      if(!fold.changed){
-        if(fold.items.some(item=>item.index===config.index)){fold.changed=true;fold.items=[];}
-        else fold.items.push({index:config.index,id:config.idValue,bodyType:config.bodyType,chainType:config.chainType});
-      }
-    }else if((row as UploadInterval).kind!=='sample-loss')fold.hasIntervals=true;
+      poolTrailer(fold.items,config);
+    }
   }
   fold.counts[kind]+=page.rows.length;fold.cursor=page.nextCursor;
   if(page.nextCursor===null){if(fold.counts[kind]!==pin.totals[kind])fold.invalid='evidence-incomplete';fold.kind++;}
@@ -314,7 +319,7 @@ export function finishUploadFold(pin:UploadProjection,fold:UploadFold):UploadMap
   if(fold.kind!==3||UPLOAD_PAGE_KINDS.some(kind=>fold.counts[kind]!==pin.totals[kind]))return {status:'hold',reason:'evidence-incomplete'};
   if(!fold.openingVersions)return {status:'hold',reason:'source-ineligible'};
   if(!fold.openingOwned||!fold.outcomeOwned||!fold.closeOwned||!lifecycleValid(pin))return {status:'hold',reason:'evidence-contradictory'};
-  return projectedSummary(fold.ruleContextVersion===1?pin:{...pin,ruleContext:undefined},fold.openingVersions,fold.items,fold.counts.configurations>0,fold.hasIntervals,fold.changed);
+  return projectedSummary(pin,fold.openingVersions,fold.items);
 }
 
 /** Exact closed source/snapshot shape shared with the frozen-envelope boundary. */
@@ -332,7 +337,10 @@ export function isUploadSummary(value:unknown, minor = 0):value is UploadSummary
     evidence:shape({startObserved:bool,endObserved:bool,ruleContextComplete:bool,clockAnomaly:bool,reasons:v=>Array.isArray(v)&&v.length<=32&&new Set(v).size===v.length&&v.every(x=>typeof x==='string'&&/^[a-z][a-z0-9-]{0,63}$/.test(x))})
   };
   if(minor >= 1) snapshotFields.hardModeResult = one('qualified', 'not-qualified');
-  if(minor === 2) snapshotFields.accounting = accountingCheck;
+  if(minor >= 2) snapshotFields.accounting = accountingCheck;
+  // Dashboard's raw JSON parser rejects numeric magnitudes above MAX_SAFE_INTEGER.
+  if(minor === 3) snapshotFields.cargoClassification = nullable(value => isCargoClassification(value)
+    && (value.fragility === null || value.fragility <= Number.MAX_SAFE_INTEGER));
   const check=shape({source:shape({provider:one('ets2telemetry'),game:one('ets2','ats'),tripId:isUploadUuid,pluginSessionId:isUploadUuid,databaseUuid:isUploadUuid,origin:one('game')}),
     snapshot:shape(snapshotFields)});
   if(!check(value))return false;
@@ -345,7 +353,7 @@ export function isUploadSummary(value:unknown, minor = 0):value is UploadSummary
     && (!s.evidence.startObserved||s.start.basis==='event'&&s.start.eventSeq===s.openedEventSeq)
     && (!s.evidence.endObserved||s.end?.basis==='event'&&s.end.eventSeq===s.outcomeEventSeq)
     && (s.start.utcMs===null||s.end?.utcMs===null||s.end?.utcMs===undefined||s.end.utcMs>=s.start.utcMs||s.evidence.clockAnomaly)
-    && (!s.trailers.complete||chainComplete(s.trailers.items))
+    && (!s.trailers.complete||leadTrailerKnown(s.trailers.items))
     && (!s.evidence.ruleContextComplete||s.evidence.reasons.length===0&&s.trailers.complete&&usable(s.job.origin.cityId)&&usable(s.job.destination.cityId)&&usable(s.job.cargoId)&&s.job.cargoMass.available)
     && new Set(s.trailers.items.map(item=>item.index)).size===s.trailers.items.length;
 }

@@ -51,12 +51,12 @@ describe('REG-010/012 closed Dashboard upload boundaries',()=>{
     expect(registrationResponse(bytes({...registered,contract:{major:1,minor:1}}),owner)).toEqual({...registered,contract:{major:1,minor:1}});
     expect(registrationResponse(bytes({...registered,identityEpoch:'new'}),owner)).toBeUndefined();
   });
-  // ET-113: the connection response header, not the v1.0 control body, selects the minor of newly frozen events.
+  // The connection response header selects the minor of newly frozen events. The control body stays v1.0.
   it.each([
-    ['1.0, 1.1, 1.2',2],['1.0, 1.1',1],['1.1',1],['1.2',2],['1.0,1.2',2],['1.0, 1.2, 1.3',2],['1.0, 1.3',0],
+    ['1.0, 1.1, 1.2',2],['1.0, 1.1',1],['1.1',1],['1.2',2],['1.0,1.2',2],['1.0, 1.2, 1.3',3],['1.0, 1.3',3],['1.3',3],
     ['1.0',0],[undefined,0],['',0],['1.02',0],['1.2,x',0],['1.2,',0],['v1.2',0],['01.2',0],
     // A well-formed version of another major is ignored; only the 1.x versions select.
-    ['1.0, 1.1, 1.2, 2.0',2],['2.0',0],['1.0, 2.1',0],['1.1, 3.0',1],['1.2, 3.12',2],
+    ['1.0, 1.1, 1.2, 2.0',2],['2.0',0],['1.0, 2.1',0],['1.1, 3.0',1],['1.2, 3.12',2],['1.4, 1.3, 2.0',3],['1.4',0],
     // 26 listed versions are 128 characters, the bound; 27 are 133 and not a recognized advertisement.
     [Array(26).fill('1.2').join(', '),2],[Array(27).fill('1.2').join(', '),0]
   ] as const)('selects the event minor from the advertised versions %j',(header,minor)=>{

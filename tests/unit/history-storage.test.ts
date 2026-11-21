@@ -1,8 +1,8 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {CLOSE_TERMINATE_RESERVE_MS, HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HistoryStorage, recorderClient, type HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
+import {CLOSE_TERMINATE_RESERVE_MS, HISTORY_CLOSE_BUDGET_MS, HISTORY_CLOSE_GRACE_MS, HISTORY_EMERGENCY_REOPEN_INTERVAL_MS, HISTORY_RETIREMENT_NOTICE_MS, HistoryStorage, recorderClient, type HistoryStorageOptions} from '../../apps/desktop/src/history-storage';
 import {SERVICE_STOP_BUDGET_MS, ShutdownSequence} from '../../apps/desktop/src/shutdown-sequence';
 import type {Result, StorageErrorCode} from '../../packages/storage/src/api';
-import type {StorageClient, StorageWorkerHandle} from '../../packages/storage/src/client';
+import {COMMAND_DEADLINE_MS, type StorageClient, type StorageWorkerHandle} from '../../packages/storage/src/client';
 import {storageError} from '../../packages/storage/src/errors';
 import type {StorageRequest} from '../../packages/storage/src/worker/protocol';
 
@@ -14,7 +14,7 @@ const timers = {setTimeout: (callback: () => void, ms: number) => setTimeout(cal
   setImmediate: (callback: () => void) => setImmediate(callback), clearImmediate: (handle: unknown) => clearImmediate(handle as ReturnType<typeof setImmediate>)};
 
 /** A scripted storage worker. `open` answers with `openResult`; `close` is answered only when `answerClose` is true. */
-function fixture(localAppData: string | null = 'C:\\isolated', openResult: Result<unknown> | ((attempt: number) => Result<unknown>) = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened' | 'onStateChange' | 'reopenBackoffMs' | 'maxReopenAttempts'> = {}) {
+function fixture(localAppData: string | null = 'C:\\isolated', openResult: Result<unknown> | ((attempt: number) => Result<unknown>) = {ok: true, value: SUMMARY}, answerClose = true, extra: Pick<HistoryStorageOptions, 'target' | 'onOpened' | 'onStateChange' | 'reopenBackoffMs' | 'maxReopenAttempts' | 'emergencyRecovery'> = {}) {
   const sent: StorageRequest[] = [], log = vi.fn();
   let workerCount = 0;
   let latestWorker: StorageWorkerHandle | undefined;
@@ -23,6 +23,7 @@ function fixture(localAppData: string | null = 'C:\\isolated', openResult: Resul
     respond: (id: number, result: Result<unknown>) => void;
     finishClose: (id: number) => void;
     crash: () => void;
+    exit: (code: number) => void;
   }[] = [];
 
   const createWorker = vi.fn(() => {
@@ -51,7 +52,7 @@ function fixture(localAppData: string | null = 'C:\\isolated', openResult: Resul
     latestWorker = worker;
     const finishClose = (id: number) => { listeners.message?.({type: 'storage.response', id, result: {ok: true, value: undefined}}); exit(0); };
     const crash = () => listeners.error?.(new Error('worker crashed'));
-    workers.push({worker, respond, finishClose, crash});
+    workers.push({worker, respond, finishClose, crash, exit});
     return worker;
   });
 
@@ -387,6 +388,81 @@ describe('the database the journal reads (ET-016 PR-3, J3, J4)', () => {
 });
 
 describe('re-opening history storage after a recoverable stop (ET-037)', () => {
+  it.each([false, true])('replaces a crashed worker only after exit and surfaces a permanent reopen refusal (refused=%s)', async refused => {
+    const onOpened = vi.fn();
+    const f = fixture('C:\\isolated', attempt => attempt && refused ? {ok: false, error: storageError('SCHEMA_NEWER')}
+      : {ok: true, value: SUMMARY}, true, {onOpened, emergencyRecovery: true});
+    f.history.start();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.mocked(f.worker.terminate).mockReturnValue(new Promise(() => undefined));
+    f.crash();
+    expect([f.history.state, f.history.recovering, f.history.failureCode]).toEqual(['unavailable', true, 'WORKER_FAILED']);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.createWorker).toHaveBeenCalledOnce();
+    f.workers[0].exit(1);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(f.createWorker).toHaveBeenCalledTimes(2);
+    expect([f.history.state, f.history.recovering, f.history.failureCode]).toEqual(refused ? ['unavailable', false, 'SCHEMA_NEWER'] : ['open', false, null]);
+    expect(onOpened).toHaveBeenCalledTimes(refused ? 1 : 2);
+    await f.history.close();
+  });
+
+  it('resumes emergency replay when SQLite becomes writable after the fast attempts are exhausted', async () => {
+    const onOpened = vi.fn();
+    const f = fixture('C:\\isolated', attempt => attempt <= 2 ? {ok: false, error: storageError('DATABASE_LOCKED')}
+      : {ok: true, value: SUMMARY}, true, {emergencyRecovery: true, maxReopenAttempts: 1, reopenBackoffMs: [100], onOpened});
+    f.history.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(f.createWorker).toHaveBeenCalledTimes(2);
+    expect(f.history.recovering).toBe(true);
+    await vi.advanceTimersByTimeAsync(HISTORY_EMERGENCY_REOPEN_INTERVAL_MS - 1);
+    expect(f.createWorker).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.createWorker).toHaveBeenCalledTimes(3);
+    expect(f.history.recovering).toBe(true);
+    await vi.advanceTimersByTimeAsync(HISTORY_EMERGENCY_REOPEN_INTERVAL_MS);
+    expect(f.createWorker).toHaveBeenCalledTimes(4);
+    expect([f.history.state, f.history.recovering, f.history.failureCode]).toEqual(['open', false, null]);
+    expect(onOpened).toHaveBeenCalledOnce();
+    expect(f.events().filter(([event]) => event === 'HISTORY_STORAGE_REOPEN_COOLDOWN')).toEqual([
+      ['HISTORY_STORAGE_REOPEN_COOLDOWN', {attempts: 1, code: 'DATABASE_LOCKED'}]
+    ]);
+    await f.history.close();
+  });
+
+  it.each([false, true])('waits for the timed-out worker to exit before reopening (shutdown=%s)', async shutdown => {
+    const f = fixture();
+    f.history.start();
+    await vi.advanceTimersByTimeAsync(0);
+    // The shutdown grace may expire even though the worker is still inside native I/O.
+    let finishTermination!: (code: number) => void;
+    const terminated = new Promise<number>(resolve => { finishTermination = resolve; });
+    vi.mocked(f.worker.terminate).mockReturnValue(terminated);
+    const command = f.history.client!.listTrips();
+    await vi.advanceTimersByTimeAsync(COMMAND_DEADLINE_MS);
+    await expect(command).resolves.toMatchObject({ok: false, error: {code: 'TIMEOUT'}});
+    expect(f.history.state).toBe('unavailable');
+    expect(f.events()).toContainEqual(['HISTORY_STORAGE_UNAVAILABLE', {code: 'TIMEOUT', command: 'listTrips'}]);
+
+    const closed = shutdown ? f.history.close().catch((error: unknown) => error) : undefined;
+    const notices = () => f.events().filter(([name]) => name === 'HISTORY_STORAGE_RETIREMENT_PENDING');
+    await vi.advanceTimersByTimeAsync(HISTORY_RETIREMENT_NOTICE_MS - 1);
+    expect(notices()).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(HISTORY_RETIREMENT_NOTICE_MS);
+    expect(notices()).toEqual(shutdown ? [] : [['HISTORY_STORAGE_RETIREMENT_PENDING', {code: 'TIMEOUT', waitMs: HISTORY_RETIREMENT_NOTICE_MS}]]);
+    expect(f.createWorker).toHaveBeenCalledOnce();
+    if (closed) expect(await closed).toMatchObject({message: 'History storage did not close cleanly'});
+
+    f.workers[0].exit(1);
+    finishTermination(1);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(f.createWorker).toHaveBeenCalledTimes(shutdown ? 1 : 2);
+    expect(f.history.state).toBe(shutdown ? 'closed' : 'open');
+    if (!shutdown) await f.history.close();
+  });
+
   it.each<StorageErrorCode>(['DATABASE_LOCKED', 'DISK_FULL', 'IO_ERROR'])(
     'schedules retry with backoff on %s and re-opens when subsequent attempt succeeds',
     async code => {

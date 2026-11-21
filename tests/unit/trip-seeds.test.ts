@@ -34,6 +34,16 @@ function event(eventSeq: string, type: string, utc: string | null, record: Recor
 const configured = (eventSeq: string, utc: string | null, configuration: JobConfiguration = job()) => event(eventSeq, 'job.configured', utc, {...configuration});
 
 describe('seedFromStored (R4)', () => {
+  it('restores a configuration revision only from events at or after the trip opened', () => {
+    const opening = {...configured('2', null), occurred: {configurationRevision: '7'}};
+    const later = {...event('4', 'truck.configured', null), occurred: {configurationRevision: '8'}};
+    expect(seedFromStored(trip(), opening, [later, opening]).configurationRevision).toBe('8');
+    const checkpoint = trip({openedBy: 'checkpoint', openedEventSeq: null, jobSource: 'checkpoint',
+      checkpointJob: {nextEventSeq: '4', values: job()}});
+    expect(seedFromStored(checkpoint, undefined, [opening]).configurationRevision).toBeUndefined();
+    expect(seedFromStored(checkpoint, undefined, [later, opening]).configurationRevision).toBe('8');
+  });
+
   it('builds the seed of a stored open trip from its job row, the session labels and its stored distance', () => {
     const rows = [event('1', 'simulation.started', '1791676801000'), configured('2', '1791676802000'), event('3', 'player.fined', '1791676803000')];
     expect(seedFromStored(trip({observedDistanceM: {available: true, value: 1234.5}, recordingCompleteness: 'partial'}), rows[1], rows)).toEqual({

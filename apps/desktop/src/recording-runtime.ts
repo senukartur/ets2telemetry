@@ -9,15 +9,19 @@ import type {ProfileObservation} from '../../../packages/telemetry-core/src/trip
 // docs/telemetry-service-v1.md#service-wiring.
 import type {HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
 import type {RecordingHealth, SourceSelection} from '../../../packages/contracts/src';
-import type {StorageWorkerHandle} from '../../../packages/storage/src/client';
+import type {StorageClient, StorageWorkerHandle} from '../../../packages/storage/src/client';
 import type {DiagnosticFacts} from './diagnostics';
 import {HistoryStorage, HISTORY_CLOSE_BUDGET_MS, HISTORY_STORAGE_STEP_NAME, recorderClient, type HistoryStorageOptions} from './history-storage';
 import {recordingPlan, type RecordingPlan} from './recording-policy';
-import {deriveRecordingStatus, RecordingStatusPublisher, type RecordingStatusTimers} from './recording-status';
+import {addLosses, deriveRecordingStatus, RecordingStatusPublisher, ZERO_LOSSES, type RecordingStatusTimers} from './recording-status';
 import type {ShutdownSequence} from './shutdown-sequence';
-import {TripRecorderSink} from './trip-recorder';
+import {TripRecorderSink, type TripRecorderOptions} from './trip-recorder';
 import {V1Ingestion, type V1IngestionOptions, type V1SourceState} from './v1-ingestion';
 import type {ProfileObserverStatus} from './profile-observation';
+import path from 'node:path';
+import {dataPaths} from './paths';
+import {EmergencyDelivery} from './emergency-delivery';
+import {EmergencyJournal} from './emergency-journal';
 
 /** Budget of the `v1-ingestion` step in the `intake` shutdown phase. */
 export const V1_INTAKE_BUDGET_MS = 1000;
@@ -25,13 +29,15 @@ export const V1_INTAKE_BUDGET_MS = 1000;
 export const RECORDING_FLUSH_BUDGET_MS = 500;
 
 /** Ingestion options a test may set; the wiring (sources, sink, selections, readiness, diagnostics, state) stays the runtime's. */
-export type RecordingIngestionOverrides = Omit<V1IngestionOptions, 'connect' | 'connectGame' | 'broker' | 'sink' | 'durableSelections' | 'durableReady' | 'diagnose' | 'onState' | 'onHealthy'>;
+export type RecordingIngestionOverrides = Omit<V1IngestionOptions, 'connect' | 'connectGame' | 'broker' | 'sink' | 'delivery' | 'durableSelections' | 'durableReady' | 'diagnose' | 'onState' | 'onHealthy'>;
 
 export interface RecordingRuntimeOptions {
   /** The service environment; only ETS2TELEMETRY_RECORDING is read (recording-policy.ts). */
   env: Readonly<Record<string, string | undefined>>;
   /** GAME_HISTORY_RECORDING in production. */
   gameHistory: boolean;
+  /** Use separate on-disk intake for the supported recording target. */
+  emergencyJournal?: 'game' | 'test';
   /** The service's LOCALAPPDATA; the database path is derived from it at start. */
   localAppData: string | undefined;
   /** Fixed codes and numbers only. */
@@ -48,8 +54,8 @@ export interface RecordingRuntimeOptions {
   onV1Healthy?: V1IngestionOptions['onHealthy'];
   /** Tests only: bounds, timers and clocks of the ingestion and its pipeline. */
   ingestionOverrides?: RecordingIngestionOverrides;
-  /** Tests only: the stamped application version, close grace, and reopen retry overrides of the database. */
-  historyOverrides?: Pick<HistoryStorageOptions, 'appVersion' | 'closeGraceMs' | 'reopenBackoffMs' | 'maxReopenAttempts'>;
+  /** Tests only: the stamped application version and timing overrides of the database. */
+  historyOverrides?: Pick<HistoryStorageOptions, 'appVersion' | 'closeGraceMs' | 'reopenBackoffMs' | 'maxReopenAttempts' | 'timers'>;
   /** ET-015c (G4, G5): every recording status to send to main, from `start()` until `stopStatus()`. */
   onRecordingStatus?: (status: RecordingHealth) => void;
   /** Tests only: the coalescing interval (G5) and timers of the recording status; 250 ms and the system timers by default. */
@@ -57,6 +63,7 @@ export interface RecordingRuntimeOptions {
   profileStatus?: () => ProfileObserverStatus;
   hardModeEvidence?: () => HardModeObservation;
   onHardModeTrip?: (details: HardModeDetails | null) => void;
+  cargoLookup?: TripRecorderOptions['cargoLookup'];
   statusOverrides?: {intervalMs?: number; timers?: RecordingStatusTimers};
 }
 
@@ -78,8 +85,8 @@ export interface RecordingRuntime {
 /**
  * Builds the service's recording wiring from its environment (R3). Game selections stay live-only while `gameHistory`
  * is false. Only ETS2TELEMETRY_RECORDING=synthetic:<name>|replay:<name> constructs the trip recorder, over a database in
- * the synthetic directory that replaces history, and makes only the matching selection durable once that database is
- * open (`durableReady`); its open lets a live-only connection made before it reconnect durable (R10, `onOpened`).
+ * the synthetic directory that replaces history, and makes only the matching selection durable. A direct SQLite
+ * connection waits for the database. Emergency intake waits only for its own journal.
  * ET-015c (G3-G5): the database, the ingestion, its pipeline's retry code and the recorder report their changes, and the
  * derived recording status goes to `onRecordingStatus`, coalesced by RecordingStatusPublisher. Without a recorder it is
  * always `disabled`.
@@ -89,9 +96,25 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
   const plan = recordingPlan(options.env, {gameHistory: options.gameHistory, log: event => log(event)});
   // ET-015c (G5): every input of the recording status reports its changes here.
   const changed = () => status.changed();
-  // The recorder reaches storage through the history client, so a command before the open or after a failure answers
-  // STORAGE_CLOSED (recorderClient).
-  const recorder = plan.durableSelections.length ? new TripRecorderSink(recorderClient({get client() {return history.client;}}), {onChange: changed, profileEvidence: options.profileEvidence, profileStatus: options.profileStatus, hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip}) : undefined;
+  // Before the database opens, the recorder's storage requests answer STORAGE_CLOSED.
+  const createRecorder = (client?: StorageClient) => {
+    // Once bound, work from this recorder can only reach its own worker generation.
+    let bound = client;
+    return new TripRecorderSink(recorderClient({get client() {return bound ??= history.client;}}), {
+      onChange: changed, profileEvidence: options.profileEvidence, profileStatus: options.profileStatus,
+      hardModeEvidence: options.hardModeEvidence, onHardModeTrip: options.onHardModeTrip, cargoLookup: options.cargoLookup
+    });
+  };
+  let recorder = plan.durableSelections.length ? createRecorder() : undefined;
+  let retiredLosses = ZERO_LOSSES;
+  let emergency: EmergencyDelivery | undefined;
+  const local = options.localAppData;
+  const journalEnabled = options.emergencyJournal === 'game' && plan.database.purpose === 'history'
+    || options.emergencyJournal === 'test' && plan.database.purpose !== 'history';
+  const journal = journalEnabled && recorder && local && path.isAbsolute(local)
+    ? new EmergencyJournal(path.join(dataPaths(local).emergencyJournal,
+      plan.database.purpose === 'history' ? 'history' : `${plan.database.purpose}-${plan.database.name}`),
+    plan.database.purpose === 'history' ? 'game' : plan.database.purpose) : undefined;
   // The selection that was recording or paused (durable delivery active, fresh v1 data) since it was selected: G3 rule 8.
   let recorded: SourceSelection | undefined;
   const v1 = new V1Ingestion({
@@ -103,24 +126,50 @@ export function createRecordingRuntime(options: RecordingRuntimeOptions): Record
       if (recorded !== state.selection) recorded = state.durable.state === 'active' && (state.status === 'connected' || state.status === 'paused') ? state.selection : undefined;
       options.onV1State(state); if (recorder) changed();
     },
-    ...(recorder ? {sink: recorder, durableSelections: plan.durableSelections, durableReady: () => history.state === 'open'} : {}),
+    ...(recorder ? {durableSelections: plan.durableSelections, durableReady: () => Boolean(journal) || history.state === 'open'} : {}),
+    ...(!journal && recorder ? {sink: recorder} : {}),
+    ...(journal ? {delivery: (report: () => void) => emergency = new EmergencyDelivery(journal, () => history.client, client => {
+      retiredLosses = addLosses(retiredLosses, recorder!.losses());
+      return recorder = createRecorder(client);
+    }, report, () => v1.durableAvailabilityChanged(), (event, facts) => log(event, undefined, facts))} : {}),
     ...options.ingestionOverrides
   });
   // The durable history database (ET-013, OD-2), or the recording target that replaces it.
+  let recovering = false;
   const history: HistoryStorage = new HistoryStorage({localAppData: options.localAppData, log, createWorker: options.createWorker,
-    target: plan.database, ...(recorder ? {onOpened: () => v1.durableAvailabilityChanged(), onStateChange: changed} : {}), ...options.historyOverrides});
+    target: plan.database, emergencyRecovery: Boolean(emergency), ...(recorder ? {
+      onOpened: () => {
+        if (emergency) { emergency.storageChanged(); return; }
+        if (!recovering) { v1.durableAvailabilityChanged(); return; }
+        recovering = false;
+        const client = history.client;
+        void v1.resumeStorage(() => {
+          retiredLosses = addLosses(retiredLosses, recorder!.losses());
+          return recorder = createRecorder(client);
+        }, () => history.client === client);
+      },
+      onRuntimeTimeout: () => { if (!emergency) { recovering = true; v1.suspendStorage(); } },
+      onStateChange: changed
+    } : {}), ...options.historyOverrides});
   /** G3: the status from the current state of the database, the ingestion, its pipeline and the recorder. */
   const recordingStatus = (): RecordingHealth => {
     if (!recorder) return {state: 'disabled'};
     const current = v1.current, game = current.observation?.source.game;
-    return deriveRecordingStatus({recorder: true, target: plan.database.purpose, history: {state: history.state, code: history.failureCode},
+    const delivery = emergency?.status;
+    return deriveRecordingStatus({recorder: true, target: plan.database.purpose,
+      history: {state: history.state, code: history.failureCode, recovering: history.recovering},
       durableSelections: plan.durableSelections, v1: current, retryCode: v1.durableRetryCode ?? null, recorded: recorded === current.selection,
-      losses: recorder.losses(), trip: game ? recorder.tripSummary(game) : null});
+      buffered: emergency?.buffered, journalFailure: delivery?.state === 'failed' && delivery.code !== 'ACK_AHEAD_OF_STORAGE' ? delivery.code : undefined,
+      losses: addLosses(retiredLosses, recorder.losses()), trip: game ? recorder.tripSummary(game) : null});
   };
   const status = new RecordingStatusPublisher(recordingStatus, next => options.onRecordingStatus?.(next), options.statusOverrides);
   return {
     plan, v1, history, recordingStatus, observeHardMode: (game, observation) => recorder?.observeHardMode(game, observation),
-    start: () => { history.start(); status.start(); },
+    start: () => {
+      history.start();
+      status.start();
+      if (emergency) void emergency.start();
+    },
     stopStatus: () => status.close(),
     register: shutdown => {
       // Ends the v1 source and waits for its broker process; nothing is acknowledged afterwards (R14).

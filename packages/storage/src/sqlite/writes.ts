@@ -1,4 +1,3 @@
-import {fenceJoinedRuleEvidence,RULE_LOSSES,ruleEventType} from './trailer-baselines';
 import {startReplayBudget} from './quantities';
 import {retainUploadDeletion} from './upload-discovery';
 import {validCapturedEndpoint,validAcceptanceDetail} from './logical-coverage';
@@ -23,6 +22,8 @@ import {fail} from '../errors';
 import type {StorageConnection} from './connection';
 import {newHardModeDetails, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
 import {applyEventHardMode, checkHardModeObservation, recordGapHardMode, updateOpenHardMode} from './hard-mode';
+import {isCargoOpening, isFillCargoClassification} from '../cargo-classification';
+import type {CargoOpening, FillCargoClassification, FillCargoResult} from '../api';
 
 const cache = new WeakMap<Database.Database, Map<string, Database.Statement>>();
 /** Prepared statements are cached per connection; SQL text is always a constant of this module. */
@@ -159,7 +160,7 @@ interface EffectContext {
   /** openAttachedTrip only (ET-016 PR-7, J9): the checkpoint job configuration the command stored for its trip.open. */
   attachJobRef?: bigint;
   /** openAttachedTrip only: the trip UUID the attach must open, attachTripUuidFor(session, nextEventSeq) (review round 1). */
-  attachTripUuid?: string;profileChange?:boolean;
+  attachTripUuid?: string;profileChange?:boolean; cargoOpening?: CargoOpening;
 }
 const enumValue = (value: unknown, options: readonly string[]) => { if (typeof value !== 'string' || !options.includes(value)) fail('INVALID_INPUT'); return value; };
 const utcMs = (value: unknown) => { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) fail('INVALID_INPUT'); return value; };
@@ -220,7 +221,6 @@ function addInterval(c: EffectContext, interval: CompletenessInterval, ifAbsent 
   const clock = interval.sourceClockId === undefined ? null : clockRef(c.db, c.session.id, 'source-monotonic', interval.sourceClockId);
   statement(c.db, insert('completeness_intervals', ['plugin_session_ref', 'trip_ref', 'kind', 'start_utc_ms', 'end_utc_ms', 'start_monotonic_ns', 'end_monotonic_ns', 'source_clock_ref', 'first_event_seq', 'last_event_seq', 'detail_json', 'created_utc_ms']))
     .run(c.session.id, trip, kind, startUtc, endUtc, startMonotonic, endMonotonic, clock, first, last, detail, c.now);
-  if(trip===null&&RULE_LOSSES.some(loss=>loss===kind))fenceJoinedRuleEvidence(c.db,c.game,c.session.id,first,clock,startMonotonic);
 }
 
 /** Applies typed trip effects in order. Every reference is resolved inside the transaction; any failure aborts it. */
@@ -248,6 +248,13 @@ function applyEffects(c: EffectContext, effects: unknown): void {
             optionalBoolean(effect.gameModeAmbiguous) ?? 0n, job, truck, attached ? null : c.eventRef, attached ? 'checkpoint' : 'event', 'open', enumValue(effect.recordingCompleteness, COMPLETENESS),
             utcMs(effect.startedUtcMs), null, 'not-observed', c.now, c.now).lastInsertRowid;
         statement(c.db, 'UPDATE trips SET hard_mode_details = ? WHERE id = ?').run(JSON.stringify(newHardModeDetails(unknownHardMode(effect.startedUtcMs, 'historical'), null)), id);
+        if (c.cargoOpening && c.session.origin === 'game' && effect.jobConfiguration === 'this-event'
+          && (attached || c.eventType === 'job.configured')
+          && statement(c.db, "SELECT cargo_id FROM job_configurations WHERE id = ? AND cargo_id_state = 'available'").pluck().get(job) === c.cargoOpening.cargoId) {
+          const value = c.cargoOpening.classification;
+          statement(c.db, 'UPDATE trips SET cargo_classification = ?, cargo_classification_generation = ? WHERE id = ?')
+            .run(value === null ? null : canonicalJson(value), value === null ? c.cargoOpening.generation : null, id);
+        }
         addTrailers(c, BigInt(id), effect.trailerConfigurations);
         break;
       }
@@ -328,9 +335,10 @@ function applyEffects(c: EffectContext, effects: unknown): void {
  * and advances coverage; an existing one is `duplicate` (same canonical payload) or `conflict` (the stored row is kept),
  * and neither writes anything.
  */
-export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options: CommitOptions = {}): CommitResult {
+export function commitEvent(conn: StorageConnection, input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation; cargoOpening?: CargoOpening}, options: CommitOptions = {}): CommitResult {
   const m = serverMessage(input?.message, 'event');
   if (m.kind !== 'event') fail('INVALID_INPUT');
+  if (input.cargoOpening !== undefined && !isCargoOpening(input.cargoOpening)) fail('INVALID_INPUT');
   checkHardModeObservation(input.hardMode); checkHardModeObservation(input.hardModeLoss);
   if (input.hardModeFresh !== undefined && typeof input.hardModeFresh !== 'boolean') fail('INVALID_INPUT');
   if (input.hardModeLoss?.assessment.state === 'pass') fail('INVALID_INPUT');
@@ -355,11 +363,11 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
         u64Key(occurred.configurationRevision), u64Key(occurred.boundaryOrder), payload, BigInt(m.version.minor), redelivered ? 1n : 0n, now);
     if (result.changes !== 1) fail('CONSTRAINT_VIOLATION');
     const eventRef = BigInt(result.lastInsertRowid);
-    if(ruleEventType(record.type))fenceJoinedRuleEvidence(db,session.game,session.id,seqKey);
     normalize(db, session.id, eventRef, record);
     if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
     if (input.hardMode) updateOpenHardMode(db, session.game, input.hardMode, now, input.hardModeFresh === true, 'frozen');
-    applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey}, input.effects);
+    applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey,
+      cargoOpening: redelivered ? undefined : input.cargoOpening}, input.effects);
     applyEventHardMode(db, m, input.effects, input.hardMode, now, input.hardModeLoss, input.hardModeFresh === true);
     projectEffects(db, input.effects, m.data.occurred.monotonicNs.available && !m.data.redelivered ? admittedProfile(input.profile, m.source, m.capture.clockId, m.data.occurred.monotonicNs.value) : undefined);
     if (record.type==='job.cancelled' || record.type==='job.delivered') retireObservedTerminal(db,session.id);
@@ -414,7 +422,6 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
     statement(db, insert('event_gaps', ['plugin_session_ref', 'first_event_seq', 'last_event_seq', ...CAUSES.map(([, c]) => c), 'first_lost_monotonic_ns', 'first_lost_monotonic_ns_state',
       'last_lost_monotonic_ns', 'last_lost_monotonic_ns_state', 'source_clock_ref', 'redelivered', 'committed_utc_ms']))
       .run(session.id, firstKey, lastKey, ...CAUSES.map(([key]) => u64Key(d.causes[key])), firstLost, firstLostState, lastLost, lastLostState, clock, d.redelivered ? 1n : 0n, now);
-    fenceJoinedRuleEvidence(db,session.game,session.id,firstKey);
     // The carrier of a gap is the first eventSeq it newly covers: previouslyCoveredThrough + 1, or the gap's own first
     // eventSeq when it starts beyond that (ET-016, J7). It is at most lastEventSeq, which is above the coverage here.
     const firstNew = BigInt(previouslyCoveredThrough) + 1n, carrier = BigInt(d.firstEventSeq) > firstNew ? BigInt(d.firstEventSeq) : firstNew;
@@ -457,7 +464,7 @@ function availability(input: unknown): Available<unknown> {
   return o as Available<unknown>;
 }
 /** Validates one sample and returns its column values; nothing is written for a batch with any invalid sample. */
-function sampleColumns(row: SampleInput): {trip: string | null; clock: string; gameClock: string | null; monotonic: bigint; values: unknown[]} {
+function sampleColumns(row: SampleInput, recordsCargoDamage: boolean): {trip: string | null; clock: string; gameClock: string | null; monotonic: bigint; values: unknown[]} {
   if (typeof row !== 'object' || row === null || !isUuid(row.sourceClockId)) fail('INVALID_INPUT');
   if(row.recording!==undefined){
     const evidence=row.recording;
@@ -501,6 +508,11 @@ function sampleColumns(row: SampleInput): {trip: string | null; clock: string; g
     }
   }
   values.push(BigInt(notSupported), BigInt(invalid));
+  if (row.cargoDamage !== undefined) {
+    const damage = finiteNumber(row.cargoDamage);
+    if (!recordsCargoDamage || row.tripUuid == null || damage < 0 || damage > 1) fail('INVALID_INPUT');
+  }
+  if (recordsCargoDamage) values.push(row.cargoDamage ?? null);
   return {trip: row.tripUuid ?? null, clock: row.sourceClockId, gameClock: game === null ? null : game.clockId, monotonic, values};
 }
 const SAMPLE_COLUMNS = ['utc_ms', 'monotonic_ns', ...SAMPLE_FIELDS.flatMap(f => f.columns), 'not_supported_mask', 'invalid_mask'];
@@ -514,11 +526,13 @@ export function appendSamples(conn: StorageConnection, pluginSessionId: string, 
   if (!Array.isArray(rows) || rows.length > MAX_SAMPLE_BATCH) fail('INVALID_INPUT');
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.uniqueSeconds !== undefined && typeof options.uniqueSeconds !== 'boolean')) fail('INVALID_INPUT');
   const uniqueSeconds = options.uniqueSeconds === true;
-  const prepared = rows.map(sampleColumns);
+  const recordsCargoDamage = conn.summary.schemaVersion >= 13;
+  const prepared = rows.map(row => sampleColumns(row, recordsCargoDamage));
   return transact(conn, db => {
     const session = sessionByUuid(db, pluginSessionId), trips = new Map<string, bigint>();
     const c: EffectContext = {db, session, game: session.game, now: conn.now()};
-    const sql = insert('samples', ['plugin_session_ref', 'trip_ref', 'source_clock_ref', 'game_clock_ref', ...SAMPLE_COLUMNS]);
+    const sql = insert('samples', ['plugin_session_ref', 'trip_ref', 'source_clock_ref', 'game_clock_ref', ...SAMPLE_COLUMNS,
+      ...(recordsCargoDamage ? ['cargo_damage_fraction'] : [])]);
     // The last accepted source second per source clock UUID, seeded with the session's latest stored row.
     const lastSecond = new Map<string, bigint>();
     if (uniqueSeconds) {
@@ -604,12 +618,13 @@ function attachTripUuid(pluginSessionId: string, nextEventSeq: string): string {
  */
 export function openAttachedTrip(conn: StorageConnection, input: AttachInput, options:CommitOptions = {}): AttachResult {
   if (!plainRecord(input)) fail('INVALID_INPUT');
+  if (input.cargoOpening !== undefined && !isCargoOpening(input.cargoOpening)) fail('INVALID_INPUT');
   if (input.endpoint !== undefined && !validCapturedEndpoint(input.endpoint)) fail('INVALID_INPUT');
   const nextKey = u64Key(input.nextEventSeq);
   if (BigInt(input.nextEventSeq) < 1n) fail('INVALID_INPUT');
   const values = checkpointJobValues(input.job), effects: unknown = input.effects;
   if(input.observeTripUuid!==undefined){
-    if(!isUuid(input.observeTripUuid)||!Array.isArray(effects)||effects.length!==0||!input.sourceClockId||!isUuid(input.sourceClockId)||!input.monotonicNs||input.profileChange!==undefined)fail('INVALID_INPUT');
+    if(!isUuid(input.observeTripUuid)||!Array.isArray(effects)||effects.length!==0||!input.sourceClockId||!isUuid(input.sourceClockId)||!input.monotonicNs||input.profileChange!==undefined||input.cargoOpening!==undefined)fail('INVALID_INPUT');
     sampleMonotonicNs(input.monotonicNs);
     return transact(conn,db=>{
       const session=sessionByUuid(db,input.pluginSessionId);
@@ -657,7 +672,7 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
       if(!proof)fail('INVALID_INPUT');
       for(const effect of input.effects)if(effect.kind==='trip.close'){const old=statement(db,'SELECT l.profile_scope FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id JOIN logical_trips l ON l.id=m.logical_ref WHERE t.trip_uuid=?').get(effect.tripUuid) as {profile_scope:string|null}|undefined;if(!old?.profile_scope || old.profile_scope===proof.scope)fail('INVALID_INPUT');}
     }
-    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey,profileChange:input.profileChange}, effects);
+    applyEffects({db, session, game: session.game, now: conn.now(), attachJobRef: BigInt(job), attachTripUuid: attachTripUuid(input.pluginSessionId, input.nextEventSeq), carrierEventSeq: nextKey,profileChange:input.profileChange,cargoOpening:input.cargoOpening}, effects);
     projectEffects(db, input.effects, proof);
     if (input.profileChange) markProfileBoundary(db, session.id, nextKey);
     if (input.endpoint) {
@@ -667,6 +682,30 @@ export function openAttachedTrip(conn: StorageConnection, input: AttachInput, op
     }
     options.testHooks?.beforeCommit?.();
     return {status: 'committed'};
+  });
+}
+
+/** Enrich a still-open root only with the generation and job boundary recorded at its live opening. */
+export function fillCargoClassification(conn: StorageConnection, input: FillCargoClassification): FillCargoResult {
+  if (!isFillCargoClassification(input)) fail('INVALID_INPUT');
+  return transact(conn, db => {
+    const row = statement(db, `SELECT t.id, t.cargo_classification FROM trips t
+      JOIN plugin_sessions s ON s.id = t.plugin_session_ref JOIN job_configurations j ON j.id = t.job_configuration_ref
+      JOIN logical_memberships m ON m.trip_ref = t.id JOIN logical_trips l ON l.id = t.id
+      LEFT JOIN events ev ON ev.id = t.opened_event_ref
+      WHERE t.trip_uuid = ? AND t.game = ? AND s.plugin_session_uuid = ? AND s.origin = 'game'
+        AND s.id = (SELECT max(id) FROM plugin_sessions WHERE game = s.game AND origin = 'game')
+        AND t.outcome = 'open' AND m.logical_ref = t.id AND l.latest_trip_ref = t.id AND l.retired = 0
+        AND j.cargo_id_state = 'available' AND j.cargo_id = ? AND t.cargo_classification_generation = ?
+        AND t.opened_by = ? AND coalesce(ev.event_seq, j.checkpoint_next_event_seq) = ?`)
+      .get(input.tripUuid, input.game, input.pluginSessionId, input.cargoId, input.generation, input.opening, u64Key(input.boundary)) as
+      {id: bigint; cargo_classification: string | null} | undefined;
+    if (!row) return 'retired';
+    const value = canonicalJson(input.classification);
+    if (row.cargo_classification !== null) return row.cargo_classification === value ? 'unchanged' : 'retired';
+    statement(db, 'UPDATE trips SET cargo_classification = ? WHERE id = ?').run(value, row.id);
+    revise(db, row.id);
+    return 'filled';
   });
 }
 
@@ -702,7 +741,8 @@ export function recordCompleteness(conn: StorageConnection, pluginSessionId: str
   if (typeof options !== 'object' || options === null || Array.isArray(options) || (options.ifAbsent !== undefined && typeof options.ifAbsent !== 'boolean')) fail('INVALID_INPUT');
   const ifAbsent = options.ifAbsent === true;
   transact(conn, db => { const session = sessionByUuid(db, pluginSessionId); addInterval({db, session, game: session.game, now: conn.now()}, interval, ifAbsent); if (logicalEnabled(db) && interval.tripUuid) revise(db,logicalFor(db,tripRow({db,session,game:session.game,now:conn.now()},interval.tripUuid).id));
-    else if(Number(db.pragma('user_version',{simple:true}))>=7&&(RULE_LOSSES as readonly string[]).includes(interval.kind))projectSessionBounds(db,session.id); });
+    // A session-level loss counts against the session's open trip, so its recording completeness is revised here too.
+    else if(Number(db.pragma('user_version',{simple:true}))>=7&&['event-loss','restore-loss','storage-unavailable'].includes(interval.kind))projectSessionBounds(db,session.id); });
 }
 
 /**

@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-// Durable telemetry protocol 1.0 to 1.5, the C++17 counterpart of packages/contracts/src/protocol-v1.ts. It is a separate major
+// Durable telemetry protocol 1.0 to 1.6, the C++17 counterpart of packages/contracts/src/protocol-v1.ts. It is a separate major
 // from the frozen v0 live protocol and from CAP0, and reuses only the bounded strict JSON layer (v0::Json, the parser
 // and the serializer). The wire format is specified in docs/protocol/v1.md.
 namespace ets2telemetry::v1 {
@@ -18,11 +18,11 @@ using Json = v0::Json;
 constexpr unsigned protocol_major = 1, protocol_minor = 0;
 // The highest minor this contract implements. Minor 1 adds `state.gearbox` to checkpoints and snapshots (§7); minor 2
 // adds `state.nextMandatoryBreak` on top of it (ET-052 MB1), minor 3 adds `state.cruiseControl` (ET-071), minor 4 adds `state.speedLimit` (ET-084), and minor 5 adds
-// `state.restState` (ET-118). Every
+// `state.restState` (ET-118), and minor 6 adds `state.cargoDamage` (ET-121). Every
 // stateless entry point below takes a `max_minor` that defaults to 0, so a caller accepts or writes a message above
 // minor 0 only when it opts in; a maximum above `highest_minor` is a caller error and throws ProtocolError. The plugin
 // endpoint serves up to this minor (v1-server.cpp) and the broker accepts up to it.
-constexpr unsigned highest_minor = 5;
+constexpr unsigned highest_minor = 6;
 // Gearbox bounds of minor 1 (ET-050b B2). A producer marks a reading outside them `invalid`, never truncated.
 struct GearboxLimits { unsigned max_gears, max_selector_count, max_slots, max_handle_position; };
 constexpr GearboxLimits gearbox_limits{100, 6, 64, 255};
@@ -78,6 +78,8 @@ struct HShifterSlot { int gear = 0; unsigned handle_position = 0, selectors = 0;
 struct HShifterLayout { unsigned selector_count = 0; std::vector<HShifterSlot> slots; };
 // Minor 1 only (ET-050b B1, B2): the truck's gear counts and the H-shifter layout.
 struct Gearbox { Available<unsigned> forward_gears, reverse_gears; Available<HShifterLayout> hshifter; };
+// A minor-6 live fraction with the v0 configuration revision of the same capture.
+struct CargoDamage { Available<double> reading; std::optional<std::uint64_t> v0_configuration_revision; };
 // Read views per kind. State, configuration and record bodies stay in `wire` and are read through read_* below.
 // `minor` is the selected minor the welcome announces; it equals the welcome's envelope minor.
 struct WelcomeView { unsigned minor = 0; bool durable_events = false, gameplay_events_registered = false; std::vector<std::string> event_types; GameMode game_mode; };
@@ -90,6 +92,7 @@ struct WelcomeView { unsigned minor = 0; bool durable_events = false, gameplay_e
 struct StateView {
   std::optional<std::uint64_t> boundary_seq; std::uint64_t boundary_order = 0; SourceStatus status; Continuity continuity;
   std::optional<Gearbox> gearbox; std::optional<Measure> next_mandatory_break, cruise_control, speed_limit, rest_state;
+  std::optional<CargoDamage> cargo_damage;
 };
 struct Occurrence {
   Available<std::uint64_t> monotonic_ns; GameTimeStamp game_time; Available<std::uint64_t> utc_unix_ms;

@@ -15,7 +15,7 @@ const flags = {shell: ['navigation', 'headingFocus','hardModePage', 'journalUnmo
 const references = ['scale-strip', 'scale-card', 'scale-cluster', 'scale-hud', 'scale-strip-old70', 'scale-strip-old100'];
 const previewScreens = ['settings-preview-strip', 'settings-preview-card', 'settings-preview-cluster', 'settings-preview-hud', 'settings-preview-narrow'];
 const previewNames = ['strip', 'card', 'cluster', 'hud', 'narrow-strip', 'large-strip', 'large-card'];
-const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'game-time', 'mandatory-break', 'rest-state'];
+const previewSections = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range', 'sdk-consumption', 'cargo', 'origin', 'destination', 'distance-driven', 'distance-remaining', 'deadline', 'expected-income', 'cargo-damage', 'game-time', 'mandatory-break', 'rest-state'];
 const previewSectionsStrip = ['speed', 'speed-limit', ...previewSections.filter(id => !['speed', 'speed-limit'].includes(id))];
 // ET-084: the card and the cluster draw the speed limit sign with speed, gear and RPM, so it comes before cruise control in their DOM.
 const previewSectionsHero = ['speed', 'gear', 'rpm', 'speed-limit', ...previewSections.filter(id => !['speed', 'gear', 'rpm', 'speed-limit'].includes(id))];
@@ -26,9 +26,10 @@ const serviceEvents = [{event: 'STORAGE_VERIFIED'}, ...['ingestion', 'capture', 
 const windows = [{url: 'file:///app/renderer/index.html', rendererPid: 100, sandbox: true, isolation: true, node: false, isDefaultSession: true, isOverlaySession: false, sessionPersistent: true, alwaysOnTop: false},
   {url: 'file:///app/renderer/index.html?view=overlay', rendererPid: 101, sandbox: true, isolation: true, node: false, isDefaultSession: false, isOverlaySession: true, sessionPersistent: false, alwaysOnTop: true}];
 const uploadScreens = ['no-token', 'confirmation', 'first-upload', 'offline', 'journal'];
-const uploadFlags = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation'];
+const uploadFlags = ['paste', 'password', 'visibility', 'enter', 'tokenCleared', 'cancelNavigation', 'cancelConfirmation', 'confirmNavigation', 'fixedRefusals', 'progress', 'chipNavigation', 'rowStates', 'headingFocus', 'contained', 'sharedStyles', 'bridgeIsolation','qualification'];
 function uploadFixture() {
   return {origin: 'synthetic', passed: true, productionAuthority: false, tokenPresentInScreenshots: false, moduleGraphs: [8, 6, 2100],
+    qualificationShots:['en','ru'].flatMap(language=>[...['ready','offline','dark'].map(state=>`qualification-${language}-${state}.png`),...['strip','card','cluster','hud'].flatMap(layout=>['pass','fail','neutral'].map(cue=>`qualification-overlay-${language}-${layout}-${cue}.png`))]),
     flags: Object.fromEntries(uploadFlags.map(flag => [flag, true])),
     security: {sandbox: true, contextIsolation: true, nodeIntegration: false, persistentSession: false, localDocument: true, remoteFetchDenied: true, navigationDenied: true, newWindowDenied: true, permissionsDenied: true},
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => uploadScreens.map(screen => ({file: `ui-upload-${screen}-${language}-${size.width}x${size.height}.png`, screen, language, ...size, imageWidth: size.width, imageHeight: size.height, bytes: 600, tokenCleared: true}))))};
@@ -42,7 +43,7 @@ function fixture(uiCase: Case) {
     overlayPreview: uiCase === 'overlay' ? ['en', 'ru'].flatMap(language => previewNames.map(name => ({language, viewportWidth: 1280, viewportHeight: 800, name,
       layout: name.endsWith('strip') ? 'strip' : name.endsWith('card') ? 'card' : name, scale: name.startsWith('large-') ? '3' : '1',
       width: 210, height: 320, outside: [] as string[], fitsScene: true, sections: name.endsWith('card') || name === 'cluster' ? [...previewSectionsHero] : name.includes('strip') ? [...previewSectionsStrip] : [...previewSections],
-      cardRows: name.endsWith('card') ? {count: 15, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
+      cardRows: name.endsWith('card') ? {count: 16, display: ['inline'], verticalAlign: ['-2px'], sameLine: true, matchesActual: true} : undefined}))) : [],
     screenshots: ['en', 'ru'].flatMap(language => sizes.flatMap(size => (uiCase === 'overlay' ? screens.overlay.flatMap(layout => [layout, `${layout}-missing`, `${layout}-paused`, `${layout}-stale`]) : screens[uiCase]).map(screen => ({file: `ui-${uiCase}-${screen}-${language}-${size.width}x${size.height}.png`, language,
       ...size, screen, imageWidth: size.width, imageHeight: size.height, bytes: 600})))).concat(uiCase === 'settings' ? sizes.map(size => ({file: `ui-settings-read-only-en-${size.width}x${size.height}.png`, language: 'en', ...size, screen: 'read-only', imageWidth: size.width, imageHeight: size.height, bytes: 600})) : [])
       .concat(uiCase === 'overlay' ? references.map(screen => ({file: `ui-overlay-${screen}-en-1280x800.png`, language: 'en', ...sizes[0], screen, imageWidth: 1280, imageHeight: 56, bytes: 600})) : [])
@@ -59,6 +60,8 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'configured fixture token screenshot', uiCase: 'shell', change: value => {value.uploadUi!.screenshots[0].tokenCleared = false;}},
     {name: 'configured fixture missing locale-size-state', uiCase: 'shell', change: value => {value.uploadUi!.screenshots.pop();}},
     {name: 'configured fixture duplicate screenshot', uiCase: 'shell', change: value => {value.uploadUi!.screenshots[0] = {...value.uploadUi!.screenshots[1]};}},
+    {name: 'qualification missing cue screenshot',uiCase:'shell',change:value=>{value.uploadUi!.qualificationShots.pop();}},
+    {name: 'qualification duplicate cue screenshot',uiCase:'shell',change:value=>{value.uploadUi!.qualificationShots[0]=value.uploadUi!.qualificationShots[1];}},
     {name: 'configured fixture node enabled', uiCase: 'shell', change: value => {value.uploadUi!.security.nodeIntegration = true;}},
     {name: 'configured fixture missing module graphs', uiCase: 'shell', change: value => {Reflect.deleteProperty(value.uploadUi!, 'moduleGraphs');}},
     {name: 'configured fixture unchecked renderer build', uiCase: 'shell', change: value => {value.uploadUi!.moduleGraphs.pop();}},
@@ -108,6 +111,7 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'preview observation wrong layout', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].layout = 'card';}},
     {name: 'large preview uses saved scale', uiCase: 'overlay', change: value => {value.ui.overlayPreview.find(row => row.name === 'large-card')!.scale = '1';}},
     {name: 'preview sections omitted', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections.pop();}},
+    {name: 'preview cargo damage omitted', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections = value.ui.overlayPreview[0].sections.filter(id => id !== 'cargo-damage');}},
     {name: 'preview sections reordered', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections.reverse();}},
     {name: 'Strip preview puts the limit after cruise control', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].sections = [...previewSections];}},
     {name: 'preview has escaped rows', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].outside = ['overlay-section-cargo'];}},
@@ -115,8 +119,8 @@ const variants: {name: string; uiCase: Case; change?: (value: Fixture) => void; 
     {name: 'preview has no visible bounds', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].height = 0;}},
     {name: 'preview width exceeds viewport', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].width = 1281;}},
     {name: 'preview bounds invalid', uiCase: 'overlay', change: value => {value.ui.overlayPreview[0].height = Number.NaN;}},
-    {name: 'Card preview loses fixed footer row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 14;}},
-    {name: 'Card preview has an extra row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 16;}},
+    {name: 'Card preview loses fixed footer row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 15;}},
+    {name: 'Card preview has an extra row', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.count = 17;}},
     {name: 'Card preview has block icons', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.display = ['block'];}},
     {name: 'Card preview has mismatched vertical alignment', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.verticalAlign = ['baseline'];}},
     {name: 'Card preview label breaks line', uiCase: 'overlay', change: value => {value.ui.overlayPreview[1].cardRows!.sameLine = false;}},
@@ -147,6 +151,7 @@ it('requires every UI language/size/screen, assertion and plain screenshot file 
     for (const [index, variant] of variants.entries()) {
       const directory = path.join(resources.directory, String(index)); await mkdir(directory);
       const value = fixture(variant.uiCase);
+      for(const file of value.uploadUi?.qualificationShots??[])await writeFile(path.join(directory,file),png(1280,800));
       for (const [imageIndex, shot] of [...value.ui.screenshots, ...(value.uploadUi?.screenshots ?? [])].entries()) {
         if ((variant.omitFile && imageIndex === 0) || (variant.omitScreen === shot.screen && shot.language === 'ru')) continue;
         await writeFile(path.join(directory, shot.file), (variant.badPng && imageIndex === 0) || variant.badScreen === shot.screen ? Buffer.alloc(600) : png(shot.imageWidth, shot.imageHeight));

@@ -1,22 +1,23 @@
 import {expect, it} from 'vitest';
 import type {OverlaySectionId, OverlaySections} from '../../packages/contracts/src';
-import {overlayBounds, overlaySize, overlayWindowSize, placementFromBounds, placeSize, surfaceHeightDip, type DipRect} from '../../apps/desktop/src/overlay-geometry';
+import {overlayBounds as boundsFor, overlaySize as sizeIn, overlayWindowSize as windowSizeFor, placementFromBounds as placementFor, placeSize, surfaceHeightDip, type DipRect} from '../../apps/desktop/src/overlay-geometry';
 import {DEFAULT_OVERLAY_PLACEMENTS} from '../../apps/desktop/src/overlay-placement';
 import {DEFAULT_OVERLAY_SECTIONS, OVERLAY_PRESETS, OVERLAY_SECTION_IDS} from '../../apps/desktop/src/overlay-sections';
 
 // REG-016 partial: per-layout placement inside the game's client area in DIP (ET-012a decision L10). The worked
 // examples are hand-computed from the plan's geometry table, not produced by the implementation.
 // Current model: the saved scale maps to zoom = setting x 0.7. Strip width is
-// floor(min(1280 x max(1, setting), client width - 32)), at least round(480 x zoom).
+// floor(client width - 32) at every setting, at least round(480 x zoom).
 // The 18 sections and final Hard Mode row need card content 46 + 24 x 19 = 502 CSS px,
 // cluster panel content 36 + 21 x 15 = 351, and HUD content 20 + 24 x 19 = 476.
 // At zoom 0.7 their windows are 210 x 354, 308 x 248 and 224 x 334 DIP, including snapped borders.
-// Strip items use two 112 px tags, section maxima and the final 100 px Hard Mode indicator with 14 px gaps.
+// Strip items use two 112 px tags, section maxima and the final 160 px Hard Mode/qualification item with 14 px gaps.
 // At 1280 DIP its CSS width is 1828 and inner width 1801: rows end at cargo (1756), game time (1704),
-// and Hard Mode after both breaks (428). Three 38 px rows need ceil(114 x 0.7 + 2) = 82 DIP.
+// and the fixed indicator after both breaks (488). Three 38 px rows need ceil(114 x 0.7 + 2) = 82 DIP.
 const client = (x: number, y: number, width: number, height: number): DipRect => ({x, y, width, height});
-/** All current sections except Rest State. */
-const WITHOUT_REST = {...DEFAULT_OVERLAY_SECTIONS, 'rest-state': false};
+/** The older hand-computed geometry examples use the eighteen sections before cargo damage. */
+const LEGACY_SECTIONS = {...DEFAULT_OVERLAY_SECTIONS, 'cargo-damage': false};
+const WITHOUT_REST = {...LEGACY_SECTIONS, 'rest-state': false};
 const WITHOUT_LIMIT = {...WITHOUT_REST, 'speed-limit': false};
 /** The fifteen sections of before ET-071 (cruise control and the speed limit off). */
 const WITHOUT_CRUISE = {...WITHOUT_LIMIT, 'cruise-control': false};
@@ -28,11 +29,41 @@ const SPEED_ONLY = only('speed');
 /** The owner's 2560 × 1440 physical game client at 150%, {1706.67, 240, 1706.67, 960} DIP. */
 const OWNER_CLIENT = client(2560 / 1.5, 240, 2560 / 1.5, 960);
 const LAYOUTS = ['strip', 'card', 'cluster', 'hud'] as const;
+const overlayBounds = (layout: Parameters<typeof boundsFor>[0], area: DipRect, placement?: Parameters<typeof boundsFor>[2], sections = LEGACY_SECTIONS as OverlaySections) =>
+  boundsFor(layout, area, placement, sections);
+const overlaySize = (layout: Parameters<typeof sizeIn>[0], area: DipRect, scale: number, sections = LEGACY_SECTIONS as OverlaySections) =>
+  sizeIn(layout, area, scale, sections);
+const overlayWindowSize = (layout: Parameters<typeof windowSizeFor>[0], scale: number, sections = LEGACY_SECTIONS as OverlaySections) =>
+  windowSizeFor(layout, scale, sections);
+const placementFromBounds = (layout: Parameters<typeof placementFor>[0], area: DipRect, bounds: DipRect, previous: Parameters<typeof placementFor>[3],
+  sections = LEGACY_SECTIONS as OverlaySections, size?: Parameters<typeof placementFor>[5]) => placementFor(layout, area, bounds, previous, sections, size);
+
+it('reserves the cargo-damage row in the current default windows (REG-016)', () => {
+  // With the nineteenth section, track 526 card content px, 372 cluster panel px and 500 HUD px.
+  // At zoom .7 the snapped border adds 2 DIP to card and cluster, so ceil(370.2), ceil(262.4) and 350.
+  expect(windowSizeFor('card', 1)).toEqual({width: 210, height: 371});
+  expect(windowSizeFor('cluster', 1)).toEqual({width: 308, height: 263});
+  expect(windowSizeFor('hud', 1)).toEqual({width: 224, height: 350});
+  // At 800 DIP game width (768 DIP or 1097 px strip), the 100 px section pushes Game Time to a fifth row.
+  expect(boundsFor('strip', client(100, 50, 800, 600))).toEqual({x: 116, y: 58, width: 768, height: 135});
+});
+
+
+it.each([
+  {width: 1920, height: 1080, expectedWidth: 1888},
+  {width: 3440, height: 1440, expectedWidth: 3408},
+  {width: 2560 / 1.5, height: 960, expectedWidth: 1674}
+])('fills the available game width at every scale in a $width DIP client', ({width, height, expectedWidth}) => {
+  for (const scale of [0.5, 1, 1.1, 1.5, 2, 3]) {
+    const size = overlaySize('strip', client(0, 0, width, height), scale);
+    expect(size?.width).toBe(expectedWidth);
+  }
+});
 
 // Card x = cx + cw - 226; cluster y = cy + ch - 264.
 it.each([
-  // Strip: 1280 DIP, CSS 1828, inner 1801, three rows: 82 DIP. Cluster y = 1080 - 16 - 248 = 816.
-  {name: '1920 x 1080 at the origin', area: client(0, 0, 1920, 1080), strip: {x: 320, y: 8, width: 1280, height: 82},
+  // Strip: 1888 DIP, CSS 2697, inner 2670; rows end at distance driven (2548), then Hard Mode (1414): 56 DIP.
+  {name: '1920 x 1080 at the origin', area: client(0, 0, 1920, 1080), strip: {x: 16, y: 8, width: 1888, height: 56},
     card: {x: 1694, y: 16, width: 210, height: 354}, cluster: {x: 16, y: 816, width: 308, height: 248}, hud: {x: 16, y: 16, width: 224, height: 334}},
   // Strip: 1248 DIP, CSS 1782, inner 1755; rows end at consumption 1442, deadline 1490, Hard Mode 956: three rows.
   {name: '1280 x 720 at the origin', area: client(0, 0, 1280, 720), strip: {x: 16, y: 8, width: 1248, height: 82},
@@ -78,7 +109,7 @@ it.each([
 });
 
 it('applies the fit threshold of a strip with speed only', () => {
-  // Speed only is 112 + 112 + 140 with two gaps = 392 of the minimum's 453 inner CSS px; the indicator reaches 506, so
+  // Speed only is 112 + 112 + 140 with two gaps = 392 of the minimum's 453 inner CSS px; the fixed indicator reaches 566, so
   // it takes a second row: ceil(76 × 0.7 + 2) = ceil(55.2) = 56, plus 16 = 72 (one row, 29 and 45, before).
   const placement = DEFAULT_OVERLAY_PLACEMENTS.strip;
   expect(overlayBounds('strip', client(0, 0, 368, 72), placement, SPEED_ONLY)).toEqual({x: 16, y: 8, width: 336, height: 56});
@@ -195,11 +226,11 @@ it('renders the new 100% exactly as large as the earlier 70% for the card, clust
 });
 
 it.each([
-  // Every section in 1920 x 1080: floor(min(1280 × max(1, setting), 1888)) wide, rows at CSS width floor(width / zoom).
-  // 0.5: CSS width 3657, inner 3627; the full 3916 CSS px line needs two rows: ceil(26.6 + 2) = 29 DIP.
-  {scale: 0.5, size: {width: 1280, height: 29}},
-  // 1.1 (zoom 0.77): CSS width 1828, inner 1801; three rows need ceil(114 x 0.77 + 2) = 90 DIP.
-  {scale: 1.1, size: {width: 1408, height: 90}},
+  // Every section in 1920 x 1080: 1888 DIP wide at every scale, rows at CSS width floor(width / zoom).
+  // 0.5: inner width 5364 holds the full 3976 CSS px line in one row: ceil(13.3 + 2) = 16 DIP.
+  {scale: 0.5, size: {width: 1888, height: 16}},
+  // 1.1 (zoom 0.77): CSS width 2451, inner 2424; two rows need ceil(76 x 0.77 + 2) = 61 DIP.
+  {scale: 1.1, size: {width: 1888, height: 61}},
   // 1.5 (zoom 1.05): CSS width 1798, inner 1772; three rows need ceil(119.7 + 2.1) = 122 DIP.
   {scale: 1.5, size: {width: 1888, height: 122}},
   // 2 (zoom 1.4): inner 1322; row totals 1198, 1172, 1240, 264: ceil(212.8 + 2.8) = 216 DIP.
@@ -212,7 +243,7 @@ it.each([
 
 it('keeps the snapped one-device-pixel border inside the strip below zoom 1', () => {
   // Speed only at 0.5: one 13.3 DIP row plus two 1 DIP borders, rounded up to 16.
-  expect(overlaySize('strip', client(0, 0, 1920, 1080), 0.5, SPEED_ONLY)).toEqual({width: 1280, height: 16});
+  expect(overlaySize('strip', client(0, 0, 1920, 1080), 0.5, SPEED_ONLY)).toEqual({width: 1888, height: 16});
   // A 749 x 600 client at the setting 1 gives a 717 DIP strip, CSS width floor(1024.29) = 1024. Cargo, origin and
   // distance driven with two tags take 998 CSS px, more than the snapped inner width floor(1024 − 2 × 1.4286 − 24) = 997
   // (998 with an unsnapped 1 px border), so two rows: ceil(38 × 2 × 0.7 + 2) = ceil(55.2) = 56 high.
@@ -247,21 +278,22 @@ it.each([
 });
 
 it.each([
-  // Driving-only: the base line is 998 CSS px, with Hard Mode 1112, cruise 1266, and the speed limit 1312.
-  // At zoom 0.7 a 938 DIP strip has CSS width 1340 and inner 1313, so one row fits. At 937 DIP, CSS 1338
-  // leaves inner 1311 and needs two rows. The 915/914/883/882 DIP cases below therefore all need two rows.
+  // Driving-only: the base line is 998 CSS px, with Hard Mode/qualification 1172, cruise 1326, and the speed limit 1372.
+  // At zoom 0.7 a 980 DIP strip has CSS width 1400 and inner 1373, so one row fits. At 979 DIP, CSS 1398
+  // leaves inner 1371 and needs two rows. The 928/915/914/883/882 DIP cases below therefore all need two rows.
   {name: 'driving-only in 800 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 800, 600), bounds: {x: 16, y: 8, width: 768, height: 56}},
   {name: 'driving-only in 960 x 540', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 960, 540), bounds: {x: 16, y: 8, width: 928, height: 56}},
   {name: 'driving-only in 1280 x 720', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1280, 720), bounds: {x: 16, y: 8, width: 1248, height: 29}},
+  {name: 'driving-only at the 980 DIP one-row threshold', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1012, 600), bounds: {x: 16, y: 8, width: 980, height: 29}},
+  {name: 'driving-only one DIP below the one-row threshold', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 1011, 600), bounds: {x: 16, y: 8, width: 979, height: 56}},
   {name: 'driving-only in 947 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 947, 600), bounds: {x: 16, y: 8, width: 915, height: 56}},
   {name: 'driving-only in 946 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 946, 600), bounds: {x: 16, y: 8, width: 914, height: 56}},
   {name: 'driving-only in 915 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 915, 600), bounds: {x: 16, y: 8, width: 883, height: 56}},
   {name: 'driving-only in 914 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 914, 600), bounds: {x: 16, y: 8, width: 882, height: 56}},
   {name: 'driving-only in 807 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 807, 600), bounds: {x: 16, y: 8, width: 775, height: 56}},
   {name: 'driving-only in 728 x 600', sections: OVERLAY_PRESETS['driving-only'], area: client(0, 0, 728, 600), bounds: {x: 16, y: 8, width: 696, height: 56}},
-  // Job-focus's worst case is 1694 CSS px, ET-070: 1808 with the indicator, more than the 1801 at 1280, so two rows there
-  // (one before); two at 768 (inner 1070) as before.
-  {name: 'job-focus in 1920 x 1080', sections: OVERLAY_PRESETS['job-focus'], area: client(0, 0, 1920, 1080), bounds: {x: 320, y: 8, width: 1280, height: 56}},
+  // Job-focus fits one row at 1888 DIP (inner CSS width 2670); at 768 DIP it needs two.
+  {name: 'job-focus in 1920 x 1080', sections: OVERLAY_PRESETS['job-focus'], area: client(0, 0, 1920, 1080), bounds: {x: 16, y: 8, width: 1888, height: 29}},
   {name: 'job-focus in 800 x 600', sections: OVERLAY_PRESETS['job-focus'], area: client(0, 0, 800, 600), bounds: {x: 16, y: 8, width: 768, height: 56}}
 ])('sizes the strip for its enabled sections: $name', ({sections, area, bounds}) => {
   expect(overlayBounds('strip', area, DEFAULT_OVERLAY_PLACEMENTS.strip, sections)).toEqual(bounds);
@@ -307,7 +339,7 @@ const WITHOUT_DRIVEN = {...WITHOUT_BREAK, 'distance-driven': false};
 const WITHOUT_RANGE_AND_DRIVEN = {...WITHOUT_DRIVEN, range: false};
 it.each([
   // ET-084: card 480 (478 content, 337), cluster 330 (232) and HUD 450 (315).
-  {name: 'every section (card 504, cluster 351, HUD 474)', sections: DEFAULT_OVERLAY_SECTIONS, card: 354, cluster: 248, hud: 334},
+  {name: 'every section (card 504, cluster 351, HUD 474)', sections: LEGACY_SECTIONS, card: 354, cluster: 248, hud: 334},
   // ET-071: card 456 (454 content, 320), cluster 330 (232) and HUD 426 (299).
   {name: 'every section but the speed limit (card 456, cluster 330, HUD 426)', sections: WITHOUT_LIMIT, card: 320, cluster: 233, hud: 300},
   // ET-070: card 432 (430 content, 303), cluster 309 (217) and HUD 402 (282).
@@ -372,9 +404,9 @@ it('places fractions 0, 0.5 and 1 across the free space', () => {
   expect(overlayBounds('card', area, {x: 0, y: 0, scale: 1})).toEqual({x: 16, y: 16, width: 210, height: 354});
   expect(overlayBounds('card', area, {x: 0.5, y: 0.5, scale: 1})).toEqual({x: 855, y: 363, width: 210, height: 354});
   expect(overlayBounds('card', area, {x: 1, y: 1, scale: 1})).toEqual({x: 1694, y: 710, width: 210, height: 354});
-  // Strip free height 1080 - 16 - 82 = 982 gives y 990. HUD free space in 960 x 540 is 704 x 174:
+  // Strip free height 1080 - 16 - 56 = 1008 gives y 1016. HUD free space in 960 x 540 is 704 x 174:
   // x = -960 + 16 + 176 = -768; y = round(16 + 0.75 x 174) = 147.
-  expect(overlayBounds('strip', area, {x: 0, y: 1, scale: 1})).toEqual({x: 16, y: 990, width: 1280, height: 82});
+  expect(overlayBounds('strip', area, {x: 0, y: 1, scale: 1})).toEqual({x: 16, y: 1016, width: 1888, height: 56});
   expect(overlayBounds('hud', client(-960, 0, 960, 540), {x: 0.25, y: 0.75, scale: 1})).toEqual({x: -768, y: 147, width: 224, height: 334});
 });
 
@@ -407,10 +439,10 @@ it.each([
 });
 
 it('converts a dropped strip against the height of its enabled sections', () => {
-  // Every section (ET-052: three rows, 82): free height 982, 492 / 982 = 0.501018. Driving-only: 1035, 492 / 1035 = 0.475362.
+  // Every section: two rows, 56 DIP, free height 1008; 492 / 1008 = 0.488095. Driving-only: 1035, 492 / 1035 = 0.475362.
   const area = client(0, 0, 1920, 1080), previous = {x: 0.5, y: 0, scale: 1};
-  expect(placementFromBounds('strip', area, {x: 320, y: 500, width: 1280, height: 82}, previous)).toEqual({x: 0.5, y: 0.501, scale: 1});
-  expect(placementFromBounds('strip', area, {x: 320, y: 500, width: 1280, height: 29}, previous, OVERLAY_PRESETS['driving-only']))
+  expect(placementFromBounds('strip', area, {x: 16, y: 500, width: 1888, height: 56}, previous)).toEqual({x: 0.5, y: 0.4881, scale: 1});
+  expect(placementFromBounds('strip', area, {x: 16, y: 500, width: 1888, height: 29}, previous, OVERLAY_PRESETS['driving-only']))
     .toEqual({x: 0.5, y: 0.4754, scale: 1});
 });
 
@@ -446,15 +478,12 @@ it('round-trips a placement through its bounds within one DIP', () => {
   }
 });
 
-// ET-045e (decision Z3, owner decision D5): the strip is never narrower than at the setting 1 and is limited only by the
-// game's client width. In the owner's client (1674.67 DIP between the margins) with every section:
-// 0.5: 1280 wide, ET-071 two rows (the indicator wraps; one row, 16, before), 29 high; 1: 1280 × 82 (ET-052: three rows, 56
-// with two); 1.5: floor(1674.67) = 1674 wide, CSS floor(1594.29) = 1594, inner 1568, three rows: ceil(119.7 + 2.1) = 122; 2:
-// CSS floor(1195.71) = 1195, inner 1169, four rows: ceil(212.8 + 2.8) = 216; 3: CSS floor(797.14) = 797, inner 771, ET-052
-// six rows (the break wraps to a sixth; five before): ceil(478.8 + 4.2) = 483. ET-071 keeps the counts from 1 to 3.
+// The strip fills floor(1706.67 - 32) = 1674 DIP at every scale in the owner's client.
+// At 50%, CSS width 4782 and inner width 4752 hold all 3976 CSS px in one row (16 DIP).
+// At 100%, inner width 2364 needs two rows (56 DIP); larger zooms need three, four and six rows.
 it.each([
-  {scale: 0.5, size: {width: 1280, height: 29}},
-  {scale: 1, size: {width: 1280, height: 82}},
+  {scale: 0.5, size: {width: 1674, height: 16}},
+  {scale: 1, size: {width: 1674, height: 56}},
   {scale: 1.5, size: {width: 1674, height: 122}},
   {scale: 2, size: {width: 1674, height: 216}},
   {scale: 3, size: {width: 1674, height: 483}}
@@ -462,16 +491,14 @@ it.each([
   expect(overlaySize('strip', OWNER_CLIENT, scale)).toEqual(size);
 });
 
-// At the owner's x 0.8485, y 1: free width 1674.67 − 1280 = 394.67, x = round(1722.67 + 334.88) = 2058; the bottom anchor
-// puts the top at 248 + (944 − height). Driving only at 1 is one row, ceil(26.6 + 2) = 29; at 2 it is 1674 wide with free
-// width 0.67, x = round(1723.23) = 1723; its 1312 CSS px line exceeds the inner 1169, so two rows of
-// ceil(106.4 + 2.8) = 110 (one row, 56, before).
+// At x 0.8485, the remaining fractional width is 0.67 DIP, so x rounds to 1723.
+// The bottom anchor is 1192 minus the reserved height; Driving only stays one row at 100%.
 it.each([
-  // ET-071: two rows, 29 high, so y = 248 + (944 − 29) = 1163.
-  {name: 'every section at 0.5', scale: 0.5, sections: DEFAULT_OVERLAY_SECTIONS, bounds: {x: 2058, y: 1163, width: 1280, height: 29}},
-  // ET-052: 82 high, so y = 248 + (944 − 82) = 1110.
-  {name: 'every section at 1', scale: 1, sections: DEFAULT_OVERLAY_SECTIONS, bounds: {x: 2058, y: 1110, width: 1280, height: 82}},
-  {name: 'driving only at 1', scale: 1, sections: OVERLAY_PRESETS['driving-only'], bounds: {x: 2058, y: 1163, width: 1280, height: 29}},
+  // One row at 50%: y = 1192 - 16 = 1176.
+  {name: 'every section at 0.5', scale: 0.5, sections: LEGACY_SECTIONS, bounds: {x: 1723, y: 1176, width: 1674, height: 16}},
+  // Two rows at 100%: y = 1192 - 56 = 1136.
+  {name: 'every section at 1', scale: 1, sections: LEGACY_SECTIONS, bounds: {x: 1723, y: 1136, width: 1674, height: 56}},
+  {name: 'driving only at 1', scale: 1, sections: OVERLAY_PRESETS['driving-only'], bounds: {x: 1723, y: 1163, width: 1674, height: 29}},
   // ET-071: y = 248 + (944 − 110) = 1082.
   {name: 'driving only at 2', scale: 2, sections: OVERLAY_PRESETS['driving-only'], bounds: {x: 1723, y: 1082, width: 1674, height: 110}}
 ])('places the owner strip at the bottom: $name', ({scale, sections, bounds}) => {
@@ -481,20 +508,20 @@ it.each([
 it('keeps the strip width of the setting 1 in smaller clients', () => {
   // 1280 x 720: 1248 wide at 1 (ET-052: three rows, 82; two rows, 56 before) and at 0.5 (ET-071: CSS floor(3565.71) = 3565,
   // inner 3535 < 3674, two rows, 29; one row, 16, before). 1024 x 768: 992 wide, CSS floor(1417.14) = 1417, inner 1390,
-  // three rows: ceil(79.8 + 2) = 82 (the earlier 70% was 896 × 82).
+  // four rows with the qualification reserve: ceil(106.4 + 2) = 109 (the earlier 70% was 896 × 82).
   expect(overlaySize('strip', client(0, 0, 1280, 720), 1)).toEqual({width: 1248, height: 82});
   expect(overlaySize('strip', client(0, 0, 1280, 720), 0.5)).toEqual({width: 1248, height: 29});
-  expect(overlaySize('strip', client(0, 0, 1024, 768), 1)).toEqual({width: 992, height: 82});
+  expect(overlaySize('strip', client(0, 0, 1024, 768), 1)).toEqual({width: 992, height: 109});
 });
 
-it('never makes the strip narrower than at the setting 1, nor wider than the client allows', () => {
+it('keeps the same full client width across all supported scale settings', () => {
   for (const area of [client(0, 0, 1920, 1080), OWNER_CLIENT, client(0, 0, 1280, 720), client(0, 0, 1024, 768)]) {
     const atOne = overlaySize('strip', area, 1);
     expect(atOne).toBeDefined();
     for (let tenths = 5; tenths <= 30; tenths++) {
       const size = overlaySize('strip', area, tenths / 10);
       if (!size) continue;
-      expect(size.width, `${tenths / 10}`).toBeGreaterThanOrEqual(atOne!.width);
+      expect(size.width, `${tenths / 10}`).toBe(atOne!.width);
       expect(size.width, `${tenths / 10}`).toBeLessThanOrEqual(area.width - 32);
     }
   }
@@ -532,13 +559,11 @@ it('equals overlayBounds for every layout at the layout size', () => {
     }
   }
 });
-// ET-045c review, re-derived for ET-045e: a fitted window converts against its actual size. In the owner's client the
-// Driving only strip at 0.5 requests 1280 × 16; a window Windows keeps 38 DIP high, fitted at the bottom, has its top at
-// 248 + (944 − 38) = 1154 and x round(1722.67 + 0.8485 × 394.67) = 2058. Against its actual 38 DIP (free 906) the drop
-// converts to (1154 − 248) / 906 = 1; against the layout's 16 DIP (free 928) it would be 906 / 928 = 0.97629 → 0.9763.
-// x is (2058 − 1722.67) / 394.67 = 0.84966 → 0.8497 either way.
+// Windows may apply a narrower, taller window than requested. The explicit 1280 x 38 DIP fit leaves 394.67 DIP
+// horizontal free space: (2058 - 1722.67) / 394.67 rounds to 0.8497. Its fitted bottom gives y = 1.
+// Without the explicit size, the full-width layout clamps the same x to 1 and computes y against its 16 DIP row.
 it('converts a drop against an explicit window size when one is given', () => {
   const area = OWNER_CLIENT, previous = {x: 0.8485, y: 1, scale: 0.5}, drop = {x: 2058, y: 1154, width: 1280, height: 38};
-  expect(placementFromBounds('strip', area, drop, previous, OVERLAY_PRESETS['driving-only'])).toEqual({x: 0.8497, y: 0.9763, scale: 0.5});
+  expect(placementFromBounds('strip', area, drop, previous, OVERLAY_PRESETS['driving-only'])).toEqual({x: 1, y: 0.9763, scale: 0.5});
   expect(placementFromBounds('strip', area, drop, previous, OVERLAY_PRESETS['driving-only'], {width: 1280, height: 38})).toEqual({x: 0.8497, y: 1, scale: 0.5});
 });

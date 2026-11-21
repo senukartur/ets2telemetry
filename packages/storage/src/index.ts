@@ -1,8 +1,11 @@
 import {recordTrailerBaseline} from './sqlite/trailer-baselines';
 import type {TrailerBaselineInput} from './api';
+import type {CargoOpening, FillCargoClassification, FillCargoResult} from './api';
 import type {UploadSyncCommands} from './upload-sync';
 import * as sync from './sqlite/upload-sync';
 import * as queue from './sqlite/upload-queue';
+import * as qualification from './sqlite/qualification';
+import type {QualificationCommands} from './qualification';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
 // In-process storage API (ET-013). It loads native better-sqlite3, so only the storage worker and the Electron-runtime
@@ -39,11 +42,22 @@ function attempt<T>(body: () => T): Result<T> {
 /** One open database. Commands run synchronously, one at a time, on its single verified writer connection. */
 export class Storage {
   constructor(private readonly connection: StorageConnection) {}
+  readQualificationPreviewPins(input:QualificationCommands['readQualificationPreviewPins']['args']['input']) {return attempt(()=>qualification.readQualificationPreviewPins(this.connection,input));}
+  beginQualificationPreview(input:QualificationCommands['beginQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.beginQualificationPreview(this.connection,input,options));}
+  advanceQualificationPreview(input:QualificationCommands['advanceQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.advanceQualificationPreview(this.connection,input,options));}
+  releaseQualificationPreview(input:QualificationCommands['releaseQualificationPreview']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.releaseQualificationPreview(this.connection,input,options));}
+  readQualificationPreview(input:QualificationCommands['readQualificationPreview']['args']['input']) {return attempt(()=>qualification.readQualificationPreview(this.connection,input));}
+  readQualificationCache(input:QualificationCommands['readQualificationCache']['args']['input']) {return attempt(()=>qualification.readQualificationCache(this.connection,input));}
+  setQualificationScope(input:QualificationCommands['setQualificationScope']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.setQualificationScope(this.connection,input,options));}
+  saveQualificationCache(input:QualificationCommands['saveQualificationCache']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.saveQualificationCache(this.connection,input,options));}
+  pageQualificationSources(input:QualificationCommands['pageQualificationSources']['args']['input']) {return attempt(()=>qualification.pageQualificationSources(this.connection,input));}
+  commitQualificationResults(input:QualificationCommands['commitQualificationResults']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.commitQualificationResults(this.connection,input,options));}
+  saveQualificationRefresh(input:QualificationCommands['saveQualificationRefresh']['args']['input'],options?:CommitOptions) {return attempt(()=>qualification.saveQualificationRefresh(this.connection,input,options));}
   get summary(): OpenSummary { return this.connection.summary; }
   get closed(): boolean { return this.connection.closed; }
   upsertSession(input: {message: unknown}) { return attempt(() => writes.upsertSession(this.connection, input)); }
   recordTrailerBaseline(input: TrailerBaselineInput): Result<void> {return attempt(() => recordTrailerBaseline(this.connection,input));}
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation; cargoOpening?: CargoOpening}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitEvent(this.connection, input, options)); }
   commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}, options?: CommitOptions): Result<CommitResult> { return attempt(() => writes.commitGap(this.connection, input, options)); }
   appendSamples(pluginSessionId: string, rows: SampleInput[], options?: SampleAppendOptions, commitOptions?: CommitOptions): Result<SampleAppendResult> {
     return attempt(() => writes.appendSamples(this.connection, pluginSessionId, rows, options, commitOptions));
@@ -53,6 +67,7 @@ export class Storage {
   }
   /** ET-016 PR-7 (J9): opens a trip from a checkpoint job; see AttachInput. */
   openAttachedTrip(input: AttachInput, options?:CommitOptions): Result<AttachResult> { return attempt(() => writes.openAttachedTrip(this.connection, input,options)); }
+  fillCargoClassification(input: FillCargoClassification): Result<FillCargoResult> { return attempt(() => writes.fillCargoClassification(this.connection, input)); }
   /** ET-112b2b (schema 9): resolves closed pending membership decisions with a later proof; see ResolveMembershipsInput. */
   resolvePendingMemberships(input: ResolveMembershipsInput, options?: CommitOptions): Result<ResolveMembershipsResult> { return attempt(() => writes.resolvePendingMemberships(this.connection, input, options)); }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Result<void> {return attempt(() => writes.observeHardMode(this.connection, game, observation, fresh));}

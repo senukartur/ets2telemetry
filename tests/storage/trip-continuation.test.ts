@@ -294,7 +294,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const detail=ok(await client.journalTrip(original));expect(detail.trip.outcome).toBe('delivered');expect(ok(await client.listTrips()).trips).toHaveLength(3);
       if(scenario==='before-first-start')expect(detail.trip).toMatchObject({isHardMode:true,hardModeDetails:{version:2,passingChecks:3,failingChecks:0,unknownChecks:2}});
       expect(ok(await client.listSamples({tripUuid:original},{afterId:oldSnapshot,includeExcluded:true}))).toHaveLength(prestart?3:2);
-      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:10},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
+      const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:13},databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
       const filename=path.join(ws.directory,'continuity.json'),exporter=new JournalExporter({read:query=>service.query(query),showSaveDialog:()=>Promise.resolve({canceled:false,filePath:filename}),documents:()=>undefined,localAppData:ws.directory,appVersion:'test',log:()=>undefined});
       expect(await exporter.export(original)).toMatchObject({ok:true,value:{outcome:'saved'}});
       const exported=JSON.parse(readFileSync(filename,'utf8')) as {formatVersion:number;trip:unknown;intervals:unknown[];sources:unknown[];events:{type:string}[];samples:unknown[]};
@@ -1773,7 +1773,7 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
     ok(storage.close());
     const worker=storageWorker(ENGINE_0),client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
     const summary=ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test'}));
-    const database={purpose:'synthetic',schemaVersion:10} as const;
+    const database={purpose:'synthetic',schemaVersion:13} as const;
     const service=new JournalService({history:{state:'open',failureCode:null,client,database,databaseUuid:summary.databaseUuid},stopping:()=>false,log:()=>undefined});
     const selected=ok(await client.listSamples({tripUuid:uuid}));expect(selected.map(row=>row.id)).toEqual(['1','2','4','5']);
     for(const limit of [300,3600]){
@@ -1948,7 +1948,7 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     const detail=validateJournalTripDetail(ok(storage.journalTrip(root)));
     expect(detail.trip).toMatchObject({isHardMode:qualified,hardModeDetails:audit});
     expect(trip(storage,root)).toMatchObject({isHardMode:qualified,hardModeDetails:audit});
-    const snapshot=detail.exportBounds.snapshot!,serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000112',purpose:'synthetic',schemaVersion:10},'test',4000));
+    const snapshot=detail.exportBounds.snapshot!,serializer=new TripExportSerializer(detail,tripExportHeader({uuid:'30000000-0000-4000-8000-000000000112',purpose:'synthetic',schemaVersion:13},'test',4000));
     const exported=JSON.parse(serializer.begin()+serializer.rows('sources',ok(storage.journalIntervals(root,{limit:500,cursor:snapshot.sources})).sources!)
       +serializer.rows('intervals',ok(storage.journalIntervals(root,{limit:500,cursor:snapshot.intervals})).intervals)
       +serializer.rows('events',ok(storage.journalEvents(root,{limit:500,cursor:snapshot.events})).events)
@@ -2130,7 +2130,7 @@ describe('REG-001/003/005/008/012/014 ET-112b incident continuation corpus',()=>
     const sync=storage as unknown as Record<string,(...args:unknown[])=>unknown>;
     const client=Object.fromEntries(['journalTrips','journalTrip','journalEvents','journalIntervals','listSamples','deleteTrip']
       .map(name=>[name,(...args:unknown[])=>Promise.resolve(sync[name](...args))])) as unknown as JournalClient;
-    const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:10},databaseUuid:'30000000-0000-4000-8000-000000000112'},
+    const service=new JournalService({history:{state:'open',failureCode:null,client,database:{purpose:'synthetic',schemaVersion:13},databaseUuid:'30000000-0000-4000-8000-000000000112'},
       stopping:()=>false,log:()=>undefined});
     const read=async(query:JournalQuery)=>{const reply=parseJournalReply(query,await service.query(query));expect(reply?.ok).toBe(true);return (reply as {value:unknown}).value;};
     let files=0;
@@ -2224,7 +2224,7 @@ describe('REG-013 logical singleton migration',()=>{
   it.each([1,2,3])('preserves IDs and raw facts from frozen schema v%i without inferring membership',async version=>{
     const file=ws.copyFixture(`schema-v${version}-representative.sqlite`);
     const before=readOnly(file,db=>db.prepare('SELECT * FROM trips ORDER BY id').all()) as Record<string,unknown>[];
-    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(10);
+    const storage=await ws.open({path:file});expect(storage.summary.schemaVersion).toBe(13);
     const list=ok(storage.journalTrips()).trips;
     expect(list.map(t=>t.tripUuid).sort()).toEqual(before.map(t=>t.trip_uuid).sort());
     for(const trip of before)expect(ok(storage.journalTrip(String(trip.trip_uuid))).trip.recordingCompleteness).toBe(trip.recording_completeness);

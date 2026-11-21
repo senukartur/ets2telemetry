@@ -6,7 +6,7 @@ import {SPEED_LIMIT_NONE} from '../../../packages/telemetry-core/src/speed-limit
 import {cardHeroHeightCss} from './overlay-rows';
 import {STRIP_SECTION_IDS} from './overlay-strip';
 import {localizedMeasurement} from './screens/app-copy';
-import {CLUSTER_GAUGE_SECTIONS, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
+import {CLUSTER_GAUGE_SECTIONS, formatCargoDamage, OVERLAY_GROUPS, type OverlayGroupId} from './overlay-sections';
 import {getOverlaySectionShortText, getOverlaySectionText, getStrings} from './strings';
 import {localizeDeadlineString, localizeGameTimeString, t, translateUnit} from './i18n';
 
@@ -86,6 +86,7 @@ export type OverlayTagId = 'paused' | 'no-signal' | 'stale' | 'origin';
 export interface OverlayTag {id: OverlayTagId; testId: `overlay-tag-${OverlayTagId}`; text: string}
 export interface OverlayItemGroup {id: OverlayGroupId; items: OverlayItem[]}
 export interface OverlayView {
+  qualification?:{cue:import('../../../packages/contracts/src/qualification').QualificationCue;name:string};
   layout: OverlayLayout;
   source: OverlayPresentation['source'];
   origin: OverlayPresentation['origin'];
@@ -120,8 +121,11 @@ const DASH = '—';
  * the same localization as the value, so the Russian "ч" and "мин" are never under-reserved.
  */
 const DURATION_RESERVE = '00 h 00 min';
-const reserveFor = (id: OverlaySectionId, language: AppLanguage): string | undefined =>
-  id === 'mandatory-break' || id === 'rest-state' ? localizeDeadlineString(DURATION_RESERVE, language) : VALUE_RESERVES[id];
+const reserveFor = (id: OverlaySectionId, language: AppLanguage): string | undefined => {
+  if (id === 'mandatory-break' || id === 'rest-state') return localizeDeadlineString(DURATION_RESERVE, language);
+  if (id === 'cargo-damage') return formatCargoDamage(1, language);
+  return VALUE_RESERVES[id];
+};
 /**
  * Stable value widths of the strip (ET-045d W1): a three-digit speed, the widest reserved gear form in the active font and a four-digit RPM. A wider value grows under the section's cap and ellipsis.
  * ET-050 (GD6): the gear reserve does not depend on the gear display mode. It lists the reverse form and both manual
@@ -246,6 +250,7 @@ export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOL
     // ET-084: the speed limit sign sits on the gauge or in its place, never in the side panel.
     panel: items.filter(item => !CLUSTER_GAUGE_SECTIONS.has(item.id) && !item.sign),
     hardMode: overlayHardModeItem(presentation.hardMode, language),
+    ...(presentation.qualification!==undefined?{qualification:{cue:presentation.qualification==='pass'||presentation.qualification==='fail'?presentation.qualification:'neutral',name:language==='ru'?`Предварительная квалификация: ${presentation.qualification==='pass'?'соответствует':presentation.qualification==='fail'?'не соответствует':'неизвестно'}`:`Provisional qualification: ${presentation.qualification==='pass'?'pass':presentation.qualification==='fail'?'fail':'unknown'}`}}:{}),
     backgroundOpacity: isOverlayOpacity(presentation.backgroundOpacity) ? presentation.backgroundOpacity : DEFAULT_OVERLAY_OPACITY,
     editing: presentation.editing === true, contentAnchorY: contentAnchorY(presentation)
   };

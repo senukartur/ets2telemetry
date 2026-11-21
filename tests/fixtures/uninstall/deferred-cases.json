@@ -45,6 +45,8 @@
     {"id": "other-channel-plugin-kept", "folder": {"game": "ets2", "layout": "game", "dll": "owned", "otherChannel": true}, "running": [],
       "expect": {"outcome": "complete", "code": null, "dll": "absent", "otherChannelDll": "present", "pluginsDirectory": "present", "dataRoot": null}},
     {"id": "allowlisted-entry-at-the-last-step", "folder": {"game": "ets2", "layout": "game", "dll": "owned"}, "running": [], "data": {"lateEntry": "logs"},
+      "expect": {"outcome": "complete", "code": null, "dll": "absent", "dataRoot": null}},
+    {"id": "emergency-journal-at-the-last-step", "folder": {"game": "ets2", "layout": "game", "dll": "owned"}, "running": [], "data": {"lateEntry": "emergency-journal"},
       "expect": {"outcome": "complete", "code": null, "dll": "absent", "dataRoot": null}}
   ]
 }

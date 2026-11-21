@@ -54,6 +54,8 @@ export interface SampleInput {
   speed: Available<number>; fuel: Available<number>; averageConsumption: Available<number>; estimatedRange: Available<number>;
   engineRpm: Available<number>; gear: Available<number>; odometer: Available<number>;
   position: Available<{x: number; y: number; z: number}>;
+  /** Observed damage fraction for the recorded job, in [0, 1]. Absent when unavailable. */
+  cargoDamage?: number;
 }
 export interface SampleRecord extends Omit<SampleInput, 'recording'> {powertrain?: import('../../contracts/src/truck-powertrain').TruckPowertrain; id: string; tripUuid: string | null; pluginSessionId?: string; rawTripUuid?: string; accountingIncluded?: boolean}
 /**
@@ -164,7 +166,17 @@ export interface CapturedEndpoint {
 export type CapturedRunning = Pick<CapturedEndpoint, 'truck'|'odometerM'|'fuelL'|'speedMps'|'gameClockId'|'gameMinutes'|'position'> & {
   tripUuid: string; pluginSessionId: string; sourceClockId: string; monotonicNs: Uint64; profile: ProfileObservation;
 };
-export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; effects: TripEffect[]; profile?: ProfileObservation; sourceClockId?: string; monotonicNs?: Uint64;profileChange?:boolean;observeTripUuid?:string;endpoint?:CapturedEndpoint}
+export interface AttachInput {pluginSessionId: string; nextEventSeq: Uint64; job: JobConfiguration; effects: TripEffect[]; profile?: ProfileObservation; sourceClockId?: string; monotonicNs?: Uint64;profileChange?:boolean;observeTripUuid?:string;endpoint?:CapturedEndpoint; cargoOpening?: CargoOpening}
+export interface CargoOpening {generation: string; cargoId: string; classification: import('../../contracts/src/cargo-classification').CargoClassification | null}
+export interface FillCargoClassification extends Omit<CargoOpening, 'classification'> {
+  classification: import('../../contracts/src/cargo-classification').CargoClassification;
+  game: 'ets2' | 'ats';
+  pluginSessionId: string;
+  tripUuid: string;
+  opening: 'event' | 'checkpoint';
+  boundary: Uint64;
+}
+export type FillCargoResult = 'filled' | 'unchanged' | 'retired';
 /**
  * `committed`: the job, trip and intervals were stored. `duplicate`: the session already holds a checkpoint job at this
  * nextEventSeq, such as the same attach retried after a lost answer; nothing is written and the effects are not applied
@@ -337,3 +349,4 @@ export type JournalResult<T> = {ok: true; value: T} | {ok: false; error: Storage
 export type {UploadProjectionBegin, UploadProjectionPreparation, UploadProjection, UploadProjectionPage, UploadProjectionPageQuery} from './upload-projection';
 
 export type * from './upload-sync';
+export type * from './qualification';

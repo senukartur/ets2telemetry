@@ -335,7 +335,7 @@ describe('ET-050b one minor per connection', () => {
     offered.accept(m1('welcome')); expect(offered.minor).toBe(1);
     const old = new V1Consumer(true, {maxMinor: 1}); old.accept(server('welcome')); expect(old.minor).toBe(0);
     // ET-052 and ET-071: minors 2 and 3 exist, so the first unsupported maximum is 4.
-    for (const maxMinor of [6, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
+    for (const maxMinor of [7, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
   });
   it('closes the consumer when the minor changes within a connection, in either direction', () => {
     const up = new V1Consumer(true, {maxMinor: 1}); up.accept(server('welcome')); up.accept(server('checkpoint'));
@@ -361,7 +361,7 @@ describe('ET-050b one minor per connection', () => {
     expect(ack).toEqual({version: {major: 1, minor: 1}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: '1'}});
     expect(validateClientMessage(ack, {maxMinor: 1})).toEqual(ack); expect(() => validateClientMessage(ack)).toThrow(ProtocolError);
     cursor.beginConnection('1'); cursor.received('2', '2'); cursor.commit('2'); expect(cursor.ack()?.version).toEqual({major: 1, minor: 0});
-    expect(() => cursor.beginConnection('2', 6)).toThrow(ProtocolError);
+    expect(() => cursor.beginConnection('2', 7)).toThrow(ProtocolError);
   });
   it('accepts producer-side ACKs only at the connection minor', () => {
     const ack = (minor: number, through: string) => ({version: {major: 1, minor}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: through}});
@@ -370,7 +370,7 @@ describe('ET-050b one minor per connection', () => {
     expect(() => minor1.accept(ack(0, '2'))).toThrow(/minor differs/); expect(() => minor1.accept(ack(1, '2'))).toThrow(/closed/);
     const minor0 = new AckValidator(P1, true); minor0.checkpoint('0'); minor0.sent('1');
     expect(() => minor0.accept(ack(1, '1'))).toThrow(/Unsupported protocol version/);
-    expect(() => new AckValidator(P1, true, 6)).toThrow(ProtocolError);
+    expect(() => new AckValidator(P1, true, 7)).toThrow(ProtocolError);
   });
   it('accepts producer-side clock probes only after the checkpoint and at the connection minor', () => {
     const probe = (minor: number, probeId = '1') => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId}});
@@ -388,7 +388,7 @@ describe('ET-050b one minor per connection', () => {
     expect(computeClockMapping({...input, maxMinor: 1}))
       .toEqual({sourceClockId: '30000000-0000-4000-8000-000000000001', clientClockId: CLIENT_CLOCK, offsetNs: '995449400000', uncertaintyNs: '300000', measuredAtClientNs: '5000800000'});
     expect(() => computeClockMapping(input)).toThrow(/Unsupported protocol version/);
-    expect(() => computeClockMapping({...input, maxMinor: 6})).toThrow(ProtocolError);
+    expect(() => computeClockMapping({...input, maxMinor: 7})).toThrow(ProtocolError);
   });
 });
 
@@ -445,7 +445,7 @@ describe('ET-052 shared minor-2 delivery streams', () => {
     }
     const down = new V1Consumer(true, {maxMinor: 2}); down.accept(m2('welcome')); down.accept(m2('checkpoint'));
     expect(() => down.accept(m1('event-job-configured'))).toThrow(/minor changed/); expect(() => down.accept(m2('event-job-configured'))).toThrow(/closed/);
-    for (const maxMinor of [6, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
+    for (const maxMinor of [7, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
   });
   it('rejects a minor-2 state without the break and a minor-1 or minor-0 state with it, before any consumer sees them', () => {
     for (const name of ['checkpoint-without-break', 'snapshot-without-break', 'snapshot-without-gearbox', 'checkpoint-minor-1-with-break', 'snapshot-minor-0-with-break']) {
@@ -457,7 +457,7 @@ describe('ET-052 shared minor-2 delivery streams', () => {
     const ack = cursor.ack();
     expect(ack).toEqual({version: {major: 1, minor: 2}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: '1'}});
     expect(validateClientMessage(ack, {maxMinor: 2})).toEqual(ack); expect(() => validateClientMessage(ack, {maxMinor: 1})).toThrow(ProtocolError);
-    expect(() => cursor.beginConnection('1', 6)).toThrow(ProtocolError);
+    expect(() => cursor.beginConnection('1', 7)).toThrow(ProtocolError);
     const ackAt = (minor: number, through: string) => ({version: {major: 1, minor}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: through}});
     const probeAt = (minor: number, probeId: string) => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId}});
     const validator = new AckValidator(P1, true, 2); validator.checkpoint('0'); validator.sent('2');
@@ -465,11 +465,11 @@ describe('ET-052 shared minor-2 delivery streams', () => {
     expect(() => validator.accept(ackAt(1, '2'))).toThrow(/minor differs/); expect(() => validator.probe(probeAt(2, '2'))).toThrow(/closed/);
     const older = new AckValidator(P1, true, 1); older.checkpoint('0'); older.sent('1');
     expect(() => older.accept(ackAt(2, '1'))).toThrow(/Unsupported protocol version/);
-    expect(() => new AckValidator(P1, true, 6)).toThrow(ProtocolError);
+    expect(() => new AckValidator(P1, true, 7)).toThrow(ProtocolError);
     const input = {reply: m2('clock-reply'), probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '5000000000', replyReceivedNs: '5000800000'};
     expect(computeClockMapping({...input, maxMinor: 2}))
       .toEqual({sourceClockId: '30000000-0000-4000-8000-000000000001', clientClockId: CLIENT_CLOCK, offsetNs: '995449400000', uncertaintyNs: '300000', measuredAtClientNs: '5000800000'});
-    expect(() => computeClockMapping({...input, maxMinor: 1})).toThrow(/Unsupported protocol version/); expect(() => computeClockMapping({...input, maxMinor: 6})).toThrow(ProtocolError);
+    expect(() => computeClockMapping({...input, maxMinor: 1})).toThrow(/Unsupported protocol version/); expect(() => computeClockMapping({...input, maxMinor: 7})).toThrow(ProtocolError);
   });
 });
 
@@ -528,8 +528,8 @@ describe('ET-071 shared minor-3 delivery streams', () => {
     }
     const down = new V1Consumer(true, {maxMinor: 3}); down.accept(m3('welcome')); down.accept(m3('checkpoint'));
     expect(() => down.accept(m2('event-job-configured'))).toThrow(/minor changed/); expect(() => down.accept(m3('event-job-configured'))).toThrow(/closed/);
-    // ET-084: minor 4 exists, so the first unsupported maximum is 5 (it was 4 in ET-071).
-    for (const maxMinor of [6, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
+    // ET-084: minor 4 exists, so the first unsupported maximum is 7.
+    for (const maxMinor of [7, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
   });
   it('rejects a minor-3 state without cruise control and a minor-2 state with it, before any consumer sees them', () => {
     for (const name of ['checkpoint-without-cruise', 'snapshot-without-cruise', 'checkpoint-minor-2-with-cruise']) {
@@ -541,7 +541,7 @@ describe('ET-071 shared minor-3 delivery streams', () => {
     const ack = cursor.ack();
     expect(ack).toEqual({version: {major: 1, minor: 3}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: '1'}});
     expect(validateClientMessage(ack, {maxMinor: 3})).toEqual(ack); expect(() => validateClientMessage(ack, {maxMinor: 2})).toThrow(ProtocolError);
-    expect(() => cursor.beginConnection('1', 6)).toThrow(ProtocolError);
+    expect(() => cursor.beginConnection('1', 7)).toThrow(ProtocolError);
     const ackAt = (minor: number, through: string) => ({version: {major: 1, minor}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: through}});
     const probeAt = (minor: number, probeId: string) => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId}});
     const validator = new AckValidator(P1, true, 3); validator.checkpoint('0'); validator.sent('2');
@@ -549,11 +549,11 @@ describe('ET-071 shared minor-3 delivery streams', () => {
     expect(() => validator.accept(ackAt(2, '2'))).toThrow(/minor differs/); expect(() => validator.probe(probeAt(3, '2'))).toThrow(/closed/);
     const older = new AckValidator(P1, true, 2); older.checkpoint('0'); older.sent('1');
     expect(() => older.accept(ackAt(3, '1'))).toThrow(/Unsupported protocol version/);
-    expect(() => new AckValidator(P1, true, 6)).toThrow(ProtocolError);
+    expect(() => new AckValidator(P1, true, 7)).toThrow(ProtocolError);
     const input = {reply: m3('clock-reply'), probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '5000000000', replyReceivedNs: '5000800000'};
     expect(computeClockMapping({...input, maxMinor: 3}))
       .toEqual({sourceClockId: '30000000-0000-4000-8000-000000000001', clientClockId: CLIENT_CLOCK, offsetNs: '995449400000', uncertaintyNs: '300000', measuredAtClientNs: '5000800000'});
-    expect(() => computeClockMapping({...input, maxMinor: 2})).toThrow(/Unsupported protocol version/); expect(() => computeClockMapping({...input, maxMinor: 6})).toThrow(ProtocolError);
+    expect(() => computeClockMapping({...input, maxMinor: 2})).toThrow(/Unsupported protocol version/); expect(() => computeClockMapping({...input, maxMinor: 7})).toThrow(ProtocolError);
   });
 });
 
@@ -613,7 +613,7 @@ describe('ET-084 shared minor-4 delivery streams', () => {
     }
     const down = new V1Consumer(true, {maxMinor: 4}); down.accept(m4('welcome')); down.accept(m4('checkpoint'));
     expect(() => down.accept(m3('event-job-configured'))).toThrow(/minor changed/); expect(() => down.accept(m4('event-job-configured'))).toThrow(/closed/);
-    for (const maxMinor of [6, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
+    for (const maxMinor of [7, -1, 0.5]) expect(() => new V1Consumer(true, {maxMinor})).toThrow(ProtocolError);
   });
   it('rejects a minor-4 state without the limit and a minor-3 state with it, before any consumer sees them', () => {
     for (const name of ['checkpoint-without-limit', 'snapshot-without-limit', 'checkpoint-minor-3-with-limit']) {
@@ -625,7 +625,7 @@ describe('ET-084 shared minor-4 delivery streams', () => {
     const ack = cursor.ack();
     expect(ack).toEqual({version: {major: 1, minor: 4}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: '1'}});
     expect(validateClientMessage(ack, {maxMinor: 4})).toEqual(ack); expect(() => validateClientMessage(ack, {maxMinor: 3})).toThrow(ProtocolError);
-    expect(() => cursor.beginConnection('1', 6)).toThrow(ProtocolError);
+    expect(() => cursor.beginConnection('1', 7)).toThrow(ProtocolError);
     const ackAt = (minor: number, through: string) => ({version: {major: 1, minor}, kind: 'ack', data: {pluginSessionId: P1, throughEventSeq: through}});
     const probeAt = (minor: number, probeId: string) => ({version: {major: 1, minor}, kind: 'clock.probe', data: {probeId}});
     const validator = new AckValidator(P1, true, 4); validator.checkpoint('0'); validator.sent('2');
@@ -633,10 +633,10 @@ describe('ET-084 shared minor-4 delivery streams', () => {
     expect(() => validator.accept(ackAt(3, '2'))).toThrow(/minor differs/); expect(() => validator.probe(probeAt(4, '2'))).toThrow(/closed/);
     const older = new AckValidator(P1, true, 3); older.checkpoint('0'); older.sent('1');
     expect(() => older.accept(ackAt(4, '1'))).toThrow(/Unsupported protocol version/);
-    expect(() => new AckValidator(P1, true, 6)).toThrow(ProtocolError);
+    expect(() => new AckValidator(P1, true, 7)).toThrow(ProtocolError);
     const input = {reply: m4('clock-reply'), probeId: '1', clientClockId: CLIENT_CLOCK, probeSentNs: '5000000000', replyReceivedNs: '5000800000'};
     expect(computeClockMapping({...input, maxMinor: 4}))
       .toEqual({sourceClockId: '30000000-0000-4000-8000-000000000001', clientClockId: CLIENT_CLOCK, offsetNs: '995449400000', uncertaintyNs: '300000', measuredAtClientNs: '5000800000'});
-    expect(() => computeClockMapping({...input, maxMinor: 3})).toThrow(/Unsupported protocol version/); expect(() => computeClockMapping({...input, maxMinor: 6})).toThrow(ProtocolError);
+    expect(() => computeClockMapping({...input, maxMinor: 3})).toThrow(/Unsupported protocol version/); expect(() => computeClockMapping({...input, maxMinor: 7})).toThrow(ProtocolError);
   });
 });

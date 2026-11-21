@@ -172,13 +172,15 @@ const SAMPLE_VALUES = ['speed', 'fuel', 'averageConsumption', 'estimatedRange', 
 /** One stored sample of the requested trip, exactly the JournalSample shape. */
 function sample(value: unknown, tripUuid: string): void {
   const o = exact(value, [...SAMPLE_KEYS, ...(isRecord(value) && value.pluginSessionId !== undefined ? ['pluginSessionId', 'rawTripUuid', 'accountingIncluded'] : []),
-    ...(isRecord(value) && Object.hasOwn(value, 'powertrain') ? ['powertrain'] : [])]);
+    ...(isRecord(value) && Object.hasOwn(value, 'powertrain') ? ['powertrain'] : []),
+    ...(isRecord(value) && Object.hasOwn(value, 'cargoDamage') ? ['cargoDamage'] : [])]);
   if (Object.hasOwn(o, 'powertrain') && !isTruckPowertrain(o.powertrain)) bad();
   if (o.pluginSessionId !== undefined) {uuid(o.pluginSessionId); uuid(o.rawTripUuid); if (typeof o.accountingIncluded !== 'boolean') bad();}
   if (!isJournalRowCursor(o.id) || o.tripUuid !== tripUuid) bad();
   count(o.utcMs); uuid(o.sourceClockId); uint64(o.monotonicNs);
   if (o.gameTime !== null) { const g = exact(o.gameTime, ['minutes', 'clockId']); available(g.minutes, count); uuid(g.clockId); }
   for (const key of SAMPLE_VALUES) available(o[key], finite);
+  if (Object.hasOwn(o, 'cargoDamage') && (typeof o.cargoDamage !== 'number' || !(o.cargoDamage >= 0 && o.cargoDamage <= 1))) bad();
   available(o.position, position => { const p = exact(position, ['x', 'y', 'z']); finite(p.x); finite(p.y); finite(p.z); });
 }
 /** Ids (row ids or eventSeqs) strictly increasing and all after the requested cursor. */

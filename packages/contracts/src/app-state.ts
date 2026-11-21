@@ -14,7 +14,7 @@ export type RecordingTarget = 'history' | 'synthetic' | 'replay';
  * failure is being retried; the selected source is not recorded; this plugin session continues live-only (the database
  * is behind the plugin); or recording stopped for the service lifetime.
  */
-export type RecordingState = 'opening' | 'waiting' | 'recording' | 'paused' | 'interrupted' | 'retrying' | 'not-recorded-source' | 'live-only' | 'stopped';
+export type RecordingState = 'opening' | 'waiting' | 'recording' | 'paused' | 'interrupted' | 'retrying' | 'buffering' | 'not-recorded-source' | 'live-only' | 'stopped';
 /**
  * The closed set of recording codes: the storage error codes, the trip recorder's codes and the ACK pipeline's own
  * failure codes. apps/desktop/src/recording-status.ts asserts at compile time that it equals them.
@@ -100,7 +100,7 @@ export type SettingsSaveError = 'SETTINGS_WRITE_FAILED' | 'SETTINGS_READ_ONLY';
 export type OverlayLayout = 'strip' | 'card' | 'cluster' | 'hud';
 /** The overlay sections ordered and grouped in apps/desktop/src/overlay-sections.ts. */
 export type OverlaySectionId = 'speed' | 'gear' | 'rpm' | 'cruise-control' | 'speed-limit' | 'fuel' | 'range' | 'sdk-consumption' | 'cargo' | 'origin' | 'destination'
-  | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'game-time' | 'mandatory-break' | 'rest-state';
+  | 'distance-driven' | 'distance-remaining' | 'deadline' | 'expected-income' | 'cargo-damage' | 'game-time' | 'mandatory-break' | 'rest-state';
 /** Which overlay sections are enabled: always all seventeen keys, at least one of them true. */
 export type OverlaySections = Readonly<Record<OverlaySectionId, boolean>>;
 /**

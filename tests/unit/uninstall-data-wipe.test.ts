@@ -124,30 +124,30 @@ describe('a spent budget', () => {
     await seedAll();
     const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: expiresAt(7)});
     expect(report).toEqual({removed: 2, kept: 0, rootRemoved: false,
-      failed: ['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates'].map(entry => ({entry, code: 'BUDGET_EXPIRED'}))});
-    expect(await remaining()).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+      failed: ['credentials', 'data', 'emergency-journal', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates'].map(entry => ({entry, code: 'BUDGET_EXPIRED'}))});
+    expect(await remaining()).toEqual(['credentials', 'data', 'emergency-journal', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('stays spent within one call even if the check would answer false again', async () => {
     await seedAll();
     let calls = 0;
     const report = await wipeDataRoot(fs(), dataRoot, {removeRoot: true, expired: () => ++calls === 7});
     expect(report.removed).toBe(2);
-    expect(report.failed.map(entry => entry.entry)).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
-    expect(await remaining()).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+    expect(report.failed.map(entry => entry.entry)).toEqual(['credentials', 'data', 'emergency-journal', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+    expect(await remaining()).toEqual(['credentials', 'data', 'emergency-journal', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('in the first step of wipeEverything: lists plugins and uninstall too, and deletes neither', async () => {
     await seedAll();
     const report = await wipeEverything(fs() as never, dataRoot, expiresAt(7), true);
     expect(report.removed).toBe(2);
-    expect(report.failed).toEqual(['credentials', 'data', 'logs', 'settings', 'synthetic', 'transport', 'updates', 'plugins', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'})));
-    expect(await remaining()).toEqual(['credentials', 'data', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
+    expect(report.failed).toEqual(['credentials', 'data', 'emergency-journal', 'logs', 'settings', 'synthetic', 'transport', 'updates', 'plugins', 'uninstall'].map(entry => ({entry, code: 'BUDGET_EXPIRED'})));
+    expect(await remaining()).toEqual(['credentials', 'data', 'emergency-journal', 'logs', 'plugins', 'settings', 'synthetic', 'transport', 'uninstall', 'updates']);
   });
   it('right after the first step of wipeEverything: reports plugins and uninstall instead of nothing', async () => {
     await seedAll();
-    // The first step removes nine entries with 27 checks (including protected credentials); the registry step's first check
+    // The first step removes ten entries with 30 checks (including protected credentials); the registry step's first check
     // finds the budget spent.
-    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(28), true);
-    expect(report).toEqual({removed: 9, kept: 0, rootRemoved: false, failed: [{entry: 'plugins', code: 'BUDGET_EXPIRED'}, {entry: 'uninstall', code: 'BUDGET_EXPIRED'}]});
+    const report = await wipeEverything(fs() as never, dataRoot, expiresAt(31), true);
+    expect(report).toEqual({removed: 10, kept: 0, rootRemoved: false, failed: [{entry: 'plugins', code: 'BUDGET_EXPIRED'}, {entry: 'uninstall', code: 'BUDGET_EXPIRED'}]});
     expect(await remaining()).toEqual(['plugins', 'uninstall']);
   });
   it('a real failure still keeps plugins and uninstall for the deferral, unreported', async () => {

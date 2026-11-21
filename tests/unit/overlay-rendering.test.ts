@@ -232,7 +232,7 @@ it.each(['strip', 'card', 'cluster', 'hud'] as const)('renders exactly one Hard 
     const struck = expected.state === 'lost' && (layout === 'strip' || layout === 'hud');
     expect(element.includes('overlay-hm-struck'), label).toBe(struck);
     if (layout === 'strip') {
-      expect(element, label).toMatch(/^<span class="overlay-item( overlay-group-start)? overlay-hard-mode" [^>]*style="max-width:100px">/);
+      expect(element, label).toMatch(/^<span class="overlay-item( overlay-group-start)? overlay-hard-mode" [^>]*style="max-width:160px">/);
       // A group divider precedes the indicator only when a section precedes it.
       expect(element.startsWith('<span class="overlay-item overlay-group-start'), label).toBe(ids.length > 0);
       expect(element, label).toContain(`<span class="overlay-value overlay-hm-text${struck ? ' overlay-hm-struck' : ''}">HM</span>`);
@@ -413,5 +413,17 @@ it('renders Rest State with an accessible label and a decorative bed in every ov
     expect(html, layout).toContain('8 ч 20 мин');
     expect(html, layout).not.toContain('data-urgency');
     if (layout === 'strip') expect(html).toContain('class="overlay-visually-hidden">Запас бодрости</span>');
+  }
+});
+
+it('renders cargo damage with its label and decorative icon in all four layouts (REG-009, REG-016)', () => {
+  for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
+    for (const section of [{id: 'cargo-damage', state: 'value', text: '0%'}, {id: 'cargo-damage', state: 'unavailable'}] as const) {
+      const view = overlayView({...base, layout, sections: [section]});
+      const html = renderToStaticMarkup(React.createElement(OverlayContent, {view}));
+      expect(html, layout).toMatch(/<svg[^>]*(?=[^>]*lucide-package-x)(?=[^>]*aria-hidden="true")/);
+      expect(html, layout).toMatch(/>[^<]*(Cargo damage|Damage)</);
+      expect(html, layout).toMatch(section.state === 'value' ? />0%</ : />—</);
+    }
   }
 });

@@ -16,6 +16,7 @@ const {collectHistory} = createRequire(import.meta.url)('../../scripts/installer
   collectHistory(DatabaseConstructor: typeof Database, database: string, backups: string): {database: Record<string, unknown>; manifests: {manifest: Record<string, unknown>}[]}
 };
 const MIGRATIONS = CURRENT_MIGRATIONS.slice(0, 2);
+const MIGRATIONS_V10 = CURRENT_MIGRATIONS.slice(0, 10);
 let ws: Awaited<ReturnType<typeof workspace>>;
 beforeEach(async () => { ws = await workspace(); const options = ws.options; ws.options = overrides => options({migrations: MIGRATIONS, ...overrides}); });
 afterEach(async () => { await ws.dispose(); });
@@ -51,6 +52,18 @@ function withoutV10(table: string, rows: unknown[]): unknown[] {
   const added = V10_COLUMNS[table];
   if (!added) return rows;
   return (rows as Record<string, unknown>[]).map(({[added[0]]: value, ...rest}) => { expect(value, table).toBe(added[1]); return rest; });
+}
+function beforeAddedColumns(table: string, rows: unknown[]): unknown[] {
+  if (table === 'samples') return (rows as Record<string, unknown>[]).map(({cargo_damage_fraction, ...rest}) => {
+    expect(cargo_damage_fraction).toBeNull();
+    return rest;
+  });
+  if (table !== 'trips') return withoutV10(table, rows);
+  return (rows as Record<string, unknown>[]).map(({cargo_classification, cargo_classification_generation, ...rest}) => {
+    expect(cargo_classification).toBeNull();
+    expect(cargo_classification_generation).toBeNull();
+    return rest;
+  });
 }
 const jobIdentities = (file: string) => readOnly(file, db => db.prepare('SELECT id, plugin_session_ref, source, event_ref, checkpoint_next_event_seq FROM job_configurations ORDER BY id').all());
 /** Opens a file that is not ours and checks that it was refused without changing a byte or leaving sidecar files. */
@@ -193,12 +206,12 @@ describe('REG-013/REG-017 installer history contract', () => {
   it('accepts the actual version 1 to current migration and rejects corrupted upgrade evidence', async () => {
     const copy = ws.copyFixture(REPRESENTATIVE), original = readVersion1(copy);
     const storage = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(storage.summary).toMatchObject({schemaVersion: 10, created: false, migratedFrom: 1});
+    expect(storage.summary).toMatchObject({schemaVersion: 13, created: false, migratedFrom: 1});
     expectMigratedFromVersion1(storage, copy, original, path.join(ws.backups, storage.summary.backupFileName!));
     const facts = collectHistory(Database, copy, ws.backups);
     expect(() => assertHistoryFacts(facts, '0.1.0-test')).not.toThrow();
     const reopened = await ws.open({path: copy, migrations: CURRENT_MIGRATIONS});
-    expect(reopened.summary).toMatchObject({schemaVersion: 10, created: false});
+    expect(reopened.summary).toMatchObject({schemaVersion: 13, created: false});
     expect(reopened.summary.migratedFrom).toBeUndefined();
     reopened.close();
     expect(() => assertHistoryFacts(collectHistory(Database, copy, ws.backups), '0.1.0-test')).not.toThrow();
@@ -240,10 +253,10 @@ it('REG-013 migrates frozen schema4 additively and preserves every existing tabl
   const copy=ws.copyFixture('schema-v4-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").pluck().all()) as string[];
   const rows=readOnly(copy,db=>Object.fromEntries(tables.map(table=>[table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()])));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:10,migratedFrom:4});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:13,migratedFrom:4});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
   readOnly(copy,db=>{
-    for(const table of tables.filter(t=>t!=='schema_migrations'))expect(withoutV10(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),table).toEqual(rows[table]);
+    for(const table of tables.filter(t=>t!=='schema_migrations'))expect(beforeAddedColumns(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()),table).toEqual(rows[table]);
     expect(db.prepare('SELECT generation FROM upload_projection_evidence_versions').all()).toEqual([]);
     expect(db.pragma('foreign_key_check')).toEqual([]);expect(db.pragma('integrity_check',{simple:true})).toBe('ok');
   });
@@ -253,11 +266,11 @@ it('REG-006/013 migrates frozen schema5 additively after a verified backup witho
   const copy=ws.copyFixture('schema-v5-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:10,migratedFrom:5});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:13,migratedFrom:5});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);
   const ready=ok(storage.getUploadProjectionPreparation('80000000-0000-4000-8000-000000000001'));expect(ready.state).toBe('ready');
   storage.close();readOnly(copy,db=>{
-    expect(tables.map(table=>withoutV10(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
+    expect(tables.map(table=>beforeAddedColumns(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
     expect(db.prepare('SELECT legacy_boundary,next_ordinal,next_change,version,client_uuid FROM upload_connection').all()).toEqual([{legacy_boundary:4,next_ordinal:5,next_change:1,version:0,client_uuid:null}]);
     expect(db.prepare('SELECT count(*) FROM upload_candidates').pluck().get()).toBe(0);expect(db.pragma('foreign_key_check')).toEqual([]);
   });
@@ -268,15 +281,42 @@ it('REG-006/013 migrates schema6 without rewriting frozen upload bytes, receipts
   const copy=ws.copyFixture('schema-v6-representative.sqlite'),before=digestOf(copy);
   const tables=readOnly(copy,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rows=readOnly(copy,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
-  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:10,migratedFrom:6});
+  const storage=await ws.open({path:copy,migrations:CURRENT_MIGRATIONS});expect(storage.summary).toMatchObject({schemaVersion:13,migratedFrom:6});
   expect(digestOf(path.join(ws.backups,storage.summary.backupFileName!))).toEqual(before);storage.close();
-  readOnly(copy,db=>{expect(tables.map(table=>withoutV10(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
+  readOnly(copy,db=>{expect(tables.map(table=>beforeAddedColumns(table,db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()))).toEqual(rows);
     expect(db.prepare('SELECT * FROM trailer_baselines').all()).toEqual([]);expect(db.pragma('foreign_key_check')).toEqual([]);});
 });
 it('REG-007/013 rolls back failed schema7 DDL without modifying schema6 uploads or preparations',async()=>{
   const copy=ws.copyFixture('schema-v6-representative.sqlite'),before=digestOf(copy),real=CURRENT_MIGRATIONS[6];
   failed(await openStorage(ws.options({path:copy,migrations:[...CURRENT_MIGRATIONS.slice(0,6),{...real,up(db){real.up(db);throw new Error('injected schema7 failure');}}]})),'MIGRATION_FAILED');
   expect(digestOf(copy)).toEqual(before);
+});
+
+it('REG-009/013 keeps old samples unavailable after adding the cargo damage field, and validates new values atomically', async () => {
+  const file = ws.copyFixture(REPRESENTATIVE);
+  const tripUuid = '70000000-0000-4000-8000-000000000001';
+  const session = '10000000-0000-4000-8000-000000000001';
+  const previous = await ws.open({path: file, migrations: CURRENT_MIGRATIONS.slice(0, 12)});
+  const samples = ok(previous.listSamples({tripUuid}));
+  expect(samples).toHaveLength(2);
+  const {id, ...olderSample} = samples[0];
+  void id;
+  previous.close();
+
+  const preMigration = digestOf(file);
+  const current = await ws.open({path: file, migrations: CURRENT_MIGRATIONS});
+  expect(current.summary).toMatchObject({schemaVersion: 13, migratedFrom: 12});
+  expect(digestOf(path.join(ws.backups, current.summary.backupFileName!))).toEqual(preMigration);
+  expect(ok(current.listSamples({tripUuid})).every(sample => !Object.hasOwn(sample, 'cargoDamage'))).toBe(true);
+  expect(ok(current.listSamples({tripUuid}))).toEqual(samples);
+  const baseline = ok(current.listSamples({pluginSessionId: session}));
+  const row = (cargoDamage: number, second: number) => ({...olderSample, cargoDamage, monotonicNs: (6_000_000_000n + BigInt(second) * 1_000_000_000n).toString()});
+  for (const invalid of [row(1.1, 2), row(-0.01, 2), row(NaN, 2), {...row(0.125, 2), tripUuid: null}]) {
+    failed(current.appendSamples(session, [row(0, 1), invalid]), 'INVALID_INPUT');
+    expect(ok(current.listSamples({pluginSessionId: session}))).toEqual(baseline);
+  }
+  expect(ok(current.appendSamples(session, [row(0, 1), row(0.125, 2)]))).toEqual({appended: 2, skipped: 0});
+  expect(ok(current.listSamples({tripUuid})).slice(-2).map(sample => sample.cargoDamage)).toEqual([0, 0.125]);
 });
 
 // ET-112b2 M15: migration 0009 adds the decision and boundary tables without a backfill (D1, D6). The expected rows are
@@ -366,6 +406,8 @@ describe('REG-013 schema 9 membership decisions (M15)',()=>{
 // backfill. The expected rows are written by hand from schema-v9-representative.sql: five groups and seventeen ledger rows,
 // all of them engine 0 without flags afterwards (schema 9 meaning).
 describe('REG-013 schema 10 quantity engine',()=>{
+  // Preserve this historical schema-10 contract when later additive migrations are introduced.
+  const CURRENT_MIGRATIONS = MIGRATIONS_V10;
   const V9='schema-v9-representative.sqlite';
   const tablesOf=(file:string)=>readOnly(file,db=>db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name<>'schema_migrations' ORDER BY name").pluck().all()) as string[];
   const rowsOf=(file:string,tables:string[])=>readOnly(file,db=>tables.map(table=>db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));

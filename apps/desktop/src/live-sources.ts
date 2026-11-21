@@ -6,7 +6,7 @@ import {CRAWLER_LABELS, deriveGearLabels, type GearLabelGame} from '../../../pac
 import {buildLiveView, carriesField, isCurrent, type GearDisplay, type LiveDashboardView, type LiveField, type LiveFieldId} from '../../../packages/telemetry-core/src/live-view';
 import {normalizeV0State} from '../../../packages/telemetry-core/src/normalize-v0';
 import {normalizeV1State} from '../../../packages/telemetry-core/src/normalize-v1';
-import type {LiveJob, NormalizedLiveState, Reading} from '../../../packages/telemetry-core/src/readings';
+import {missing, type LiveJob, type NormalizedLiveState, type Reading} from '../../../packages/telemetry-core/src/readings';
 
 // The one combiner of the v0 observation and the protocol v1 projection (ET-010c, decision F4). The dashboard card and
 // main's overlay projection both read every field through it, so they cannot disagree about which protocol a value
@@ -39,6 +39,8 @@ export interface LiveSources {
   /** Carried, fresh, connected or paused v1 data. */
   v1Current: boolean;
   job: JobIdentity;
+  /** Current cargo damage for the active v0 job, matched by source and configuration revision. */
+  cargoDamage: Reading<number>;
   /** v0 decides while current; otherwise current v1 data may report a paused game (decision F4(d)). */
   paused: boolean;
   /** The field to display: v0 for what v0 carries, v1 for the rest, with the job guard applied. */
@@ -113,6 +115,9 @@ export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: Gear
   const v1View = carried ? buildLiveView(carried.v1, v1State, units, display) : undefined;
   const v0Current = v0View.connection.current;
   const job = jobIdentity(v0State?.job.state === 'value' ? v0State.job.value : undefined, v1State?.job);
+  const damage = carried?.observation.state.cargoDamage;
+  const cargoDamage = v0Current && v1Current && job === 'match' && damage?.available &&
+    damage.v0ConfigurationRevision === v0State?.configurationRevision ? v1State!.cargoDamage : missing<number>('not-observed');
   const v0Fields = fieldsOf(v0View), v1Fields = v1View ? fieldsOf(v1View) : undefined;
   const field = (id: LiveFieldId): LiveField => {
     if (carriesField('v0', id)) {
@@ -132,7 +137,7 @@ export function liveSources(live: LiveTelemetry, units: DisplayUnits, gear: Gear
     return v1Field.state === 'hidden' && v1State?.job.state === 'value' ? v1Field : notCurrent(v1Field);
   };
   return {
-    v0View, ...(v0State ? {v0State} : {}), ...(v1State ? {v1State} : {}), ...(v1View ? {v1View} : {}), v1Carried, v1Current, job,
+    v0View, ...(v0State ? {v0State} : {}), ...(v1State ? {v1State} : {}), ...(v1View ? {v1View} : {}), v1Carried, v1Current, job, cargoDamage,
     paused: v0Current ? v0View.connection.paused : v1Current && !!v1View?.connection.paused,
     field
   };

@@ -11,6 +11,9 @@ import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
 import {smokeDataRoot} from './smoke-build.mjs';
 
+// Hidden overlay waits poll DOM state explicitly: requestAnimationFrame can be throttled without a trace screencast.
+const waitForOverlayState = (page, predicate, argument, options = {}) => page.waitForFunction(predicate, argument, {polling: 50, ...options});
+
 // ET-049: genuine keyboard and held-pointer gestures; the overlay still uses committed settings.
 async function observeOpacityControl({dashboard, config, language, record}) {
   const slider = dashboard.getByRole('slider', {name: language === 'en' ? 'Background opacity' : 'Непрозрачность фона', exact: true});
@@ -49,7 +52,7 @@ async function observeOpacitySurfaces({dashboard, overlay, layout, language, siz
   const value = [40, 65, 80, 100][(language === 'ru' ? 2 : 0) + (size.width === 1100 ? 1 : 0)];
   {
     await dashboard.evaluate(value => globalThis.desktop.setOverlayBackgroundOpacity(value), value);
-    await overlay.waitForFunction(alpha => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').trim() === `rgba(11, 17, 32, ${alpha})`, value / 100);
+    await waitForOverlayState(overlay, alpha => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').trim() === `rgba(11, 17, 32, ${alpha})`, value / 100);
     const facts = await overlay.evaluate(() => {
       const style = node => globalThis.getComputedStyle(node);
       const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
@@ -65,7 +68,7 @@ async function observeOpacitySurfaces({dashboard, overlay, layout, language, siz
     else {assert.ok(facts.surfaces.length >= (layout === 'cluster' ? 2 : 1)); assert.ok(facts.surfaces.every(color => color === (value === 100 ? 'rgb(11, 17, 32)' : `rgba(11, 17, 32, ${value / 100})`)));}
   }
   await dashboard.evaluate(() => globalThis.desktop.setOverlayBackgroundOpacity(80));
-  await overlay.waitForFunction(() => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').includes('0.8'));
+  await waitForOverlayState(overlay, () => globalThis.getComputedStyle(globalThis.document.querySelector('[data-testid="overlay-content"]')).getPropertyValue('--yu-ov-panel').includes('0.8'));
   record.flags.backgroundOpacityOverlay = true;
 }
 
@@ -99,13 +102,29 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
       const box = node.getBoundingClientRect();
       return box.width <= 0 || box.height <= 0 || box.left < bounds.left - 1 || box.right > bounds.right + 1 || box.top < bounds.top - 1 || box.bottom > bounds.bottom + 1;
     }).map(node => node.getAttribute('data-testid'));
-    return {layout: root.getAttribute('data-layout'), scale: root.getAttribute('data-scale'), outside,
+    let stripStatus = null;
+    if (root.getAttribute('data-layout') === 'strip') {
+      const footer = root.querySelector('[data-testid="overlay-hard-mode"]'), label = footer.querySelector('.overlay-hm-text');
+      const medal = footer.querySelector('.qualification-medal'), hmCue = footer.querySelector('.overlay-hm-cue>svg');
+      const qualificationCue = medal?.querySelector('.qualification-medal-mark>svg');
+      const hmBox = hmCue?.getBoundingClientRect(), qualificationBox = qualificationCue?.getBoundingClientRect();
+      const divider = medal && globalThis.getComputedStyle(medal, '::before');
+      const sectionDivider = globalThis.getComputedStyle(root.querySelector('.overlay-group-start'), '::before');
+      const near = (left, right) => Math.abs(left - right) < 0.1;
+      stripStatus = {labelFits: label.scrollWidth <= label.clientWidth,
+        matchingCues: Boolean(hmBox && qualificationBox && near(hmBox.width, qualificationBox.width) && near(hmBox.height, qualificationBox.height) &&
+          near(hmBox.top + hmBox.height / 2, qualificationBox.top + qualificationBox.height / 2) &&
+          hmCue.querySelector('path')?.getAttribute('d') === qualificationCue.querySelector('path')?.getAttribute('d')),
+        matchingDivider: Boolean(divider && divider.content !== 'none' && ['width', 'height', 'backgroundColor'].every(key => divider[key] === sectionDivider[key]))};
+    }
+    return {layout: root.getAttribute('data-layout'), scale: root.getAttribute('data-scale'), outside, stripStatus,
       fitsScene: bounds.left >= scene.left && bounds.right <= scene.right && bounds.top >= scene.top && bounds.bottom <= scene.bottom,
       sections: [...root.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').slice('overlay-section-'.length)),
       width: bounds.width, height: bounds.height};
   });
   const contained = async name => {
     const result = await until(probe, value => value.outside.length === 0 && value.fitsScene, `UI_PREVIEW_CONTAINED_${name}_${language}`);
+    if (result.layout === 'strip') assert.deepEqual(result.stripStatus, {labelFits: true, matchingCues: true, matchingDivider: true}, `UI_PREVIEW_STRIP_STATUS_${name}_${language}`);
     if (result.layout === 'card') {
       const example = await preview.evaluate(cardLabelPresentation), production = await overlay.getByTestId('overlay-root').evaluate(cardLabelPresentation);
       assert.deepEqual(example.display, production.display, 'UI_PREVIEW_CARD_ICON_DISPLAY');
@@ -132,7 +151,7 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
       assert.ok(Math.abs(radio.height - 12) < 0.1, `UI_LAYOUT_RADIO_SIZE_${radio.id}`);
       assert.equal(radio.checked, String(radio.id === `overlay-layout-${layout}`), `UI_LAYOUT_RADIO_SELECTION_${radio.id}`);
     }
-    await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
+    await waitForOverlayState(overlay, layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
     const result = await contained(layout);
     const image = dashboard.getByTestId('overlay-preview-card');
     const exampleLabel = language === 'en' ? 'Example data · not live telemetry' : 'Пример данных · не текущая телеметрия';
@@ -145,7 +164,7 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
     assert.deepEqual([...result.sections].sort(), [...ids].sort());
     assert.equal(await preview.getByTestId('overlay-speed').textContent(), '84');
     assert.equal(await preview.getByTestId('overlay-hard-mode').count(), 1);
-    assert.equal(await dashboard.getByTestId('overlay-sections-count').innerText(), language === 'en' ? 'shown 18 of 18' : 'показано 18 из 18');
+    assert.equal(await dashboard.getByTestId('overlay-sections-count').innerText(), language === 'en' ? 'shown 19 of 19' : 'показано 19 из 19');
     await dashboard.getByTestId('overlay-preview-card').scrollIntoViewIfNeeded();
     await save(`settings-preview-${layout}`, language, size);
   }
@@ -185,7 +204,7 @@ async function observeOverlayPreview({application, dashboard, overlay, source, l
   await dashboard.getByTestId('overlay-edit-cancel').click();
   await until(() => preview.getAttribute('data-scale'), value => value === String(initial.placements.strip.scale), 'UI_PREVIEW_CANCEL');
   await dashboard.locator('#overlay-layout-card').click();
-  await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === 'card', undefined, {timeout: 5000});
+  await waitForOverlayState(overlay, () => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === 'card', undefined, {timeout: 5000});
   await dashboard.getByTestId('overlay-edit-start').click();
   await until(state, value => value.overlayEdit.active, 'UI_PREVIEW_CARD_EDIT');
   await dashboard.evaluate(() => globalThis.desktop.setOverlayEditScale(3));
@@ -331,7 +350,7 @@ async function overlayFrame(application, overlay, frame) {
   // The CSS viewport times the zoom is the DIP content size. At a fractional device scale Windows may round it by about a
   // DIP, and the integer viewport adds up to half a CSS px, `zoom / 2` DIP (ET-045e verifier round 1, the same rule as
   // zoomedViewportTolerance), so the bound is max(1.5, 1 + zoom / 2) DIP.
-  await overlay.waitForFunction(({zoom, width, height}) => {
+  await waitForOverlayState(overlay, ({zoom, width, height}) => {
     const tolerance = Math.max(1.5, 1 + zoom / 2);
     return Math.abs(globalThis.innerWidth * zoom - width) <= tolerance && Math.abs(globalThis.innerHeight * zoom - height) <= tolerance;
   }, frame, {timeout: 5000});
@@ -401,10 +420,10 @@ async function observeStripNumbers({application, overlay, source, language, reco
     }
     await overlayFrame(application, overlay, STRIP_FRAMES[0]);
     source.setReading(2.5, 73); source.setEngine(999, 9);
-    await overlay.waitForFunction(numberTexts, {speed: '9', gear: '9', rpm: '999'}, {timeout: 5000});
+    await waitForOverlayState(overlay, numberTexts, {speed: '9', gear: '9', rpm: '999'}, {timeout: 5000});
     const before = await overlay.evaluate(stripBoxes);
     source.setReading(100 / 3.6, 73); source.setEngine(1000, 10);
-    await overlay.waitForFunction(numberTexts, {speed: '100', gear: '10', rpm: '1000'}, {timeout: 5000});
+    await waitForOverlayState(overlay, numberTexts, {speed: '100', gear: '10', rpm: '1000'}, {timeout: 5000});
     const moved = movedBoxes(before, await overlay.evaluate(stripBoxes));
     record.stableNumbers.push({language, zoom: STRIP_FRAMES[0].zoom, transition: '9/9/999 to 100/10/1000', moved});
     assert.deepEqual(moved, [], `UI_STRIP_LIVE_TRANSITION_MOVED_${language}`);
@@ -412,7 +431,7 @@ async function observeStripNumbers({application, overlay, source, language, reco
     source.setReading(25, 73); source.setEngine(600, -1);
     await overlayFrame(application, overlay, {zoom: 1, ...dimensions.strip});
   });
-  await overlay.waitForFunction(numberTexts, {speed: '90', gear: 'R1', rpm: '600'}, {timeout: 5000});
+  await waitForOverlayState(overlay, numberTexts, {speed: '90', gear: 'R1', rpm: '600'}, {timeout: 5000});
   record.flags.stableNumbers = true;
 }
 /**
@@ -428,7 +447,7 @@ async function observeStripNumbers({application, overlay, source, language, reco
 async function observeGearDisplay({dashboard, overlay, source, sourceV1, language, record}) {
   record.gearDisplay ??= [];
   const gearIs = async text => {
-    await overlay.waitForFunction(numberTexts, {gear: text}, {timeout: 5000});
+    await waitForOverlayState(overlay, numberTexts, {gear: text}, {timeout: 5000});
     await dashboard.waitForFunction(text => globalThis.document.querySelector('[data-testid="live.instrument.gear"] strong')?.textContent === text, text, {timeout: 5000});
   };
   const choose = async mode => {
@@ -467,7 +486,7 @@ async function observeGearDisplay({dashboard, overlay, source, sourceV1, languag
     if ((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2 !== 'automatic')
       await dashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'automatic'));
   });
-  await overlay.waitForFunction(numberTexts, {gear: 'R1'}, {timeout: 5000});
+  await waitForOverlayState(overlay, numberTexts, {gear: 'R1'}, {timeout: 5000});
   record.flags.gearDisplayManual = true;
 }
 /**
@@ -482,7 +501,7 @@ async function observeGearboxLabel({dashboard, overlay, source, sourceV1, layout
     await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.gearDisplay.ets2 === 'manual' && state.settings.saveError === null,
       'UI_GEARBOX_MANUAL_SAVED');
     sourceV1.setTruckId('truck.volvo'); source.setEngine(600, 1);
-    await overlay.waitForFunction(numberTexts, {gear: 'C1'}, {timeout: 5000});
+    await waitForOverlayState(overlay, numberTexts, {gear: 'C1'}, {timeout: 5000});
     assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, [], `UI_GEARBOX_LABEL_OUTSIDE_${layout}_${language}`);
     record.gearboxLabels.push({language, layout, gear: 1, text: 'C1'});
   }, async () => {
@@ -490,7 +509,7 @@ async function observeGearboxLabel({dashboard, overlay, source, sourceV1, layout
     if ((await dashboard.evaluate(() => globalThis.desktop.getAppState())).settings.gearDisplay.ets2 !== 'automatic')
       await dashboard.evaluate(() => globalThis.desktop.setGearDisplay('ets2', 'automatic'));
   });
-  await overlay.waitForFunction(numberTexts, {gear: 'R1'}, {timeout: 5000});
+  await waitForOverlayState(overlay, numberTexts, {gear: 'R1'}, {timeout: 5000});
   // Every layout in both languages.
   if (new Set(record.gearboxLabels.map(entry => `${entry.language}:${entry.layout}`)).size === layouts.length * 2) record.flags.gearboxLabels = true;
 }
@@ -515,7 +534,7 @@ async function observeClusterCentre({application, dashboard, overlay, language, 
     for (const frame of CLUSTER_FRAMES) {await overlayFrame(application, overlay, frame); await check(frame, ['speed', 'gear', 'rpm']);}
     for (const subset of [['rpm'], ['speed', 'rpm']]) {
       await dashboard.evaluate(({all, subset}) => globalThis.desktop.setOverlaySections(Object.fromEntries(Object.keys(all).map(id => [id, subset.includes(id)]))), {all, subset});
-      await overlay.waitForFunction(sectionsAre, subset.join(','), {timeout: 5000});
+      await waitForOverlayState(overlay, sectionsAre, subset.join(','), {timeout: 5000});
       await overlayFrame(application, overlay, CLUSTER_FRAMES[1]);
       await check(CLUSTER_FRAMES[1], subset);
     }
@@ -523,7 +542,7 @@ async function observeClusterCentre({application, dashboard, overlay, language, 
     await dashboard.evaluate(all => globalThis.desktop.setOverlaySections(all), all);
     await overlayFrame(application, overlay, {zoom: 1, ...dimensions.cluster});
   });
-  await overlay.waitForFunction(sectionsAre, shown, {timeout: 5000});
+  await waitForOverlayState(overlay, sectionsAre, shown, {timeout: 5000});
   record.flags.clusterRpmContained = true;
 }
 /**
@@ -567,7 +586,7 @@ function reducedMotionRule() {
 }
 async function observeClusterSpeedArc({dashboard, overlay, source, language, record}) {
   record.clusterSpeedArc ??= [];
-  const speedIs = speed => overlay.waitForFunction(numberTexts, {speed}, {timeout: 5000});
+  const speedIs = speed => waitForOverlayState(overlay, numberTexts, {speed}, {timeout: 5000});
   await withRestore(async () => {
     source.setReading(25, 73); source.setEngine(600, -1); await speedIs('90');
     const metric = await speedArc(overlay, `metric_${language}`);
@@ -624,7 +643,7 @@ async function observeScaleRange({application, dashboard, overlay, language, siz
   record.scaleRange ??= [];
   for (const layout of layouts) {
     await dashboard.evaluate(layout => globalThis.desktop.setOverlayLayout(layout), layout);
-    await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
+    await waitForOverlayState(overlay, layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
     const reference = SCALE_REFERENCE_FRAMES.find(frame => frame.layout === layout);
     await overlayFrame(application, overlay, reference);
     const atHundred = await overlay.evaluate(textBoxes);
@@ -641,7 +660,7 @@ async function observeScaleRange({application, dashboard, overlay, language, siz
   if (language === 'en') {
     for (const reference of SCALE_REFERENCE_FRAMES) {
       await dashboard.evaluate(layout => globalThis.desktop.setOverlayLayout(layout), reference.layout);
-      await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, reference.layout, {timeout: 5000});
+      await waitForOverlayState(overlay, layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, reference.layout, {timeout: 5000});
       await overlayFrame(application, overlay, reference);
       await save(reference.name, language, size, overlay);
     }
@@ -850,7 +869,7 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
   const visible = await dashboard.getByTestId('overlay-settings').evaluate(card => {
     const ids = ['overlay-enabled', 'overlay-layout', 'overlay-placement', 'overlay-presets', 'overlay-sections'];
     return ids.every(id => card.querySelector(`[data-testid="${id}"]`)?.checkVisibility()) &&
-      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 18 &&
+      card.querySelectorAll('[data-testid^="overlay-switch-"]').length === 19 &&
       [...card.querySelectorAll('[data-testid^="overlay-switch-"]')].every(node => node.checkVisibility());
   });
   assert.equal(visible, true, 'UI_OVERLAY_UNIFIED_CONTROLS');
@@ -860,8 +879,10 @@ async function observeUnifiedOverlay({application, dashboard, language, size, re
     try {
       if (zoom > 1) await observeSettingsNavigation({dashboard, language, size, zoom, record});
       await dashboard.getByTestId('overlay-switch-expected-income').focus();
-      await dashboard.keyboard.press('Tab');
-      assert.equal(await dashboard.getByTestId('overlay-switch-game-time').evaluate(node => node === globalThis.document.activeElement), true);
+      for (const id of ['cargo-damage', 'game-time']) {
+        await dashboard.keyboard.press('Tab');
+        assert.equal(await dashboard.getByTestId(`overlay-switch-${id}`).evaluate(node => node === globalThis.document.activeElement), true, `UI_OVERLAY_TAB_${id}`);
+      }
       const observation = await dashboard.getByTestId('overlay-settings').evaluate(card => new Promise(resolve => globalThis.requestAnimationFrame(() => {
         const scroll = globalThis.document.querySelector('.yu-content'), bounds = scroll.getBoundingClientRect(), focus = globalThis.document.activeElement.getBoundingClientRect();
         const overflow = [scroll, card, ...card.querySelectorAll('section, label, button:not([role="radio"]):not([role="switch"]), p')]
@@ -1286,6 +1307,11 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           });
         });
         assert.equal(signed, true, 'UI_SIGNED_CHART_SVG'); record.flags.signedChart = true;
+        const damage = dashboard.getByTestId('trip.damage-chart');
+        assert.deepEqual(await damage.locator('[data-damage]').evaluateAll(points => points.map(point => Number(point.getAttribute('data-damage')))), [0, 0.125, 0.25]);
+        assert.equal(await damage.getByTestId('trip.damage-chart.segment').count(), 2);
+        assert.equal(await damage.locator('[data-testid="trip.damage-chart.gap"][data-kind="no-cargo-damage"]').count(), 2);
+        assert.match(await damage.getByTestId('trip.damage-chart.gaps').innerText(), language === 'en' ? /no cargo damage reading/ : /нет показаний повреждения груза/);
         await dashboard.getByTestId('trip.chart').scrollIntoViewIfNeeded({timeout: 5000});
         assert.equal(await dashboard.getByTestId('trip.chart').locator('svg').evaluate(node => {const box = node.getBoundingClientRect(); return box.top >= 84 && box.bottom <= globalThis.innerHeight && box.left >= 0 && box.right <= globalThis.innerWidth;}), true, 'UI_SIGNED_CHART_NOT_VISIBLE');
         await save('samples', language, size);
@@ -1294,6 +1320,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await dashboard.getByTestId('journal-samples-loading').waitFor({state: 'detached', timeout: 5000});
         await dashboard.getByTestId('trip.chart').locator('svg').waitFor({state: 'attached', timeout: 5000});
         assert.equal(await dashboard.locator('[data-testid="trip.chart"] circle').count(), 300);
+        assert.equal(await damage.locator('svg').count(), 0, 'UI_DAMAGE_CHART_UNAVAILABLE_ON_OLDER_SAMPLE_PAGE');
         await dashboard.getByTestId('journal-back').click();
         Object.assign(record.flags, {syntheticBanner: true, pageReturn: true, chartBounded: true, rawTabs: true, noPlannedSearch: true, tripRegions: true, tableReadable: true});
       } else if (config.uiCase === 'settings') {
@@ -1351,7 +1378,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         if (language === 'en' && size.width === 1280) await observeOverlayEditing({dashboard, config, record});
         // ET-045e: after ET-048's editing check, which may have saved another scale.
         if (size === sizes[0]) await observeScaleControl({dashboard, config, language, record});
-        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 18);
+        assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]').count(), 19);
         await dashboard.getByTestId('overlay-preset-driving-only').focus(); await dashboard.keyboard.press('Enter');
         await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => !state.settings.overlay.sections.cargo, 'UI_SECTIONS_SAVED');
         const navigationBytes = await readFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'));
@@ -1448,7 +1475,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           await settingsPanel(dashboard, 'overlay'); await dashboard.locator(`#overlay-layout-${layout}`).click();
           await until(() => dashboard.evaluate(() => globalThis.desktop.getAppState()), state => state.settings.overlay.layout === layout, 'UI_LAYOUT_SAVED');
           await application.evaluate(({BrowserWindow}, size) => {const window = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.getURL().endsWith('?view=overlay')); window.webContents.setZoomFactor(1); window.setContentSize(size.width, size.height);}, dimensions[layout]);
-          await overlay.waitForFunction(layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
+          await waitForOverlayState(overlay, layout => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-layout') === layout, layout, {timeout: 5000});
           const overflow = await overlay.evaluate(overlayOverflow); assert.deepEqual(overflow.outside, []); assert.equal(overflow.alignment?.aligned, true);
           // ET-045d value typography: slightly smaller values, never below the 12 px labels (units 12 px except the 11 px Cluster RPM unit).
           assert.equal(await overlay.getByTestId('overlay-fuel').evaluate(node => globalThis.getComputedStyle(node).fontSize), {strip: '17px', card: '12px', cluster: '12px', hud: '13px'}[layout]);
@@ -1475,16 +1502,16 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
             if (layout === 'cluster') assert.equal(await overlay.getByTestId('overlay-speed-arc').count(), 0, `UI_CLUSTER_SPEED_ARC_WHILE_MISSING_${language}_${size.width}`);
             await save(`${layout}-missing`, language, size, overlay);
             source.setReading(25, 73); source.setPaused(true); await waitState(dashboard, 'paused');
-            await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-status') === 'paused', undefined, {timeout: 5000});
+            await waitForOverlayState(overlay, () => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-status') === 'paused', undefined, {timeout: 5000});
             if (layout === 'cluster') {
               // A paused current game keeps its 90 km/h arc.
-              await overlay.waitForFunction(numberTexts, {speed: '90'}, {timeout: 5000});
+              await waitForOverlayState(overlay, numberTexts, {speed: '90'}, {timeout: 5000});
               assertArcOffset(await speedArc(overlay, `paused_${language}_${size.width}`), SPEED_ARC_OFFSET_90_KMH, `paused_${language}_${size.width}`);
             }
             await save(`${layout}-paused`, language, size, overlay);
             source.setPaused(false); await waitState(dashboard, 'connected'); source.hold();
             try {
-              await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'stale', undefined, {timeout: 5000});
+              await waitForOverlayState(overlay, () => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'stale', undefined, {timeout: 5000});
               assert.equal(await overlay.getByTestId('overlay-speed').textContent(), '—');
               assert.equal(await overlay.getByTestId('overlay-fuel').textContent(), '—');
               assert.equal(await overlay.getByTestId('overlay-tag-stale').innerText(), language === 'en' ? 'Stale' : 'Устарело');
@@ -1522,7 +1549,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
     for (let mask = 0; mask < 8; mask++) {
       const selected = ids.filter((_id, index) => (mask & (1 << index)) !== 0);
       await dashboard.evaluate(selected => globalThis.desktop.setOverlaySections(Object.fromEntries(Object.keys(selected.all).map(id => [id, id === 'fuel' || selected.ids.includes(id)]))), {all, ids: selected});
-      await overlay.waitForFunction(expected => {
+      await waitForOverlayState(overlay, expected => {
         const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
         return root?.getAttribute('data-layout') === 'card' && root.getAttribute('data-freshness') === 'current' && [...root.querySelectorAll('[data-testid^="overlay-section-"]')].map(node => node.getAttribute('data-testid').replace('overlay-section-', '')).join(',') === [...expected, 'fuel'].join(',');
       }, selected, {timeout: 5000});
@@ -1532,14 +1559,14 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       // Establish each enabled subset while current; stale projection must preserve that shape, never add unseen fields.
       source.hold();
       try {
-        await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'stale', undefined, {timeout: 5000});
+        await waitForOverlayState(overlay, () => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'stale', undefined, {timeout: 5000});
         assert.equal(await overlay.getByTestId('overlay-tag-stale').innerText(), 'Устарело');
         assert.deepEqual(await overlay.locator('[data-testid^="overlay-section-"]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-testid').replace('overlay-section-', ''))), [...selected, 'fuel']);
         const unavailableTags = await overlay.evaluate(overlayTagObservation);
         assert.ok(unavailableTags.length > 0 && unavailableTags.length <= 2 && unavailableTags.every(node => !node.clipped), `UI_OVERLAY_UNAVAILABLE_TAGS: ${JSON.stringify(unavailableTags)}`);
         assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
       } finally {source.resume();}
-      await overlay.waitForFunction(() => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'current', undefined, {timeout: 5000});
+      await waitForOverlayState(overlay, () => globalThis.document.querySelector('[data-testid="overlay-root"]')?.getAttribute('data-freshness') === 'current', undefined, {timeout: 5000});
     }
     await dashboard.evaluate(all => globalThis.desktop.setOverlaySections(all), all);
     record.flags.heroSubsets = true;
@@ -1549,7 +1576,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       for (const profile of ['metric', 'us-customary']) {
         await dashboard.evaluate(profile => globalThis.desktop.setUnitProfile('ets2', profile), profile);
         const expected = profile === 'metric' ? {speed: '90', fuel: '73', speedUnit: language === 'en' ? 'km/h' : 'км/ч', fuelUnit: language === 'en' ? 'L' : 'л'} : {speed: '56', fuel: '19', speedUnit: language === 'en' ? 'mph' : 'миль/ч', fuelUnit: language === 'en' ? 'US gal' : 'гал'};
-        await overlay.waitForFunction(expected => ['speed', 'fuel'].every(id => globalThis.document.querySelector(`[data-testid="overlay-${id}"]`)?.textContent === expected[id] && globalThis.document.querySelector(`[data-testid="overlay-${id}-unit"]`)?.textContent === expected[`${id}Unit`]), expected, {timeout: 5000});
+        await waitForOverlayState(overlay, expected => ['speed', 'fuel'].every(id => globalThis.document.querySelector(`[data-testid="overlay-${id}"]`)?.textContent === expected[id] && globalThis.document.querySelector(`[data-testid="overlay-${id}-unit"]`)?.textContent === expected[`${id}Unit`]), expected, {timeout: 5000});
         assert.deepEqual((await overlay.evaluate(overlayOverflow)).outside, []);
       }
     }
@@ -1562,7 +1589,7 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
       const nativeBefore = await bounds();
       for (const sparse of [false, true]) {
         await dashboard.evaluate(({all, sparse}) => globalThis.desktop.setOverlaySections(Object.fromEntries(Object.keys(all).map(id => [id, !sparse || id === 'speed']))), {all, sparse});
-        await overlay.waitForFunction(({layout, sparse}) => {
+        await waitForOverlayState(overlay, ({layout, sparse}) => {
           const root = globalThis.document.querySelector('[data-testid="overlay-root"]');
           const count = root.querySelectorAll('[data-testid^="overlay-section-"]').length;
           return root.getAttribute('data-layout') === layout && (sparse ? count === 1 : count > 1);
@@ -1753,7 +1780,7 @@ export async function runUiReadOnly({application, dashboard, config, record, set
     await waitOverlayVisibility(dashboard, {enabled: true, writable: false}, 'UI_OVERLAY_READ_ONLY_RENDERED');
     for (const layout of layouts) assert.equal(await dashboard.locator(`#overlay-layout-${layout}`).isDisabled(), true);
     assert.equal(await dashboard.getByTestId('overlay-edit-start').isDisabled(), true);
-    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 18);
+    assert.equal(await dashboard.locator('[data-testid^="overlay-switch-"]:disabled').count(), 19);
     assert.equal(await dashboard.locator('[data-testid^="overlay-preset-"]:disabled').count(), 3);
   }
   const file = path.join(smokeDataRoot(config), 'settings', 'settings.json');

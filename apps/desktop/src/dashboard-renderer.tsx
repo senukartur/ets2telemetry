@@ -1,4 +1,5 @@
 import {AccountScreen} from './dashboard-upload/account-screen';
+import {QualificationScreen} from './qualification/screen';
 import {Badge} from './components/ui/badge';
 import {SyncChip} from './dashboard-upload/sync-chip';
 import {useDashboardUpload} from './dashboard-upload/use-dashboard-upload';
@@ -37,6 +38,7 @@ export default function App() {
   const content = useRef<HTMLElement>(null);
   const hardMode = useHardModeStatus();
   const upload = useDashboardUpload(route === 'account');
+  const qualificationEnabled=!!upload.state.status?.owner&&['connected','paused'].includes(upload.state.status.state)&&upload.state.status.candidateId===null;
   useEffect(() => {
     // Each top-level destination starts at its heading, including after the long inline checklist.
     if (content.current) content.current.scrollTop = 0;
@@ -80,11 +82,15 @@ export default function App() {
   const liveState = liveScreenState(live?.status, liveView.current, liveView.sources.paused, liveSourcesPartial(live));
   // The Live page switches between the dashboard and the placeholder only after the change has held (live-display-hold.ts).
   const liveDisplay = useLiveDisplay(live !== undefined, liveHasData(liveState));
+  const qualificationSource=live?.v1?.observation?.source;
+  const qualificationHardMode=live?.v1?.fresh&&qualificationSource?.origin==='game'
+    ? {game:qualificationSource.game,state:hardMode.status.assessment.state}
+    : undefined;
   return <div className="yu-app" data-testid="shell.root">
     {/* ET-074: the title bar holds the app name and the native window buttons only; the logo is in the sidebar lockup. */}
     <div className="yu-titlebar" data-testid="shell.titlebar"><span>{CHANNEL.displayName}</span></div>
     <div className="yu-body"><aside className="yu-sidebar" data-testid="shell.sidebar"><div className="yu-lockup" data-testid="shell.sidebar.lockup"><ThemedLogo /><div><strong>Yukon Union</strong><small>{t('app.sub', undefined, language)}</small></div></div>
-      <SidebarNav route={route} language={language} onNavigate={setRoute} />
+      <SidebarNav route={route} language={language} onNavigate={setRoute} qualification={qualificationEnabled} />
       <div className="yu-sidebar-footer"><TooltipProvider delayDuration={150} skipDelayDuration={0}><Tooltip><TooltipTrigger asChild>
         <button type="button" className="yu-recording" data-testid="shell.sidebar.recording" aria-label={recording.testBadge ? `${recording.label}, ${recording.testBadge}` : recording.label}>
           <span className="yu-dot" aria-hidden="true" data-tone={recordingTone(health?.recording.state)} data-motion={recordingMotion(health?.recording.state)} data-window-focused={windowFocused} data-testid="shell.recording.indicator" />
@@ -120,6 +126,7 @@ export default function App() {
         <div hidden={route !== 'hardMode'} className="yu-stack" data-testid="hardMode.screen"><HardModeCard language={language} controller={hardMode} /></div>
         {route === 'journal' ? <JournalBoundary language={language}><Journal uploadStatus={upload.state.status} units={settings?.units} recording={health?.recording.state} language={language} /></JournalBoundary> : null}
         {route === 'account' ? <AccountScreen state={upload.state} controller={upload.controller} language={language} onOpenJournal={() => setRoute('journal')} /> : null}
+        {route === 'qualification' ? <QualificationScreen language={language} enabled={qualificationEnabled} liveHardMode={qualificationHardMode}/> : null}
         <SettingsScreen hidden={route !== 'settings'} language={language} panel={panel} onPanel={setPanel} app={app} live={live} startup={startup} onSaved={saved}
           lastCard={lastCard} onRequest={setLastCard} languageController={languageController} pluginActions={pluginActions}
           onPlugins={plugins => setApp(current => current && {...current, plugins})} onSourceFailed={() => setStartup(strings.sourceSelectionFailed)} />

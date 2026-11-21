@@ -29,7 +29,7 @@ export const STRIP_TAG_MAX_WIDTH_CSS = 112;
  */
 export const STRIP_ITEM_MAX_WIDTH_CSS: Readonly<Record<OverlaySectionId, number>> = Object.freeze({
   'speed': 140, 'gear': 90, 'rpm': 130, 'cruise-control': 140, 'speed-limit': 32, 'fuel': 190, 'range': 140, 'sdk-consumption': 230, 'cargo': 300, 'origin': 300, 'destination': 300,
-  'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150
+  'distance-driven': 150, 'distance-remaining': 150, 'deadline': 220, 'expected-income': 300, 'cargo-damage': 100, 'game-time': 200, 'mandatory-break': 150, 'rest-state': 150
 });
 
 /**
@@ -42,10 +42,10 @@ export const STRIP_FIXED_WIDTH_SECTIONS: ReadonlySet<OverlaySectionId> = new Set
 
 /**
  * ET-070 (owner decisions D2, D3): the fixed Hard Mode indicator is the strip's last item after every enabled section. Its
- * cap holds the group divider's 15 px padding, the icon, "HM" and a fixed 14 px cue slot, so a state change never resizes
- * it or moves a section.
+ * cap holds the group divider's 15 px padding, the icon, "HM", a fixed 14 px cue slot and a 60 px reserve for the
+ * qualification divider, medal and matching cue, so a state change never resizes it or moves a section.
  */
-export const STRIP_HARD_MODE_MAX_WIDTH_CSS = 100;
+export const STRIP_HARD_MODE_MAX_WIDTH_CSS = 160;
 
 /**
  * The surface border's width in CSS px at this zoom. Chromium snaps a nonzero border thinner than one device pixel up to

@@ -24,7 +24,8 @@ const ALL = DEFAULT_OVERLAY_SECTIONS;
 // another (a panel row in the cluster). ET-084's seventeenth, the speed limit, adds one to the card and the HUD and none to the
 // cluster, whose sign has no panel row. The historical rows below keep the sixteen sections of ET-071, the fifteen of ET-052 and
 // the fourteen of ET-012d, so their hand-written numbers still test the same sets.
-const WITHOUT_LIMIT = {...ALL, 'rest-state': false, 'speed-limit': false};
+const WITHOUT_CARGO_DAMAGE = {...ALL, 'cargo-damage': false};
+const WITHOUT_LIMIT = {...WITHOUT_CARGO_DAMAGE, 'rest-state': false, 'speed-limit': false};
 const WITHOUT_CRUISE = {...WITHOUT_LIMIT, 'cruise-control': false};
 const WITHOUT_BREAK = {...WITHOUT_CRUISE, 'mandatory-break': false};
 const WITHOUT_DRIVEN = {...WITHOUT_BREAK, 'distance-driven': false};
@@ -45,7 +46,8 @@ it('fixes the hand-written row constants of each layout', () => {
 });
 
 it.each([
-  {name: 'every section', sections: ALL, n: 18, m: 14, card: 504, cluster: 353, hud: 476},
+  {name: 'every section', sections: ALL, n: 19, m: 15, card: 528, cluster: 374, hud: 500},
+  {name: 'every section but cargo damage', sections: WITHOUT_CARGO_DAMAGE, n: 18, m: 14, card: 504, cluster: 353, hud: 476},
   {name: 'every section but the speed limit', sections: WITHOUT_LIMIT, n: 16, m: 13, card: 456, cluster: 332, hud: 428},
   {name: 'every section but the speed limit and cruise control', sections: WITHOUT_CRUISE, n: 15, m: 12, card: 432, cluster: 311, hud: 404},
   {name: 'every section but the speed limit, cruise control and the break', sections: WITHOUT_BREAK, n: 14, m: 11, card: 408, cluster: 290, hud: 380},
@@ -70,8 +72,8 @@ it.each([
 
 it('counts every enabled section in the cluster panel when no gauge section is enabled', () => {
   const panelOnly = {...ALL, speed: false, gear: false, rpm: false};
-  expect(layoutRowCount('cluster', panelOnly)).toBe(15);
-  expect(layoutReservedCss('cluster', panelOnly)).toBe(353);
+  expect(layoutRowCount('cluster', panelOnly)).toBe(16);
+  expect(layoutReservedCss('cluster', panelOnly)).toBe(374);
   expect(layoutReservedCss('cluster', only('gear'))).toBe(59);
   expect(layoutReservedCss('cluster', only('fuel'))).toBe(80);
 });
@@ -99,10 +101,13 @@ it.each([[3, 72], [2, 48], [1, 24], [0, 0]])('keeps the hero at one 24 px row pe
   expect(cardHeroHeightCss(parts, false)).toBe(hero);
 });
 
-it('never reserves more for a subset of the sections than for all of them', () => {
+// Exhaustive subset enumeration needs a CPU work budget on shared CI runners.
+const SUBSET_ENUMERATION_BUDGET_MS = 15_000;
+it('never reserves more for a subset of the sections than for all of them', {timeout: SUBSET_ENUMERATION_BUDGET_MS}, () => {
   const all = Object.fromEntries(ROW_LAYOUTS.map(layout => [layout, layoutReservedCss(layout, ALL)]));
+  const sections = {...ALL};
   for (let mask = 1; mask < 1 << OVERLAY_SECTION_IDS.length; mask++) {
-    const sections = only(...OVERLAY_SECTION_IDS.filter((_id, index) => (mask & (1 << index)) !== 0));
+    for (const [index, id] of OVERLAY_SECTION_IDS.entries()) sections[id] = (mask & (1 << index)) !== 0;
     for (const layout of ROW_LAYOUTS) {
       const reserved = layoutReservedCss(layout, sections);
       if (reserved > all[layout]) throw new Error(`mask ${mask} in ${layout}: ${reserved} > ${all[layout]}`);

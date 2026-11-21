@@ -51,6 +51,7 @@ const RUNTIME_DRIVER = [/^scripts\/ci\/(?:Invoke-RuntimeSmoke\.ps1|RuntimeReceip
 const SCENARIO_DRIVER = [/^scripts\/ci\/runtime-smoke\.mjs$/];
 /** Scenario drivers and observations under scripts/ci, by the scenario they observe. */
 const RUNTIME_OBSERVATIONS = [
+  [/^tests\/runtime\/dashboard-upload-ui-(?:main|preload|renderer)\.(?:ts|tsx)$/, ['ui:shell']],
   [/^scripts\/ci\/dashboard-upload-credentials-observation\.mjs$|^tests\/runtime\/dashboard-upload-credentials-main\.ts$/, ['recording']],
   [/^scripts\/ci\/(?:ui-|renderer-observation|dashboard-observation)/, UI_SHARDS], [/^scripts\/ci\/live-smoke-source/, ['telemetry']],
   [/^scripts\/ci\/overlay-/, ['overlay']], [/^scripts\/ci\/journal-/, ['journal']], [/^scripts\/ci\/(?:recording-|history-invariants)/, ['recording']],

@@ -13,7 +13,7 @@ vi.mock('@/components/ui/card', () => ({Card: 'div', CardContent: 'div', CardHea
 const escaped = (text: string) => renderToStaticMarkup(React.createElement(React.Fragment, null, text));
 const driving: OverlaySectionId[] = ['speed', 'gear', 'rpm', 'cruise-control', 'speed-limit', 'fuel', 'range'];
 
-it.each(['en', 'ru'] as const)('shares enabled order, localized values and the fixed Hard Mode footer in every layout (%s)', language => {
+it.each(['en', 'ru'] as const)('shares enabled order, localized values, Hard Mode and qualification in every layout (%s)', language => {
   for (const layout of OVERLAY_LAYOUTS) {
     const settings = {...DEFAULT_OVERLAY_SETTINGS, layout, sections: OVERLAY_PRESETS['driving-only']};
     const example = overlayExample(settings, language, 'active'), view = overlayView(example);
@@ -28,6 +28,9 @@ it.each(['en', 'ru'] as const)('shares enabled order, localized values and the f
     for (const id of driving) expect(html.match(new RegExp(`data-testid="overlay-section-${id}"`, 'g')), id).toHaveLength(1);
     expect(html).not.toContain('data-testid="overlay-section-cargo"');
     expect(html.match(/data-testid="overlay-hard-mode"/g)).toHaveLength(1);
+    expect(html.match(/class="qualification-medal /g)).toHaveLength(1);
+    expect(html).toContain('data-state="pass" role="img"');
+    expect(html).toContain(escaped(language === 'ru' ? 'Предварительная квалификация: соответствует' : 'Provisional qualification: pass'));
     expect(html.indexOf('data-testid="overlay-hard-mode"')).toBeGreaterThan(html.indexOf('data-testid="overlay-section-range"'));
     expect(html).toContain(escaped(language === 'ru' ? 'Пример данных · не текущая телеметрия' : 'Example data · not live telemetry'));
     expect(html).not.toMatch(/overlay-root|overlay-body|is-editing|latency-marker/);
@@ -103,6 +106,16 @@ it.each([0.5, 1, 3])('contains all enabled rows at scale %s using the production
   }
   const card = overlayPreviewSize({...DEFAULT_OVERLAY_SETTINGS, layout: 'card'}, scale, 1000);
   expect(card.factor).toBe(scale === 0.5 ? 0.35 : scale === 1 ? 0.7 : 2.1);
+});
+
+it('fits the fixed status footer in a narrow 300% preview even when only gear is enabled', () => {
+  const sections = Object.fromEntries(Object.keys(DEFAULT_OVERLAY_SETTINGS.sections).map(id => [id, id === 'gear'])) as typeof DEFAULT_OVERLAY_SETTINGS.sections;
+  const size = overlayPreviewSize({...DEFAULT_OVERLAY_SETTINGS, layout: 'strip', sections}, 3, 220);
+  // The 160 px footer needs 188 CSS px with the padding/border allowance. Two 112 px tags, gear and the footer each
+  // take a separate row in the 162 px inner width: 4 x 38 + 2 = 154, rather than the clipped one-row fallback.
+  expect(size.cssWidth).toBe(188);
+  expect(size.cssHeight).toBe(154);
+  expect(size.width).toBe(220);
 });
 
 it('renders deterministic settings-only data and applies background opacity without accessing a desktop bridge', () => {

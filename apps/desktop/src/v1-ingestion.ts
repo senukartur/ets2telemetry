@@ -14,7 +14,8 @@ import type {DiagnosticFacts} from './diagnostics';
 import type {DurableSink} from './durable-sink';
 import {sourceSelection} from './live-state';
 import {NativeClientError, type BrokerConfiguration, type TelemetrySocket} from './native-pipe-client';
-import {DurableDelivery, type DurableCloseKind, type DurableConnection, type DurableStatus} from './v1-durable-delivery';
+import {DurableDelivery, type DurableCloseKind, type DurableConnection, type DurableLink, type DurableStatus} from './v1-durable-delivery';
+import type {WelcomeMessage} from './durable-sink';
 
 /** Desktop-local copy of the simulator's synthetic endpoint pattern: `\\.\pipe\ETS2Telemetry-SYNTHETIC-TEST-v1-{pid}-{uuid}`. */
 export const TEST_PIPE_PATTERN_V1 = /^\\\\\.\\pipe\\ETS2Telemetry-SYNTHETIC-TEST-v1-[1-9][0-9]*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -27,10 +28,10 @@ export const V1_PROBE_INTERVAL_MS = 1000;
  * ET-050b B1: the highest minor this service offers. The hello's `maxMinor`, the server-frame decoder and the consumer's
  * accepted maximum all use it; the plugin then selects min(offer, its own maximum), so a plugin from before ET-050b
  * selects 0, one from ET-050b 1, one from ET-052 2 (the next mandatory break), one from ET-071 3 (cruise control) and a
- * current one 5 (ET-118: Rest State). It is a literal, not `V1_MAX_MINOR`, so a future contract minor is never
+ * current one 6 (ET-121: live cargo damage). It is a literal, not `V1_MAX_MINOR`, so a future contract minor is never
  * offered before this service reads it.
  */
-export const V1_CLIENT_MAX_MINOR: V1Minor = 5;
+export const V1_CLIENT_MAX_MINOR: V1Minor = 6;
 const FRESHNESS_TICK_MS = 50;
 
 export type V1Status = Exclude<LiveTelemetry['status'], 'service-failed' | 'restarting'>;
@@ -56,6 +57,12 @@ export interface V1SourceState {
   lastEnd?: EndData;
   durable: DurableStatus;
 }
+type ReceiverMethod<K extends 'checkpoint' | 'snapshot' | 'enqueue'> = (...args: Parameters<DurableConnection[K]>) => void;
+export type IngestionConnection = {[K in 'checkpoint' | 'snapshot' | 'enqueue']: ReceiverMethod<K>};
+export interface IngestionDelivery extends Pick<DurableDelivery, 'status' | 'retryCode' | 'durableAllowed' | 'observeLiveOnly' | 'stop'> {
+  connect(welcome: WelcomeMessage, link: DurableLink): IngestionConnection;
+}
+
 export interface V1IngestionOptions {
   expectedTarget?: GameTarget;
   /** Service receive clock in milliseconds; freshness and staleness use it. */
@@ -69,12 +76,14 @@ export interface V1IngestionOptions {
   broker?: BrokerConfiguration;
   /** Durable storage. Without it every hello is live-only and nothing is acknowledged. */
   sink?: DurableSink;
+  /** Alternative durable receiver for history with a separate emergency journal. */
+  delivery?: (changed: () => void) => IngestionDelivery;
   /**
    * R10: the selections whose connections may request durable delivery; every selection when omitted. A hello of any
    * other selection is live-only even with a sink.
    */
   durableSelections?: readonly SourceSelection[];
-  /** R10: whether storage is open now; a hello requests durable delivery only while it returns true. Default: always. */
+  /** An additional readiness gate for the receiver. The direct SQLite path waits for an open database. */
   durableReady?: () => boolean;
   /**
    * R8, H13: the consumer's UTC clock in milliseconds for the receipt label of each event, gap, checkpoint and snapshot
@@ -109,7 +118,7 @@ export class V1Ingestion {
   private readonly nowNs: () => bigint;
   private readonly connect: (endpoint: string) => TelemetrySocket;
   private readonly utcNow: () => number;
-  private readonly delivery?: DurableDelivery;
+  private readonly delivery?: IngestionDelivery;
   private socket?: TelemetrySocket;
   /** The current connection while it is open and live-only: its plugin session once known, and how to end it (R10). */
   private liveOnly?: {pluginSessionId?: string; reconnect: () => void};
@@ -137,7 +146,8 @@ export class V1Ingestion {
     this.nowNs = options.nowNs ?? (() => process.hrtime.bigint());
     this.connect = options.connect ?? (endpoint => net.connect(endpoint));
     this.utcNow = options.utcNow ?? (() => Date.now());
-    if (options.sink) {
+    if (options.delivery) this.delivery = options.delivery(() => this.publish());
+    else if (options.sink) {
       this.delivery = new DurableDelivery(options.sink, {maxPendingCommits: options.maxPendingCommits, maxPendingReadings: options.maxPendingReadings,
         sampleFlushMs: options.sampleFlushMs, sampleBatchRows: options.sampleBatchRows, log: options.diagnose, onStatus: () => this.publish(),
         // ET-015c (G9): the retry code is not part of the state, but a change of it is reported like one.
@@ -184,6 +194,16 @@ export class V1Ingestion {
     const current = this.liveOnly;
     if (this.disposed || !current || !this.durableWanted(current.pluginSessionId)) return;
     this.attempt = 0; current.reconnect();
+  }
+
+  suspendStorage(): void { if (this.delivery instanceof DurableDelivery) this.delivery.suspendStorage(); }
+
+  async resumeStorage(createSink: () => DurableSink, isCurrent: () => boolean): Promise<void> {
+    if (!(this.delivery instanceof DurableDelivery)) return;
+    await this.delivery.idle();
+    if (this.disposed || !isCurrent()) return;
+    this.delivery.resumeStorage(createSink);
+    this.durableAvailabilityChanged();
   }
   /**
    * Ends the source and waits for owned processes (the intake phase of a shutdown). Nothing is acknowledged afterwards;
@@ -242,7 +262,7 @@ export class V1Ingestion {
   private open(): void {
     const generation = ++this.generation, decoder = new FrameDecoder('server', {maxMinor: V1_CLIENT_MAX_MINOR});
     let closed = false, ended = false, hydrated = false, probeId = 0n, probeSentNs = 0n;
-    let durable: DurableConnection | undefined;
+    let durable: IngestionConnection | undefined;
     const selection = this.state.selection, game = selection === 'ets2' || selection === 'ats';
     const socket = this.socket = game ? this.options.connectGame!(this.options.broker!, selection, this.options.expectedTarget) : this.connect(this.endpoint!);
     if (socket.completion) { const completion = socket.completion; this.completions.add(completion); void completion.finally(() => this.completions.delete(completion)); }

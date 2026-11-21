@@ -1215,6 +1215,8 @@ Item 14 of [ET-045](https://trello.com/c/OmNYTBsp), under the owner's decision D
 
 ## ET-045e rebased overlay scale and strip width — October 24, 2026
 
+The width cap in Z3 below is historical. The owner's full-width Strip request replaces it with the game's available client width at every scale; the [current geometry contract](docs/minimal-overlay.md#geometry-and-placements-et-012b) defines placement and rounding. The scale/zoom boundary and bootstrap-window size remain as described below.
+
 Items 9 and 6 of [ET-045](https://trello.com/c/OmNYTBsp), under the owner's decisions of October 24, 2026: D1 option b (saved scale numbers are kept and reinterpreted so the new 100% equals the old 70%; the range is 50–300%) and D5 (the strip is never narrower than at scale 1). Under the owner's delegation the coordinator adopted the architect's decisions Z1–Z9; the owner did not review them individually.
 
 - **Z1 units.** The scale range is [0.5, 3] in 0.1 steps with default placements at 1. `OVERLAY_SCALE_ZOOM = 0.7` and the pure `overlayZoom(scale) = round(scale × 700) / 1000` live in `overlay-placement.ts`. Multiplying the saved values, storing the zoom and applying 0.7 in CSS were rejected.

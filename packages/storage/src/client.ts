@@ -1,4 +1,6 @@
 import type {TrailerBaselineInput} from './api';
+import type {CargoOpening, FillCargoClassification, FillCargoResult} from './api';
+import {QUALIFICATION_COMMAND_NAMES,isQualificationCommand,type QualificationCommands} from './qualification';
 import {UPLOAD_SYNC_NAMES,isUploadSyncRequest,type UploadSyncCommands} from './upload-sync';
 import type {ProfileObservation} from '../../telemetry-core/src/trips/continuation';
 import type {HardModeObservation} from '../../contracts/src/hard-mode';
@@ -40,8 +42,8 @@ export interface ClientTimers {
 }
 export interface StorageClientOptions {
   timers?: ClientTimers; commandDeadlineMs?: number; openDeadlineMs?: number; closeGraceMs?: number; maxQueued?: number;
-  /** Called once when the worker fails or misses a deadline, with the error the command in flight received. */
-  onFailure?: (error: StorageError) => void;
+  /** Called once on worker failure with the reported error and the fixed name of any command in flight. */
+  onFailure?: (error: StorageError, command?: CommandName) => void;
   /**
    * Called when a journal answer broke the journal contract (ET-016): that command got JOURNAL_ANSWER_INVALID and the
    * client keeps running. The fact is the command name only; the owner logs it as a fixed code. It is called after the
@@ -73,15 +75,29 @@ interface InFlight extends Pending {id: number; timer: unknown}
 /** Whether an argument is an object whose fields can be copied; anything else is forwarded for the parser to refuse. */
 const isObject = (value: unknown): value is object => typeof value === 'object' && value !== null;
 const failure = (code: StorageErrorCode): {ok: false; error: StorageError} => ({ok: false, error: storageError(code)});
-const backgroundCommands = new Set<CommandName>([...UPLOAD_SYNC_NAMES,'beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection']);
+const backgroundCommands = new Set<CommandName>([...QUALIFICATION_COMMAND_NAMES,...UPLOAD_SYNC_NAMES,'beginUploadProjection','advanceUploadProjection','getUploadProjectionPreparation','readUploadProjectionPage','releaseUploadProjection']);
 const isBackground = (name: CommandName) => backgroundCommands.has(name);
 
 export class StorageClient {
+  readQualificationPreviewPins(input:QualificationCommands['readQualificationPreviewPins']['args']['input']) {return isQualificationCommand({name:'readQualificationPreviewPins',input})?this.#request({name:'readQualificationPreviewPins',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  beginQualificationPreview(input:QualificationCommands['beginQualificationPreview']['args']['input']) {return isQualificationCommand({name:'beginQualificationPreview',input})?this.#request({name:'beginQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  advanceQualificationPreview(input:QualificationCommands['advanceQualificationPreview']['args']['input']) {return isQualificationCommand({name:'advanceQualificationPreview',input})?this.#request({name:'advanceQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  releaseQualificationPreview(input:QualificationCommands['releaseQualificationPreview']['args']['input']) {return isQualificationCommand({name:'releaseQualificationPreview',input})?this.#request({name:'releaseQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  readQualificationPreview(input:QualificationCommands['readQualificationPreview']['args']['input']) {return isQualificationCommand({name:'readQualificationPreview',input})?this.#request({name:'readQualificationPreview',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  readQualificationCache(input:QualificationCommands['readQualificationCache']['args']['input']) {return isQualificationCommand({name:'readQualificationCache',input})?this.#request({name:'readQualificationCache',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  setQualificationScope(input:QualificationCommands['setQualificationScope']['args']['input']) {return isQualificationCommand({name:'setQualificationScope',input})?this.#request({name:'setQualificationScope',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  saveQualificationCache(input:QualificationCommands['saveQualificationCache']['args']['input']) {return isQualificationCommand({name:'saveQualificationCache',input})?this.#request({name:'saveQualificationCache',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  pageQualificationSources(input:QualificationCommands['pageQualificationSources']['args']['input']) {return isQualificationCommand({name:'pageQualificationSources',input})?this.#request({name:'pageQualificationSources',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  commitQualificationResults(input:QualificationCommands['commitQualificationResults']['args']['input']) {return isQualificationCommand({name:'commitQualificationResults',input})?this.#request({name:'commitQualificationResults',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
+  saveQualificationRefresh(input:QualificationCommands['saveQualificationRefresh']['args']['input']) {return isQualificationCommand({name:'saveQualificationRefresh',input})?this.#request({name:'saveQualificationRefresh',input:structuredClone(input)}):Promise.resolve(failure('INVALID_INPUT'));}
   #state: ClientState = 'running';
   #nextId = 1;
   #inFlight: InFlight | undefined;
   readonly #queue: Pending[] = [];
   #exited = false;
+  #resolveExit!: () => void;
+  readonly #exitPromise = new Promise<void>(resolve => { this.#resolveExit = resolve; });
+  #termination?: Promise<void>;
   #close: Promise<{clean: boolean}> | undefined;
   #finishClose: ((clean: boolean) => void) | undefined;
   #closeAcknowledged = false;
@@ -101,13 +117,16 @@ export class StorageClient {
 
   get state(): ClientState { return this.#state; }
 
+  /** Unlike close(), this waits for actual thread exit even when native I/O outlasts the shutdown budget. */
+  waitForExit(): Promise<void> { return this.#exitPromise; }
+
   open(options: WorkerOpenOptions): Promise<Result<OpenSummary>> {
     return this.#request({name: 'open', options: {path: options.path, purpose: options.purpose, backupsDirectory: options.backupsDirectory, appVersion: options.appVersion}});
   }
   observeHardMode(game: 'ets2' | 'ats', observation: HardModeObservation, fresh = false): Promise<Result<undefined>> {return this.#request({name: 'observeHardMode', game, observation, fresh});}
   upsertSession(input: {message: unknown}) { return this.#request({name: 'upsertSession', input}); }
   recordTrailerBaseline(input: TrailerBaselineInput): Promise<Result<undefined>> {return this.#request({name:'recordTrailerBaseline',input});}
-  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
+  commitEvent(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation; cargoOpening?: CargoOpening}): Promise<Result<CommitResult>> { return this.#request({name: 'commitEvent', input}); }
   commitGap(input: {message: unknown; effects?: TripEffect[]; hardMode?: HardModeObservation; hardModeFresh?: boolean; hardModeLoss?: HardModeObservation; profile?: ProfileObservation}): Promise<Result<CommitResult>> { return this.#request({name: 'commitGap', input}); }
   /**
    * Only `uniqueSeconds` of the options crosses the worker boundary (ET-015b). A value that is not an object is forwarded
@@ -132,8 +151,10 @@ export class StorageClient {
   openAttachedTrip(input: AttachInput): Promise<Result<AttachResult>> {
     return this.#request({name: 'openAttachedTrip', input: isObject(input) ? {pluginSessionId: input.pluginSessionId, nextEventSeq: input.nextEventSeq, job: input.job, effects: input.effects,
       ...(input.profile?{profile:input.profile}:{}),...(input.sourceClockId?{sourceClockId:input.sourceClockId}:{}),...(input.monotonicNs?{monotonicNs:input.monotonicNs}:{}),
-      ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{}),...(input.endpoint!==undefined?{endpoint:structuredClone(input.endpoint)}:{})} : input});
+      ...(input.profileChange!==undefined?{profileChange:input.profileChange}:{}),...(input.observeTripUuid!==undefined?{observeTripUuid:input.observeTripUuid}:{}),...(input.endpoint!==undefined?{endpoint:structuredClone(input.endpoint)}:{}),
+      ...(input.cargoOpening!==undefined?{cargoOpening:input.cargoOpening}:{})} : input});
   }
+  fillCargoClassification(input: FillCargoClassification): Promise<Result<FillCargoResult>> { return this.#request({name: 'fillCargoClassification', input}); }
   /**
    * ET-112b2b: resolves closed pending membership decisions with a later proof. Exactly the five input fields are copied;
    * a value that is not an object is forwarded as given, so the worker's request parser refuses it with INVALID_INPUT.
@@ -306,6 +327,7 @@ export class StorageClient {
 
   #exit(code: number): void {
     this.#exited = true;
+    this.#resolveExit();
     if (this.#state === 'closing' && this.#closeAcknowledged && code === 0) { this.#closed(); return; }
     this.#fail('WORKER_FAILED');
   }
@@ -329,7 +351,7 @@ export class StorageClient {
     for (const pending of this.#queue.splice(0)) pending.resolve(failure('WORKER_FAILED'));
     const terminated = this.#terminate();
     if (closing) void terminated.then(() => this.#finishClose?.(false));
-    else this.settings.onFailure?.(storageError(code));
+    else this.settings.onFailure?.(storageError(code), inFlight?.command.name);
   }
 
   /**
@@ -362,6 +384,6 @@ export class StorageClient {
 
   #terminate(): Promise<void> {
     if (this.#exited) return Promise.resolve();
-    return this.worker.terminate().then(() => undefined, () => undefined);
+    return this.#termination ??= this.worker.terminate().then(() => undefined, () => undefined);
   }
 }

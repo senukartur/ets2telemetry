@@ -106,7 +106,7 @@ const diagnosticEvents = async directory => (await readFile(path.join(directory,
 // never reports it unavailable, and closes it in its storage shutdown step before its single stopped report.
 const verifyHistoryEvents = (service, created) => {
   const opened = service.filter(row => row.event === 'HISTORY_STORAGE_OPENED').map(row => row.facts);
-  assert.deepEqual(opened, created.map(value => ({schemaVersion: 10, created: value, migratedFrom: null})));
+  assert.deepEqual(opened, created.map(value => ({schemaVersion: 13, created: value, migratedFrom: null})));
   assert.ok(!service.some(row => row.event === 'HISTORY_STORAGE_UNAVAILABLE'), 'History storage was unavailable');
   const closed = service.flatMap((row, index) => row.event === 'HISTORY_STORAGE_CLOSED' ? [index] : []);
   const stopped = service.findLastIndex(row => row.event === 'SERVICE_REPORT' && row.detail?.type === 'stopped');
@@ -124,7 +124,7 @@ const verifyHistoryFile = async () => {
   const facts = {magic: header.subarray(0, 15).toString('latin1'), applicationId: header.readInt32BE(68), userVersion: header.readUInt32BE(60),
     sidecars: ['-wal', '-shm', '-journal'].filter(suffix => existsSync(database + suffix)),
     backups: existsSync(path.join(smokeDataRoot(config), 'backups'))};
-  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 10, sidecars: [], backups: false});
+  assert.deepEqual(facts, {magic: 'SQLite format 3', applicationId: 1163154226, userVersion: 13, sidecars: [], backups: false});
   return facts;
 };
 // Every launch of one run shares the isolated profile, TEMP, APPDATA and LOCALAPPDATA; only the diagnostic directory may differ.
@@ -198,8 +198,8 @@ try {
   application = await launch(config.diagnostics);
   launcher = application.process();
   phase('launch-returned');
-  // As in the seeded Journal smoke, the Journal shard keeps its explicit PNGs and action/DOM trace without the screencast.
-  await application.context().tracing.start({screenshots: !(config.scenario === 'ui' && config.uiCase === 'journal'), snapshots: true});
+  // UI shards keep their explicit PNG matrix and action/DOM trace without duplicating frames in a continuous screencast.
+  await application.context().tracing.start({screenshots: config.scenario !== 'ui', snapshots: true});
   tracing = true;
   phase('tracing-started');
   let {dashboard: window, overlay} = await rendererPages(application).catch(error => {
@@ -248,7 +248,7 @@ try {
   assert.deepEqual(result.actual, {require: 'undefined', process: 'undefined', keys: ['getStatus', 'selectSource', 'subscribeLive', 'getAppState', 'subscribeAppState', 'exitApplication', 'setLanguage', 'setTheme', 'setAutostart', 'setUnitProfile', 'setGearDisplay', 'setOverlayBackgroundOpacity', 'setOverlayEnabled', 'setOverlayLayout', 'setOverlaySections',
     'beginOverlayEdit', 'setOverlayEditScale', 'resetOverlayEditPlacement', 'finishOverlayEdit',
     'listJournalTrips', 'getJournalTrip', 'listJournalEvents', 'listJournalIntervals', 'listJournalSamples', 'exportJournalTrip', 'deleteJournalTrip',
-    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit', 'getDashboardUploadContext','verifyDashboardUploadToken','confirmDashboardUpload','cancelDashboardUpload','disconnectDashboardUpload','subscribeDashboardUpload'],
+    'retryPluginSetup', 'choosePluginFolder', 'setPluginGameExcluded', 'showPluginFile', 'openPluginFolder', 'exportDiagnostics', 'uninstallApplication', 'getHardModeStatus', 'refreshHardMode', 'updateApplication', 'checkForUpdates', 'setNowPlayingEnabled', 'setNowPlayingStyle', 'setNowPlayingBackgroundOpacity', 'selectNowPlayingSource', 'beginNowPlayingEdit', 'resetNowPlayingEditPlacement', 'finishNowPlayingEdit', 'getDashboardUploadContext','verifyDashboardUploadToken','confirmDashboardUpload','cancelDashboardUpload','disconnectDashboardUpload','subscribeDashboardUpload','getQualification','refreshQualification','subscribeQualification'],
     frozen: true, status: result.expected.status});
   if (config.scenario === 'now-playing') {
     await nowPlayingStage('first-journey', () => runNowPlayingSmoke({application, dashboard: window, config,record:result.nowPlaying}), checkpoint, 30000);
@@ -274,7 +274,7 @@ try {
       const refused = await globalThis.desktop.getJournalTrip('C:\\Users\\owner\\telemetry.sqlite').then(() => 'resolved', error => String(error?.message));
       return {answer, refused};
     });
-    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 10}, trips: [], nextCursor: null, totals: {trips: 0, recordedSeconds: 0}}},
+    assert.deepEqual(result.journal, {answer: {ok: true, value: {database: {purpose: 'history', schemaVersion: 13}, trips: [], nextCursor: null, totals: {trips: 0, recordedSeconds: 0}}},
       refused: 'Invalid journal request'});
     // ET-017 PR-5 review: plugin setup is disabled here; the card says so and disables every control that would change nothing.
     result.pluginCard = await verifyDisabledPluginCard(window);
@@ -547,7 +547,7 @@ try {
       await writeFile(path.join(smokeDataRoot(config), 'settings', 'settings.json'), settingsBytes);
       phase('ui-readonly-launch-requested');
       application = await launch(config.diagnosticsRestart); launcher = application.process();
-      await application.context().tracing.start({screenshots: true, snapshots: true}); tracing = true;
+      await application.context().tracing.start({screenshots: false, snapshots: true}); tracing = true;
       ({dashboard: window, overlay} = await rendererPages(application)); await waitForStartup(window);
       uiProgress('ui-readonly-journey-started');
       await runUiReadOnly({application, dashboard: window, config, record: result.ui, settingsBytes, progress: uiProgress});

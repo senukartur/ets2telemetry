@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {StorageClient} from '../../../../packages/storage/src/client';
 import type {Result} from '../../../../packages/storage/src/api';
-import type {UploadSyncName,UploadRegistration,RetainedUploadMaterializations,UploadActiveConfiguration,UploadSchedulingHints,UploadStoreStatus} from '../../../../packages/storage/src/upload-sync';
+import type {UploadSyncName,UploadRegistration,RetainedUploadMaterializations,UploadActiveConfiguration,UploadEventMinor,UploadSchedulingHints,UploadStoreStatus} from '../../../../packages/storage/src/upload-sync';
 import {initialDashboardUploadStatus,type DashboardUploadStatus,type DashboardUploadError} from '../../../../packages/contracts/src/dashboard-upload';
 import type {UploadTransport} from './http';
 import {responseFailure,type UploadLimits} from './control-response';
@@ -10,7 +10,7 @@ export type UploadStorage=Pick<StorageClient,UploadSyncName>;
 export async function stored<T>(result:Promise<Result<T>>):Promise<T>{const answer=await result;if(!answer.ok)throw Error('STORAGE_UNAVAILABLE');return answer.value;}
 export interface UploadClock {now():number;random():number;schedule(callback:()=>void,ms:number):unknown;cancel(handle:unknown):void}
 const clock:UploadClock={now:Date.now,random:Math.random,schedule:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id as ReturnType<typeof setTimeout>)};
-interface Active {configuration:UploadActiveConfiguration;registration:UploadRegistration;token:string;contractMinor:0|1|2}
+interface Active {configuration:UploadActiveConfiguration;registration:UploadRegistration;token:string;contractMinor:UploadEventMinor}
 /** Storage turns and HTTP have independent single flights; neither blocks recorder admission. */
 export class UploadScheduler {
   #active:Active|undefined;#stopped=false;#suspended=true;#background=false;#backgroundFlight:Promise<number>|undefined;#sending:Promise<void>|undefined;#timer:unknown;#generation=0;
@@ -20,9 +20,9 @@ export class UploadScheduler {
   #pending:{tripUuid:string;workId:string|null}[]=[];#sourceAfter:string|null=null;#receiptAfter:string|null=null;#sources=0;#delivered=0;#lastReceipt:number|null=null;
   #status:DashboardUploadStatus;#reconstruct=true;#passRunning=false;#stale=false;#nextRefresh=0;#progressGeneration=0;
   #paused:UploadStoreStatus['paused']=null;#hintsReconciliation=false;#held:UploadSchedulingHints['held']=null;#sourceHeld=false;#unmanaged=false;#scopeReady=false;#retryError:DashboardUploadError|null=null;#retryEventId:string|null=null;
-  constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,origin:string,private readonly producerVersion:string,private readonly publish:(status:DashboardUploadStatus)=>void,private readonly time:UploadClock=clock){this.#status=initialDashboardUploadStatus(origin);this.#rate=new UploadRate(60,10,time.now());}
+  constructor(private readonly db:UploadStorage,private readonly http:UploadTransport,origin:string,private readonly producerVersion:string,private readonly publish:(status:DashboardUploadStatus)=>void,private readonly time:UploadClock=clock,private readonly onDurableUpload?:()=>void){this.#status=initialDashboardUploadStatus(origin);this.#rate=new UploadRate(60,10,time.now());}
   get status():DashboardUploadStatus{return structuredClone(this.#status);}
-  async activate(configuration:UploadActiveConfiguration,token:string,limits:UploadLimits,contractMinor:0|1|2 = 0):Promise<void>{
+  async activate(configuration:UploadActiveConfiguration,token:string,limits:UploadLimits,contractMinor:UploadEventMinor = 0):Promise<void>{
     await this.suspend();if(this.#stopped||configuration.status!=='ready'||configuration.purpose!=='history'||!configuration.registration||!configuration.credentialGeneration)return;
     const generation=this.#generation;this.#active={configuration,registration:configuration.registration,token,contractMinor};this.#rate.configure(limits.eventsPerMinute,limits.burst);const hints=await stored(this.db.getUploadSchedulingHints({registrationId:configuration.registration.registrationId})),owner=await stored(this.db.getUploadStoreStatus({registrationId:configuration.registration.registrationId}));
     if(this.#stopped||generation!==this.#generation)return;this.#failureStreak=hints.failureStreak;this.#sendAfter=Math.max(this.time.now(),hints.retryAtMs??0);this.#generation++;this.#suspended=false;
@@ -72,7 +72,7 @@ export class UploadScheduler {
     if(result.ok&&[200,202].includes(result.statusCode)){
       // A complete known ACK must reach SQLite even after rotation/disconnect/stop.
       const receipt=await stored(this.db.commitUploadReceipt({attemptId:attempt.attemptId!,statusCode:result.statusCode,body:result.body}));
-      if(receipt.status==='delivered'||receipt.status==='duplicate'){this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#recount();this.#diagnostic(true);}return;}
+      if(receipt.status==='delivered'||receipt.status==='duplicate'){try{this.onDurableUpload?.();}catch{/* A refresh hint has no receipt or recording authority. */}this.#failureStreak=0;this.#sendAfter=this.time.now();if(generation===this.#generation&&!this.#suspended){if(receipt.eventId===this.#retryEventId){this.#retryError=null;this.#retryEventId=null;}this.#recount();this.#diagnostic(true);}return;}
     }
     if(!result.ok&&result.code==='ABORTED'){
       const recovered=await stored(this.db.recoverUploadAttempt({attemptId:attempt.attemptId!}));
