@@ -6,6 +6,7 @@ import type {QualificationHttpResult,QualificationRoute} from '../../apps/deskto
 import type {UploadActiveConfiguration} from '../../packages/storage/src/upload-sync';
 import type {QualificationWire,QualificationState} from '../../packages/contracts/src/qualification';
 import type {QualificationLocalSource} from '../../packages/storage/src/qualification';
+import {Script,ETS2_A,job} from '../shared/trip-messages';
 const fixtures=JSON.parse(readFileSync('tests/fixtures/qualification/companion-v1.json','utf8')) as {schema:string;value:unknown}[];
 const cap=fixtures.find(f=>f.schema==='Capabilities')!.value as QualificationWire['Capabilities'];
 const snapshot=fixtures.find(f=>f.schema==='Qualification')!.value as QualificationWire['Qualification'];
@@ -42,6 +43,45 @@ function sizeError():QualificationHttpResult {
   if(!fixture)throw Error('MISSING_REVIEWED_SIZE_ERROR_FIXTURE');return {...success(fixture.value),statusCode:422};
 }
 describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
+  it('checks the active job on resume and keeps its preview visible between resumes',async()=>{
+    vi.useFakeTimers();
+    const root=randomUUID(),jobConfig=job(),checkpoint=new Script(ETS2_A).checkpoint(jobConfig);
+    const live={source:{...checkpoint.source,origin:'game' as const},capture:checkpoint.capture,state:checkpoint.data.state};
+    const template=fixtures.find(f=>f.schema==='Preview')!.value as QualificationWire['Preview'];
+    let metres='99999',materialVersion='1';
+    const f=harness((route,body)=>{
+      if(route!=='preview')return Promise.resolve(success(route==='capabilities'?cap:{...snapshot,game:route.endsWith('ats')?'ats':'ets2'}));
+      const input=JSON.parse(new TextDecoder().decode(body)) as QualificationWire['PreviewInput'];
+      return Promise.resolve(success({...template,requestId:input.requestId,contextRevision:input.contextRevision,evidenceRevision:input.evidenceRevision,
+        applicability:{...template.applicability,contextRevision:input.contextRevision,qualificationRevision:snapshot.progressRevision}}));
+    },{
+      readQualificationPreview:()=>stored({current:{tripUuid:root,rawTripUuid:root,materialVersion,actualDistance:{availability:'known',metres,support:'whole-trip',final:false}}}),
+      beginQualificationPreview:({pinId})=>stored({pinId,state:'ready',examined:1,projection:{rootTripUuid:root,purpose:'history',facts:{job:jobConfig,opening:{utcMs:1000}}} as import('../../packages/storage/src/upload-projection').UploadProjection}),
+      releaseQualificationPreview:({pinId})=>stored({pinId,state:'released',examined:1,projection:null})
+    });
+    const observe=(simulation:'running'|'paused')=>f.service.observe({...live,state:{...live.state,simulation}});
+    const previews=()=>f.http.request.mock.calls.filter(([route])=>route==='preview');
+    try{
+      await f.service.activate(configuration,'protected-token');
+      observe('running');await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(0);
+      observe('paused');await vi.advanceTimersByTimeAsync(5000);expect(previews()).toHaveLength(0);
+      observe('running');await vi.advanceTimersByTimeAsync(10000);expect(previews()).toHaveLength(1);
+      const first=f.service.get('ets2').preview;expect(first).not.toBeNull();
+      metres='100000';materialVersion='2';observe('running');await vi.advanceTimersByTimeAsync(20000);
+      expect(f.service.get('ets2').preview).toEqual(first);expect(previews()).toHaveLength(1);
+      observe('paused');observe('running');await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(2);expect(f.service.get('ets2').preview?.requestId).not.toBe(first?.requestId);
+      metres='500001';await vi.advanceTimersByTimeAsync(1000);
+      expect(f.service.get('ets2').preview).toBeNull();expect(previews()).toHaveLength(2);
+      observe('paused');observe('running');f.service.observe(null);
+      const replacement={...live,source:{...live.source,pluginSessionId:randomUUID()}};
+      f.service.observe(replacement);await vi.advanceTimersByTimeAsync(10000);expect(previews()).toHaveLength(2);
+      metres='100002';f.service.refresh('ets2');await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(3);expect(f.service.get('ets2').preview).not.toBeNull();
+      f.service.observe(null);expect(f.service.get('ets2').preview).toBeNull();
+    }finally{await f.service.stop();}
+  });
   it('retains and persists the current sweep cursor when a response duplicates one source and omits another',async()=>{
     vi.useFakeTimers();let responses=0;const template=fixtures.filter(f=>f.schema==='ResultBatch').flatMap(f=>(f.value as QualificationWire['ResultBatch']).items).find(item=>item.assessmentBasis==='current')!;
     const f=resultHarness(request=>{

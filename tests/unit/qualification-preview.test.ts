@@ -1,12 +1,16 @@
 import {readFileSync} from 'node:fs';
 import {describe,expect,it,vi} from 'vitest';
-import {qualificationLeaseCue,type QualificationLease} from '../../apps/desktop/src/overlay-qualification';
+import {isFreshQualificationReply,qualificationPreviewApplies,type QualificationLease} from '../../apps/desktop/src/overlay-qualification';
 import {previewDecimal,qualificationTrailerFacts,QualificationPreviewFacts,type PreviewStorage,type QualificationLive} from '../../apps/desktop/src/qualification/preview-facts';
 import {trailer,Script,ETS2_A,job} from '../shared/trip-messages';
 import type {UploadProjection} from '../../packages/storage/src/upload-projection';
 import type {QualificationPreview,QualificationPreviewInput} from '../../packages/contracts/src/qualification';
 const fixtures=JSON.parse(readFileSync('tests/fixtures/qualification/companion-v1.json','utf8')) as {name:string;value:unknown}[];
 const fixture=<T>(name:string)=>structuredClone(fixtures.find(f=>f.name===name)!.value) as T;
+function qualificationLeaseCue(lease:QualificationLease,current:QualificationPreviewInput|null,scope:string,revision:string,now:number){
+  return isFreshQualificationReply(lease,now)&&qualificationPreviewApplies(lease,current,scope,revision)&&lease.reply.outcome!=='unknown'
+    ? lease.reply.outcome : 'neutral';
+}
 describe('server provisional applicability timelines (REG-003/008/009/010)',()=>{
   it.each(['semantic-type-classified-pass','semantic-type-wrong-and-unclassified-fail','semantic-type-unclassified-unknown'])('keeps the corrected paired %s fixture inside its exact issued guard',name=>{
     const input=fixture<QualificationPreviewInput>(`${name}-body-code-input`),reply=fixture<QualificationPreview>(name);
