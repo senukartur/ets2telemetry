@@ -3,12 +3,13 @@ import {isCargoId, type CargoClassification} from '../../../../packages/contract
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
 import type {CargoOpening} from '../../../../packages/storage/src/api';
 import type {GameProcess} from '../hard-mode/reader';
-import {isCargoLookupReply, type CargoLookupRequest} from './service-contract';
+import {isCargoLookupReply, isCargoLookupRequest, type CargoLookupRequest} from './service-contract';
 
 const MAX_ACTIVE_LOOKUPS = 8;
 const MAX_CACHED_CARGO = 32;
 const LOOKUP_TIMEOUT_MS = 20_000;
 const CACHED_LOOKUP_MS = 2_000;
+const EXTENDED_PATH_PREFIX = '\\\\?\\';
 
 export interface CargoLookup {
   opening: CargoOpening;
@@ -95,7 +96,12 @@ export class CargoSourceClient {
       signal.addEventListener('abort', cancel, {once: true});
       void Promise.resolve().then(() => signal.aborted ? null : this.inspect(source, signal)).then(result => {
         if (!result || signal.aborted || this.active !== active || this.keyFor(source) !== active.key) {settle(null); return;}
-        this.send({type: 'cargo:lookup', generation: active.generation, request, game: source.game, executable: result.executable, cargoId});
+        // The broker reports an extended Windows path, while cargo lookup accepts local drive paths.
+        const executable = result.executable.startsWith(EXTENDED_PATH_PREFIX)
+          ? result.executable.slice(EXTENDED_PATH_PREFIX.length) : result.executable;
+        const message: CargoLookupRequest = {type: 'cargo:lookup', generation: active.generation, request, game: source.game, executable, cargoId};
+        if (!isCargoLookupRequest(message)) {settle(null); return;}
+        this.send(message);
       }).catch(cancel);
     });
   }

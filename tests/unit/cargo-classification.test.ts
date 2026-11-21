@@ -132,6 +132,36 @@ describe('private cargo source and local cache (REG-003/010)', () => {
     expect(client.lookup(source, 'cargo_a')).toBeUndefined();
   });
 
+  it('classifies cargo when the native broker returns an extended Windows drive path', async () => {
+    const sent = deferred<CargoLookupRequest>();
+    const cache = new CargoArchiveCache(() => Promise.resolve({fingerprint: 'inventory', paths: ['def.scs']}),
+      () => Promise.resolve({definitions: new Map([['cargo_a', definition]]), conflicts: new Set<string>()}));
+    const resolve = vi.fn((_game: SourceIdentity['game'], candidate: string) =>
+      Promise.resolve(candidate === executable ? 'root' : undefined));
+    const bridge = new CargoMainBridge(cache, resolve, reply => client.receive(reply), game => game === source.game);
+    const client = new CargoSourceClient(request => {
+      sent.resolve(request);
+      bridge.receive(request);
+    }, () => 'verified', () => Promise.resolve({pid: 101, createdUtcMs: 100, executable: '\\\\?\\' + executable}));
+    try {
+      const lookup = client.lookup(source, 'cargo_a')!;
+      await expect(sent.promise).resolves.toMatchObject({executable});
+      await expect(lookup.result).resolves.toMatchObject({valuable: true});
+    } finally {client.retire();}
+  });
+
+  it.each([
+    ['extended UNC', '\\\\?\\UNC\\server\\share\\eurotrucks2.exe'],
+    ['extended device', '\\\\?\\GLOBALROOT\\Device\\eurotrucks2.exe'],
+    ['oversized', 'C:\\' + 'a'.repeat(8190)],
+  ])('does not send an unsupported broker path (%s)', async (_kind, brokerPath) => {
+    const send = vi.fn(() => {client.retire();});
+    const client = new CargoSourceClient(send, () => 'verified',
+      () => Promise.resolve({pid: 101, createdUtcMs: 100, executable: brokerPath}));
+    await expect(client.lookup(source, 'cargo_a')!.result).resolves.toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('coalesces cache loads, reads the changed inventory, and scopes the main reply', async () => {
     let version = '1';
     const inventory = vi.fn(() => Promise.resolve({fingerprint: version, paths: ['test.scs']}));
