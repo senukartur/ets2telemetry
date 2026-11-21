@@ -8,7 +8,7 @@ import type {
 } from '../../packages/contracts/src';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import {
-  journalBannerText, journalDetailText, journalErrorText, journalEventText, journalIntervalText, journalListText, journalRangeText, journalSampleText, journalTotalsText, type JournalSection
+  journalBannerText, journalDamageText, journalDetailText, journalErrorText, journalEventText, journalIntervalText, journalListText, journalRangeText, journalSampleText, journalTotalsText, type JournalSection
 } from '../../apps/desktop/src/journal-view';
 import {ANCHOR_JOBS, CHANGED_TRUCK, EUR, JOURNAL_TRIPS as T, MIGRATED_V1_SESSION, MIGRATED_V1_TRIP, UNKNOWN_CURRENCY, USD, ZERO_DELIVERY} from '../shared/journal-seed';
 import {BASE_UTC, ETS2_A, ETS2_B, ATS_A, job, money, trailer, truck} from '../shared/trip-messages';
@@ -532,6 +532,11 @@ describe('completeness intervals and timeline (J7, J13)', () => {
 });
 
 describe('one-second samples (J14; REG-009, REG-017)', () => {
+  it('distinguishes zero damage from a reading below display precision in both languages', () => {
+    expect([0, 0.00004, 0.0001].map(value => journalDamageText(value, 'en'))).toEqual(['0%', '<0.01%', '0.01%']);
+    expect([0, 0.00004, 0.0001].map(value => journalDamageText(value, 'ru'))).toEqual(['0\u00a0%', '<0,01\u00a0%', '0,01\u00a0%']);
+  });
+
   const COLUMNS = [{label: 'Time'}, {label: 'Speed'}, {label: 'Fuel'}, {label: 'Gear'}, {label: 'Engine RPM'}, {label: 'Odometer'}, {label: 'Estimated range'},
     {label: 'SDK average consumption', note: 'SDK mean, not a trip average'}, {label: 'Game time'}, {label: 'World position', note: 'game-world coordinates, not GPS'}, {label: 'Cargo damage'}];
   const OTHER_CLOCK = '2c000000-0000-4000-8000-00000000000b';

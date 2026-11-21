@@ -643,7 +643,10 @@ const damageFormats = {
   en: new Intl.NumberFormat('en', {style: 'percent', maximumFractionDigits: 2}),
   ru: new Intl.NumberFormat('ru', {style: 'percent', maximumFractionDigits: 2})
 };
-export const journalDamageText = (fraction: number, language: AppLanguage): string => damageFormats[language].format(fraction);
+export function journalDamageText(fraction: number, language: AppLanguage): string {
+  const format = damageFormats[language], minFraction = 0.0001; // 0.01% as a fraction.
+  return fraction > 0 && fraction < minFraction ? `<${format.format(minFraction)}` : format.format(fraction);
+}
 export const journalListText = (...args: Parameters<typeof texts.en.journalListText>): ReturnType<typeof texts.en.journalListText> => texts[args[1]?.language ?? 'en'].journalListText(...args);
 export const journalDetailText = (...args: Parameters<typeof texts.en.journalDetailText>): ReturnType<typeof texts.en.journalDetailText> => texts[args[1]?.language ?? 'en'].journalDetailText(...args);
 export const journalTripSideText = (...args: Parameters<typeof texts.en.journalTripSideText>): ReturnType<typeof texts.en.journalTripSideText> => texts[args[1]?.language ?? 'en'].journalTripSideText(...args);

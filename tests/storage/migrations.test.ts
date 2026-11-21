@@ -309,9 +309,12 @@ it('REG-009/013 keeps old samples unavailable after adding the cargo damage fiel
   expect(digestOf(path.join(ws.backups, current.summary.backupFileName!))).toEqual(preMigration);
   expect(ok(current.listSamples({tripUuid})).every(sample => !Object.hasOwn(sample, 'cargoDamage'))).toBe(true);
   expect(ok(current.listSamples({tripUuid}))).toEqual(samples);
+  const baseline = ok(current.listSamples({pluginSessionId: session}));
   const row = (cargoDamage: number, second: number) => ({...olderSample, cargoDamage, monotonicNs: (6_000_000_000n + BigInt(second) * 1_000_000_000n).toString()});
-  failed(current.appendSamples(session, [row(0, 1), row(1.1, 2)]), 'INVALID_INPUT');
-  expect(ok(current.listSamples({tripUuid}))).toEqual(samples);
+  for (const invalid of [row(1.1, 2), row(-0.01, 2), row(NaN, 2), {...row(0.125, 2), tripUuid: null}]) {
+    failed(current.appendSamples(session, [row(0, 1), invalid]), 'INVALID_INPUT');
+    expect(ok(current.listSamples({pluginSessionId: session}))).toEqual(baseline);
+  }
   expect(ok(current.appendSamples(session, [row(0, 1), row(0.125, 2)]))).toEqual({appended: 2, skipped: 0});
   expect(ok(current.listSamples({tripUuid})).slice(-2).map(sample => sample.cargoDamage)).toEqual([0, 0.125]);
 });

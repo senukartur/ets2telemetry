@@ -601,6 +601,8 @@ export class TripRecorderSink implements DurableSink {
       if(!replayDrained)sampled.row.tripUuid=null;
       if (current.available && replayDrained && sampled.row.tripUuid) {
         const damage = message.data.state.cargoDamage, trip = this.state.games[message.source.game].trip;
+        // The producer publishes damage and the v1 job together. The v0 revision pairs that reading with a separate
+        // v0 stream for the live display and is not the v1 configuration revision.
         // Use the snapshot's job only after the FIFO has applied its event prefix. An earlier committed trip may
         // still own the sample while a replacement job or its terminal event is waiting to be applied.
         const eventsApplied = BigInt(session.processedThrough) + 1n >= BigInt(message.data.status.delivery.nextEventSeq);

@@ -435,6 +435,34 @@ describe('ET-015b one-second samples through the trip recorder', () => {
   /** The stored samples as [source second, trip UUID or null, UTC label]. */
   const stored = (storage: ModelStorage) => storage.model.samples.map(row => [second(row.monotonicNs), row.tripUuid ?? null, row.utcMs]);
 
+  it('records cargo damage only when available for the open job and its event prefix is committed', async () => {
+    const storage = new ModelStorage(), recorder = new TripRecorderSink(storage), s = new Script(ETS2_A);
+    const context = {receivedUtcMs: RECEIVED_UTC}, active = job(), trip = uuid(ETS2_A, '1');
+    const other = job({cargoId: {available: true, value: 'synthetic_other_cargo'}});
+    const read = (fraction: number | null, configurationJob = active) => {
+      const message = s.snapshot();
+      message.data.state.configuration.job = {available: true, value: configurationJob};
+      message.data.state.cargoDamage = fraction === null ? {available: false, reason: 'not-observed', unit: 'fraction'}
+        : {available: true, value: fraction, unit: 'fraction', v0ConfigurationRevision: '10'};
+      expect(recorder.observe(message, context).ok).toBe(true);
+    };
+
+    expect((await recorder.openSession(s.welcome())).ok).toBe(true);
+    expect(recorder.observe(s.checkpoint(null), context).ok).toBe(true);
+    expect((await recorder.commit(s.event(r.jobConfigured(active)), context)).ok).toBe(true);
+    read(0);
+    read(null);
+    read(0.125, other);
+    const pending = s.event(r.truckConfigured());
+    read(0.25);
+    expect((await recorder.commit(pending, context)).ok).toBe(true);
+    read(0.25);
+    expect((await recorder.samples.write(3600, true)).ok).toBe(true);
+    const rows = storage.model.samples;
+    expect(rows.map(row => row.tripUuid)).toEqual([trip, trip, trip, trip, trip]);
+    expect(rows.map(row => row.cargoDamage)).toEqual([0, undefined, undefined, undefined, 0.25]);
+  });
+
   it.each([false,true])('persists preceding bounded samples before a new welcome and fails closed on flush failure=%s',async failure=>{
     const storage=new ModelStorage(),recorder=new TripRecorderSink(storage),s=new Script(ETS2_A),context={receivedUtcMs:RECEIVED_UTC};
     await recorder.openSession(s.welcome());recorder.observe(s.checkpoint(null),context);await recorder.commit(s.event(r.jobConfigured()),context);recorder.observe(s.snapshot(),context);
