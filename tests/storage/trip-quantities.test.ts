@@ -250,20 +250,27 @@ const JOURNAL_NAMES: Record<QuantityFlagName, ['distance' | 'fuel', 'breaks' | '
   fuelHole: ['fuel', 'breaks', 'reading-hole'], fuelTransfer: ['fuel', 'breaks', 'transfer'], fuelBoundary: ['fuel', 'breaks', 'recording-boundary'],
   fuelUnproven: ['fuel', 'breaks', 'unsupported'], fuelRefuelExcluded: ['fuel', 'quality', 'refuel-excluded']
 };
-/** The expected trip provenance: the corpus statuses with the names of the expected bits in contract order. */
+/** Breaks that the odometer difference covers: they leave a trip distance shown by the difference. */
+const COVERED: readonly QuantityFlagName[] = ['distanceHole', 'distanceGap'];
+/**
+ * The expected trip provenance: the corpus statuses with the names of the expected bits in contract order. A trip
+ * distance by the odometer difference reports its own status, without the breaks it covers.
+ */
 function accountingOf(expected: QuantityExpectation) {
   const names = (quantity: 'distance' | 'fuel', kind: 'breaks' | 'quality') => (Object.keys(JOURNAL_NAMES) as QuantityFlagName[])
-    .filter(flag => expected.flags.includes(flag) && JOURNAL_NAMES[flag][0] === quantity && JOURNAL_NAMES[flag][1] === kind).map(flag => JOURNAL_NAMES[flag][2]);
-  return {engine: 1, distance: {status: expected.distance, breaks: names('distance', 'breaks'), quality: names('distance', 'quality')},
+    .filter(flag => expected.flags.includes(flag) && JOURNAL_NAMES[flag][0] === quantity && JOURNAL_NAMES[flag][1] === kind)
+    .filter(flag => !(expected.trip && COVERED.includes(flag))).map(flag => JOURNAL_NAMES[flag][2]);
+  return {engine: 1, distance: {status: expected.trip?.distance ?? expected.distance, breaks: names('distance', 'breaks'), quality: names('distance', 'quality')},
     fuel: {status: expected.fuel, breaks: names('fuel', 'breaks'), quality: names('fuel', 'quality')}};
 }
 /**
- * The Journal shows the head values and their provenance, the same on the list row and the detail; a cut or an unproven
- * quantity marks the money totals incomplete.
+ * The Journal shows the trip distance (the head value, or the odometer difference where it covers a break), the head's
+ * fuel used and their provenance, the same on the list row and the detail; a cut or an unproven quantity marks the money
+ * totals incomplete.
  */
 function expectJournal(storage: Storage, root: string, expected: QuantityExpectation) {
-  const detail = validateJournalTripDetail(ok(storage.journalTrip(root)));
-  expect(detail.trip.observedDistanceM).toEqual(expected.distanceM === null ? absent : {available: true, value: near(expected.distanceM)});
+  const detail = validateJournalTripDetail(ok(storage.journalTrip(root))), distanceM = expected.trip?.distanceM ?? expected.distanceM;
+  expect(detail.trip.observedDistanceM).toEqual(distanceM === null ? absent : {available: true, value: near(distanceM)});
   expect(detail.trip.fuelUsedL).toEqual(expected.fuelUsedL === null ? absent : {available: true, value: near(expected.fuelUsedL)});
   expect(detail.money.incomplete).toBe(expected.cut || expected.distanceM === null);
   expect(detail.trip.accounting).toEqual(accountingOf(expected));
@@ -453,7 +460,8 @@ function upload(storage: Storage, tripUuid: string) {
   }
   const mapped = mapUploadProjection(projection, pages);
   if (mapped.status !== 'projected') throw new Error(`Upload projection ${mapped.status}: ${JSON.stringify(mapped)}`);
-  return {moneyIncomplete: projection.facts.moneyIncomplete, reasons: mapped.summary.snapshot.evidence.reasons, facts: projection.facts.accounting, summary: mapped.summary.snapshot.accounting};
+  return {moneyIncomplete: projection.facts.moneyIncomplete, reasons: mapped.summary.snapshot.evidence.reasons, facts: projection.facts.accounting, summary: mapped.summary.snapshot.accounting,
+    observedDistance: mapped.summary.snapshot.observedDistance};
 }
 function deliver(storage: Storage, m: Member) {
   ok(storage.commitEvent({message: shaped(m.script.event(r.delivered(), {advanceMs: 100_000})), effects: [{kind: 'trip.close', tripUuid: m.uuid, outcome: 'delivered', closeReason: 'outcome',
@@ -534,6 +542,8 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     ['a partial engine-1 distance', 1, scenario('Q13').readings, true, {distance: 'partial', fuel: 'complete'}],
     ['a partial engine-1 fuel', 1, scenario('Q2-linked').readings, true, {distance: 'complete', fuel: 'partial'}],
     ['complete engine-1 quantities', 1, scenario('Q1').readings, false, {distance: 'complete', fuel: 'complete'}],
+    // The odometer difference covers the reading hole; fuel stays partial.
+    ['an unlinked reading hole', 1, scenario('Q2-unlinked').readings, true, {distance: 'complete', fuel: 'partial'}],
     ['unavailable engine-1 quantities', 1, scenario('Q9').readings, true, {distance: 'unknown', fuel: 'unknown'}],
     // Four linked readings: complete engine-0 accounting, whose rows carry no quantity flags.
     ['engine 0', 0, [s(0), s(1), s(2), s(3)], false, {distance: 'unknown', fuel: 'unknown'}]
@@ -553,6 +563,16 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     expect(found.facts).toEqual(accounting);
     expect(found.summary).toEqual(accounting);
   });
+  // A delivered trip whose readings stopped for 8 s mid-trip without the recorder link, as after a reconnect: the upload
+  // carries the whole odometer difference 1220 - 1000 m as complete, not the 60 m before the hole as partial.
+  it('uploads the odometer difference across a reading hole as complete distance', async () => {
+    gameOrigin = true;
+    const storage = await ws.open({purpose: 'history'}), {members} = record(storage, scenario('Q2-unlinked').readings);
+    deliver(storage, members[0]);
+    const found = upload(storage, members[0].uuid);
+    expect(found.observedDistance).toEqual({available: true, value: 220, unit: 'm'});
+    expect(found.summary?.distance).toBe('complete');
+  });
   it.each([
     ['Q5', 'open', [{distanceFlags: F.distanceTruck, fuelFlags: F.fuelTruck}]],
     ['Q2-unlinked', 'open', [{distanceFlags: F.distanceHole, fuelFlags: F.fuelHole}]],
@@ -566,14 +586,16 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     expect((ledger(storage, root)).annotations).toEqual(expected.map(flags => ({annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, ...flags})));
   });
   // Budget: 28,804 recorded samples in sample batches, each through its full projection; it bounds work, not timing.
-  it('keeps the target subtotal as partial when a joining member recorded more than SPLICE_SAMPLE_LIMIT samples before its join', {timeout: 600_000}, async () => {
+  it('keeps the ledger subtotal partial and shows the odometer difference when a joining member recorded more than SPLICE_SAMPLE_LIMIT samples before its join', {timeout: 600_000}, async () => {
     expect(SPLICE_SAMPLE_LIMIT).toBe(28_800);
     const storage = await ws.open(), {root, members} = record(storage, [s(0), s(1)]);
     closeMember(storage, members[0]);
     const b = openMember(storage, 'B', 'pre-join', []);
     longMember(storage, b, SPLICE_SAMPLE_LIMIT + 2);
     // A's 20 m and 0.01 L kept at B's last reading before the join, with the gap bits; B's linked joining reading adds 20 m and 0.1 ml.
-    const expected: QuantityExpectation = {distanceM: 40, distance: 'partial', fuelUsedL: 0.0101, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+    // The trip shows B's last odometer 1020 + 20 × 28,801 = 577,040 m minus A's start of 1,000 m.
+    const expected: QuantityExpectation = {distanceM: 40, distance: 'partial', fuelUsedL: 0.0101, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false,
+      trip: {distanceM: 576_040, distance: 'complete'}};
     expectJournal(storage, root, expected);
     expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe('partial');
     const found = ledger(storage, root);
@@ -584,15 +606,17 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     expect(found.annotations).toEqual([GAP_ANNOTATION]);
   });
   // Budget: 28,802 recorded samples, then one resolve call that writes a single gap row; it bounds work, not timing.
-  it('keeps the target subtotal as partial when a retroactively joined member recorded more than SPLICE_SAMPLE_LIMIT samples', {timeout: 600_000}, async () => {
+  it('keeps the ledger subtotal partial and shows the odometer difference when a retroactively joined member recorded more than SPLICE_SAMPLE_LIMIT samples', {timeout: 600_000}, async () => {
     const storage = await ws.open(), {root, members} = record(storage, [s(0), s(1)]);
     closeMember(storage, members[0]);
     const b = openMember(storage, 'B', 'retro', []);
     longMember(storage, b, SPLICE_SAMPLE_LIMIT + 2, false);
     deliver(storage, b);
     expect(resolveAt(storage, b, SPLICE_SAMPLE_LIMIT + 1_000)).toEqual({status: 'resolved', resolved: 1, remaining: 0});
-    // A's 20 m and 0.01 L kept at B's last reading, with the gap bits; nothing of B is replayed.
-    const expected: QuantityExpectation = {distanceM: 20, distance: 'partial', fuelUsedL: 0.01, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+    // A's 20 m and 0.01 L kept at B's last reading, with the gap bits; nothing of B is replayed. The trip shows B's
+    // last odometer 577,040 m minus A's start of 1,000 m.
+    const expected: QuantityExpectation = {distanceM: 20, distance: 'partial', fuelUsedL: 0.01, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false,
+      trip: {distanceM: 576_040, distance: 'complete'}};
     expectJournal(storage, root, expected);
     expect(ok(storage.journalTrip(root)).trip.recordingCompleteness).toBe('partial');
     const found = ledger(storage, root);
@@ -759,7 +783,9 @@ describe('ET-112c engine 1 captured pause before a reload', () => {
   // A stood still for a second before the pause: the reload at the paused point is A's save point, then B drives 20 m on 10 ml.
   const resumed: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'complete', flags: [], cut: false};
   // A moved 1 m after its last sample: the reload at 1061 m is a forward gap; A's 60 m and 0.03 L carry, then B adds 20 m and 10 ml.
-  const gapped: QuantityExpectation = {distanceM: 80, distance: 'partial', fuelUsedL: 0.04, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+  // The trip shows the odometer difference 1081 - 1000 m, which includes that metre.
+  const gapped: QuantityExpectation = {distanceM: 80, distance: 'partial', fuelUsedL: 0.04, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false,
+    trip: {distanceM: 81, distance: 'complete'}};
   it.each([
     ['stopped for a second before the pause', stopped, 4.5, {odometerM: 1060, x: 60}, resumed, 'complete'],
     ['moving at 1 m/s in the last second before the pause', moving, 3.5, {odometerM: 1061, x: 61}, gapped, 'partial']
@@ -957,8 +983,10 @@ describe('REG-002/003 ET-112j paused within-session reconnect', () => {
   }
   // A's 60 m and 0.03 L continue at the save point, then B adds 20 m and 10 ml.
   const same: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'complete', flags: [], cut: false};
-  // B's junction 1 m ahead of the save point: a forward gap; A's totals carry and B adds its 20 m and 10 ml.
-  const gapped: QuantityExpectation = {distanceM: 80, distance: 'partial', fuelUsedL: 0.04, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false};
+  // B's junction 1 m ahead of the save point: a forward gap; A's totals carry and B adds its 20 m and 10 ml. The trip
+  // shows the odometer difference 1081 - 1000 m, which includes the metre before the junction.
+  const gapped: QuantityExpectation = {distanceM: 80, distance: 'partial', fuelUsedL: 0.04, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false,
+    trip: {distanceM: 81, distance: 'complete'}};
   // B's junction 25 ml of fuel away: no fuel is credited across it, and fuel carries with the boundary bit.
   const boundary: QuantityExpectation = {distanceM: 80, distance: 'complete', fuelUsedL: 0.04, fuel: 'partial', flags: ['fuelBoundary'], cut: false};
   it.each([

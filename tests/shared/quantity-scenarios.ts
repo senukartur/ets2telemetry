@@ -22,6 +22,11 @@ export interface QuantityExpectation {
   flags: QuantityFlagName[];
   /** A rollback cut was taken in the trip: storage marks the money totals incomplete. */
   cut: boolean;
+  /**
+   * The trip distance storage shows and uploads when it differs from the ledger head: the odometer difference from the
+   * first run's start covers reading holes and recording gaps (headDistance in packages/storage/src/sqlite/quantities.ts).
+   */
+  trip?: {distanceM: number; distance: 'complete'};
 }
 export interface QuantityScenario {id: string; description: string; readings: QuantityReading[]; events?: QuantityEvent[]; expected: QuantityExpectation}
 
@@ -63,10 +68,10 @@ export const QUANTITY_SCENARIOS: readonly QuantityScenario[] = [
   // The linked t10 reading has k2's position after 160 odometer metres: a jump, not continuous movement.
   {id: 'Q2-jump', description: 'a linked 8 s hole whose step is not continuous breaks distance and starts a new run',
     readings: [...base(3), s(10, {fuelL: 399.90, x: 40}), s(11, {fuelL: 399.89, x: 60})],
-    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false}},
+    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false, trip: {distanceM: 220, distance: 'complete'}}},
   {id: 'Q2-unlinked', description: 'an 8 s hole without the recorder link breaks distance; both subtotals carry',
     readings: [...base(3), s(10, {fuelL: 399.90, linked: false}), s(11, {fuelL: 399.89})],
-    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false}},
+    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false, trip: {distanceM: 220, distance: 'complete'}}},
   {id: 'Q3', description: 'a stationary refuel of 200 L counts consumption only',
     readings: [100.00, 99.99, 299.99, 299.98].map((fuelL, k) => s(k, {odometerM: 1000, x: 0, speedMps: 0, fuelL})),
     expected: {distanceM: 0, distance: 'complete', fuelUsedL: 0.02, fuel: 'complete', flags: ['fuelRefuelExcluded'], cut: false}},
@@ -123,7 +128,7 @@ export const QUANTITY_SCENARIOS: readonly QuantityScenario[] = [
   // B's own fuel starts at 399.96 (any start: nothing is credited across the junction) and drops 0.01 L per reading.
   {id: 'Q10', description: 'a forward member gap keeps both subtotals and breaks both',
     readings: forwardGap(),
-    expected: {distanceM: 100, distance: 'partial', fuelUsedL: 0.05, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false}},
+    expected: {distanceM: 100, distance: 'partial', fuelUsedL: 0.05, fuel: 'partial', flags: ['distanceGap', 'fuelBoundary'], cut: false, trip: {distanceM: 140, distance: 'complete'}}},
   {id: 'Q11', description: 'a different truck at a later game minute is a member gap',
     readings: otherTruck(610),
     expected: {distanceM: 100, distance: 'partial', fuelUsedL: 0.05, fuel: 'partial', flags: ['distanceTruck', 'fuelTruck'], cut: false}},
