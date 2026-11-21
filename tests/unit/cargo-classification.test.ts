@@ -150,14 +150,17 @@ describe('private cargo source and local cache (REG-003/010)', () => {
     } finally {client.retire();}
   });
 
-  it.each(['\\\\?\\UNC\\server\\share\\eurotrucks2.exe', '\\\\?\\GLOBALROOT\\Device\\eurotrucks2.exe'])(
-    'does not send a non-drive broker path (%s)', async brokerPath => {
-      const send = vi.fn(() => {client.retire();});
-      const client = new CargoSourceClient(send, () => 'verified',
-        () => Promise.resolve({pid: 101, createdUtcMs: 100, executable: brokerPath}));
-      await expect(client.lookup(source, 'cargo_a')!.result).resolves.toBeNull();
-      expect(send).not.toHaveBeenCalled();
-    });
+  it.each([
+    ['extended UNC', '\\\\?\\UNC\\server\\share\\eurotrucks2.exe'],
+    ['extended device', '\\\\?\\GLOBALROOT\\Device\\eurotrucks2.exe'],
+    ['oversized', 'C:\\' + 'a'.repeat(8190)],
+  ])('does not send an unsupported broker path (%s)', async (_kind, brokerPath) => {
+    const send = vi.fn(() => {client.retire();});
+    const client = new CargoSourceClient(send, () => 'verified',
+      () => Promise.resolve({pid: 101, createdUtcMs: 100, executable: brokerPath}));
+    await expect(client.lookup(source, 'cargo_a')!.result).resolves.toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
 
   it('coalesces cache loads, reads the changed inventory, and scopes the main reply', async () => {
     let version = '1';

@@ -3,8 +3,7 @@ import {isCargoId, type CargoClassification} from '../../../../packages/contract
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
 import type {CargoOpening} from '../../../../packages/storage/src/api';
 import type {GameProcess} from '../hard-mode/reader';
-import {isDrivePath} from '../plugin-setup/steam-discovery';
-import {isCargoLookupReply, type CargoLookupRequest} from './service-contract';
+import {isCargoLookupReply, isCargoLookupRequest, type CargoLookupRequest} from './service-contract';
 
 const MAX_ACTIVE_LOOKUPS = 8;
 const MAX_CACHED_CARGO = 32;
@@ -100,8 +99,9 @@ export class CargoSourceClient {
         // The broker reports an extended Windows path, while cargo lookup accepts local drive paths.
         const executable = result.executable.startsWith(EXTENDED_PATH_PREFIX)
           ? result.executable.slice(EXTENDED_PATH_PREFIX.length) : result.executable;
-        if (!isDrivePath(executable)) {settle(null); return;}
-        this.send({type: 'cargo:lookup', generation: active.generation, request, game: source.game, executable, cargoId});
+        const message: CargoLookupRequest = {type: 'cargo:lookup', generation: active.generation, request, game: source.game, executable, cargoId};
+        if (!isCargoLookupRequest(message)) {settle(null); return;}
+        this.send(message);
       }).catch(cancel);
     });
   }
