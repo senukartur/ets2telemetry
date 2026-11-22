@@ -103,10 +103,11 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
       f.service.observe({...next,state:script.checkpoint({...jobConfig,cargoLoaded:{available:true,value:false}}).data.state});
       await vi.advanceTimersByTimeAsync(10000);
       expect(previews()).toHaveLength(6);expect(f.service.get('ets2').preview).toEqual(current);
-      const capabilities=Promise.withResolvers<QualificationHttpResult>();pendingCapabilities=capabilities.promise;
+      let resolveCapabilities!:(response:QualificationHttpResult)=>void;
+      pendingCapabilities=new Promise(resolve=>{resolveCapabilities=resolve;});
       await f.service.activate(configuration,'protected-token');await vi.advanceTimersByTimeAsync(10000);
       expect(previews()).toHaveLength(6);
-      capabilities.resolve(success(cap));pendingCapabilities=null;await vi.advanceTimersByTimeAsync(10000);
+      resolveCapabilities(success(cap));pendingCapabilities=null;await vi.advanceTimersByTimeAsync(10000);
       expect(previews()).toHaveLength(7);expect(f.service.get('ets2').preview).not.toBeNull();
       f.service.observe(null);expect(f.service.get('ets2').preview).toBeNull();
     }finally{await f.service.stop();}
