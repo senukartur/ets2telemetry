@@ -365,30 +365,33 @@ function quantityHead(db: Database.Database, head: unknown): Row | undefined {
   return point?.quantity_flags === null || point?.quantity_flags === undefined ? undefined : point;
 }
 /**
- * Distance breaks the odometer difference cannot cover: a truck change, an implausible odometer jump, an odometer change
- * across a ferry or train, and an unproven rollback. Reading holes and recording gaps are covered, because the game's
- * odometer keeps counting through them.
+ * Distance breaks the odometer difference cannot cover: a truck change, a step that is not continuous movement (inside a
+ * reading hole too), an odometer change across a ferry or train, and an unproven rollback. Reading holes and recording
+ * gaps are covered, because the game's odometer keeps counting through them.
  */
 const DIFFERENCE_BREAKS = F.distanceTruck | F.distanceJump | F.distanceTransfer | F.distanceUnproven;
 const COVERED_BREAKS = F.distanceHole | F.distanceGap;
 /**
  * The trip distance at an engine-1 head row: the odometer of the head's last complete anchor minus the start odometer of
  * the ledger's first run, on one truck. The flags are the head's, without the breaks the difference covers. A difference
- * break, a first run that is itself a gap point, an end anchor outside the latest recording, a different truck at the
- * ends or a lower end odometer keeps the ledger's supported subtotal and all its flags. Summing continuous steps telescopes to the same difference, so the rule
- * changes the value only where a hole or gap broke the sum.
+ * break, a prefix path longer than ACCOUNTING_PATH's 256 steps, a first run that is itself a gap point, an end anchor
+ * outside the latest recording, a different truck at the ends or a lower end odometer keeps the ledger's supported
+ * subtotal and all its flags. Summing continuous steps telescopes to the same difference, so the rule changes the value
+ * only where a hole or gap broke the sum.
  */
 function headDistance(db: Database.Database, point: Row): {value: number | null; flags: number} {
   const flags = Number(point.quantity_flags), ledger = {value: real(point.distance_m), flags};
   if (flags & DIFFERENCE_BREAKS) return ledger;
-  const first = get(db, `WITH RECURSIVE path(id,prefix_ref) AS (SELECT id,prefix_ref FROM logical_progress WHERE id=?
-    UNION ALL SELECT p.id,p.prefix_ref FROM path x JOIN logical_progress p ON p.id=x.prefix_ref)
-    SELECT p.start_odometer_m,p.truck_ref,p.quantity_flags FROM path x JOIN logical_progress p ON p.id=x.id WHERE x.prefix_ref IS NULL LIMIT 1`, point.id);
+  // The deepest row of the depth-capped path (ACCOUNTING_PATH's bound): the first run, unless the path was truncated.
+  const first = get(db, `WITH RECURSIVE path(id,prefix_ref,depth) AS (SELECT id,prefix_ref,0 FROM logical_progress WHERE id=?
+    UNION ALL SELECT p.id,p.prefix_ref,x.depth+1 FROM path x JOIN logical_progress p ON p.id=x.prefix_ref WHERE x.depth<256)
+    SELECT p.start_odometer_m,p.truck_ref,p.quantity_flags,x.prefix_ref IS NOT NULL AS truncated
+    FROM path x JOIN logical_progress p ON p.id=x.id ORDER BY x.depth DESC LIMIT 1`, point.id);
   const anchor = get(db, `SELECT s.odometer_m,s.trip_ref=l.latest_trip_ref AS latest FROM samples s JOIN logical_trips l ON l.id=? WHERE s.id=?`,
     point.logical_ref, point.anchor_sample_ref);
   const end = real(anchor?.odometer_m), start = real(first?.start_odometer_m);
   // The end must be a reading of the trip's latest recording: an older anchor (a gap row of an unreplayed member) is stale.
-  if (!first || !anchor?.latest || first.quantity_flags === null || Number(first.quantity_flags) & F.distanceGap || first.truck_ref === null
+  if (!first || first.truncated || !anchor?.latest || first.quantity_flags === null || Number(first.quantity_flags) & F.distanceGap || first.truck_ref === null
     || first.truck_ref !== sampleTruckRef(db, point.anchor_sample_ref) || start === null || end === null || end < start) return ledger;
   return {value: end - start, flags: flags & ~COVERED_BREAKS};
 }

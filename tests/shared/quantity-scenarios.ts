@@ -66,12 +66,17 @@ export const QUANTITY_SCENARIOS: readonly QuantityScenario[] = [
     readings: [...base(3), s(10, {fuelL: 399.90}), s(11, {fuelL: 399.89})],
     expected: {distanceM: 220, distance: 'complete', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceBridged', 'fuelHole'], cut: false}},
   // The linked t10 reading has k2's position after 160 odometer metres: a jump, not continuous movement.
-  {id: 'Q2-jump', description: 'a linked 8 s hole whose step is not continuous breaks distance and starts a new run',
+  // The step is also a jump, so the trip keeps the ledger's partial subtotal instead of the odometer difference.
+  {id: 'Q2-jump', description: 'a linked 8 s hole whose step is not continuous breaks distance as a jump and starts a new run',
     readings: [...base(3), s(10, {fuelL: 399.90, x: 40}), s(11, {fuelL: 399.89, x: 60})],
-    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false, trip: {distanceM: 220, distance: 'complete'}}},
+    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceJump', 'distanceHole', 'fuelHole'], cut: false}},
   {id: 'Q2-unlinked', description: 'an 8 s hole without the recorder link breaks distance; both subtotals carry',
     readings: [...base(3), s(10, {fuelL: 399.90, linked: false}), s(11, {fuelL: 399.89})],
     expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false, trip: {distanceM: 220, distance: 'complete'}}},
+  // As Q2-jump without the link: a teleport while the recorder was disconnected is a jump too.
+  {id: 'Q2-unlinked-jump', description: 'an 8 s hole without the recorder link whose step is not continuous breaks distance as a jump',
+    readings: [...base(3), s(10, {fuelL: 399.90, x: 40, linked: false}), s(11, {fuelL: 399.89, x: 60})],
+    expected: {distanceM: 60, distance: 'partial', fuelUsedL: 0.03, fuel: 'partial', flags: ['distanceJump', 'distanceHole', 'fuelHole'], cut: false}},
   {id: 'Q3', description: 'a stationary refuel of 200 L counts consumption only',
     readings: [100.00, 99.99, 299.99, 299.98].map((fuelL, k) => s(k, {odometerM: 1000, x: 0, speedMps: 0, fuelL})),
     expected: {distanceM: 0, distance: 'complete', fuelUsedL: 0.02, fuel: 'complete', flags: ['fuelRefuelExcluded'], cut: false}},
@@ -115,6 +120,16 @@ export const QUANTITY_SCENARIOS: readonly QuantityScenario[] = [
   {id: 'Q8-tie', description: 'a load equally close to two stopped save points keeps the newer one',
     readings: rollback({stops: EXACT_STOPS, fuel: [399.96484375, 399.95484375, 399.94484375]}),
     expected: {distanceM: 100, distance: 'complete', fuelUsedL: 0.0590625, fuel: 'complete', flags: ['distanceRestored'], cut: true}},
+  // Q8 after the Q2-unlinked hole: k0-k2 to 1040 m, the hole to k10 at 1200 m, k11 and k12 stopped at 1220 m, driven to
+  // 1260 m, a load back to k12 (0.2 ml from its fuel) and driven to 1260 m again. The ledger keeps 40 + 20 + 40 = 100 m
+  // with the hole; the trip is the odometer difference 1260 - 1000 = 260 m, which includes the hole's 160 m and counts the
+  // driving undone by the load once, not twice. Fuel: 0.02 L before the hole, 0.011 L to k12, then 0.02 L after the load.
+  {id: 'Q8-hole', description: 'a save load after a reading hole restores the run after the hole; the trip is the odometer difference',
+    readings: [...base(3), s(10, {fuelL: 399.90, linked: false}), s(11, {odometerM: 1220, fuelL: 399.89, x: 220, speedMps: 0}),
+      s(12, {odometerM: 1220, fuelL: 399.889, x: 220, speedMps: 0}), s(13, {odometerM: 1240, fuelL: 399.879, x: 240}), s(14, {odometerM: 1260, fuelL: 399.869, x: 260}),
+      s(15, {odometerM: 1220, fuelL: 399.8892, x: 220, speedMps: 0, gameClock: CLOCK_B, linked: false}), s(16, {odometerM: 1240, fuelL: 399.8792, x: 240, gameClock: CLOCK_B}),
+      s(17, {odometerM: 1260, fuelL: 399.8692, x: 260, gameClock: CLOCK_B})],
+    expected: {distanceM: 100, distance: 'partial', fuelUsedL: 0.051, fuel: 'partial', flags: ['distanceHole', 'distanceRestored', 'fuelHole'], cut: true, trip: {distanceM: 260, distance: 'complete'}}},
   // k4 drives back to k2's odometer, position and fuel on the same game clock; k2 is the moving save point (0.02 L).
   {id: 'Q8-running', description: 'an odometer regression inside a running step restores the run of its member like a load',
     readings: [...base(4), s(4, {odometerM: 1040, fuelL: 399.98, x: 40}), s(5, {odometerM: 1060, fuelL: 399.97, x: 60})],

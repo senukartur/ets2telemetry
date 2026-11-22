@@ -250,16 +250,14 @@ const JOURNAL_NAMES: Record<QuantityFlagName, ['distance' | 'fuel', 'breaks' | '
   fuelHole: ['fuel', 'breaks', 'reading-hole'], fuelTransfer: ['fuel', 'breaks', 'transfer'], fuelBoundary: ['fuel', 'breaks', 'recording-boundary'],
   fuelUnproven: ['fuel', 'breaks', 'unsupported'], fuelRefuelExcluded: ['fuel', 'quality', 'refuel-excluded']
 };
-/** Breaks that the odometer difference covers: they leave a trip distance shown by the difference. */
-const COVERED: readonly QuantityFlagName[] = ['distanceHole', 'distanceGap'];
 /**
- * The expected trip provenance: the corpus statuses with the names of the expected bits in contract order. A trip
- * distance by the odometer difference reports its own status, without the breaks it covers.
+ * The expected trip provenance: the corpus statuses with the names of the expected bits in contract order. A complete
+ * trip distance by the odometer difference has no distance breaks.
  */
 function accountingOf(expected: QuantityExpectation) {
   const names = (quantity: 'distance' | 'fuel', kind: 'breaks' | 'quality') => (Object.keys(JOURNAL_NAMES) as QuantityFlagName[])
     .filter(flag => expected.flags.includes(flag) && JOURNAL_NAMES[flag][0] === quantity && JOURNAL_NAMES[flag][1] === kind)
-    .filter(flag => !(expected.trip && COVERED.includes(flag))).map(flag => JOURNAL_NAMES[flag][2]);
+    .filter(() => !(expected.trip && quantity === 'distance' && kind === 'breaks')).map(flag => JOURNAL_NAMES[flag][2]);
   return {engine: 1, distance: {status: expected.trip?.distance ?? expected.distance, breaks: names('distance', 'breaks'), quality: names('distance', 'quality')},
     fuel: {status: expected.fuel, breaks: names('fuel', 'breaks'), quality: names('fuel', 'quality')}};
 }
@@ -572,6 +570,30 @@ describe('REG-003/005/006/014 engine 1 storage lifecycle', () => {
     const found = upload(storage, members[0].uuid);
     expect(found.observedDistance).toEqual({available: true, value: 220, unit: 'm'});
     expect(found.summary?.distance).toBe('complete');
+  });
+  // Each guard of the odometer difference, made to fail on Q2-unlinked's stored ledger: the trip then keeps the ledger's
+  // 60 m before the hole as partial. `first` is the row the head's prefix points at: the end of the first run.
+  it.each([
+    ['a lower end odometer', 'UPDATE samples SET odometer_m=900 WHERE id=@anchor'],
+    ['a first run that is itself a gap point', 'UPDATE logical_progress SET quantity_flags=quantity_flags|16 WHERE id=@first'],
+    ['a different truck at the two ends', `INSERT INTO logical_trucks(identity_key) VALUES('tampered');
+      UPDATE logical_progress SET truck_ref=(SELECT id FROM logical_trucks WHERE identity_key='tampered') WHERE id=@first`],
+    ['a prefix cycle, cut off at 256 steps', 'UPDATE logical_progress SET prefix_ref=@head WHERE id=@first']
+  ] as const)('keeps the ledger subtotal when the odometer difference is not supported: %s', async (_name, tamper) => {
+    let storage = await ws.open();
+    const {root} = record(storage, scenario('Q2-unlinked').readings);
+    ok(storage.close());
+    const db = new Database(ws.database);
+    try {
+      const {logical} = db.prepare('SELECT m.logical_ref AS logical FROM trips t JOIN logical_memberships m ON m.trip_ref=t.id WHERE t.trip_uuid=?').get(root) as {logical: number};
+      const head = db.prepare('SELECT p.id,p.prefix_ref,p.anchor_sample_ref FROM logical_trips l JOIN logical_progress p ON p.id=l.progress_head WHERE l.id=?').get(logical) as Record<string, number>;
+      const values = {head: head.id, first: head.prefix_ref, anchor: head.anchor_sample_ref};
+      for (const sql of tamper.split(';')) db.prepare(sql).run(...(sql.includes('@') ? [values] : []));
+    } finally { db.close(); }
+    storage = await ws.open();
+    const detail = validateJournalTripDetail(ok(storage.journalTrip(root)));
+    expect(detail.trip.observedDistanceM).toEqual({available: true, value: near(60)});
+    expect(detail.trip.accounting?.distance).toEqual({status: 'partial', breaks: ['reading-hole'], quality: []});
   });
   it.each([
     ['Q5', 'open', [{distanceFlags: F.distanceTruck, fuelFlags: F.fuelTruck}]],

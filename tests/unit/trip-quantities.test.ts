@@ -100,10 +100,14 @@ describe('REG-008/009 engine 1 distance and fuel corpus', () => {
     const member = fold(scenario('Q8-running-member').readings).advances.at(-1)!;
     expect([member.cut, member.unproven]).toEqual([null, true]);
   });
-  it('Q2-jump starts a new run at the linked hole that is not continuous', () => {
+  it('Q2-jump starts a new run at the linked hole that is not continuous and marks it a jump', () => {
     const {advances} = fold(scenario('Q2-jump').readings);
-    expect(advances.map(advance => [advance.run, advance.added])).toEqual([['new', 0], ['continue', 0], ['continue', 0], ['new', F.distanceHole | F.fuelHole], ['continue', 0]]);
+    expect(advances.map(advance => [advance.run, advance.added])).toEqual([['new', 0], ['continue', 0], ['continue', 0], ['new', F.distanceJump | F.distanceHole | F.fuelHole], ['continue', 0]]);
     expect(advances[3].point!.flags & F.linked).toBe(F.linked);
+  });
+  it('marks only a hole step that is not continuous a jump, with or without the link', () => {
+    const added = (id: string) => fold(scenario(id).readings).advances[3].added;
+    expect([added('Q2-unlinked'), added('Q2-unlinked-jump')]).toEqual([F.distanceHole | F.fuelHole, F.distanceJump | F.distanceHole | F.fuelHole]);
   });
   it('Q9 is unproven at the load and stays unavailable after a later load to a retained point', () => {
     // After Q9: on to 1100 m, then a load back to 1020 m, inside the first retained run; its k1 is the same save point.
