@@ -59,25 +59,37 @@ const sampleTruckRef = (db: Database.Database, sample: unknown) => get(db, 'SELE
 
 /**
  * The step from the last complete anchor `a` to `b`: another raw member, a source, capture or game clock change or a
- * non-positive time, or running time since the later of `a` and the latest simulation start, up to the first
- * simulation pause after it or `b`, with a ferry or train event in (a, b] on the same capture clock (one with an unknown
- * time cannot be placed and is ignored) and the recorder link. A paused stretch is not running time (T17), also when
- * the sample is stored before its resume event: protocol v1 lets a snapshot's state lead the event store, and the
- * emergency journal stores each sample right after its snapshot.
+ * non-positive time, or the running time in (a, b], with a ferry or train event in (a, b] on the same capture clock (one
+ * with an unknown time cannot be placed and is ignored) and the recorder link.
  */
 function stepOf(db: Database.Database, a: Stored, b: Stored, linked: boolean): QuantityStep {
   if (a.trip !== b.trip) return {kind: 'member'};
   const x = a.anchor, y = b.anchor;
   if (x.pluginSessionId !== y.pluginSessionId || x.sourceClockId !== y.sourceClockId || x.gameClockId !== y.gameClockId || BigInt(y.monotonicNs) <= BigInt(x.monotonicNs)) return {kind: 'boundary'};
   const range = [b.session, b.clock, x.monotonicNs.padStart(20, '0'), y.monotonicNs.padStart(20, '0')];
-  const started = get(db, `SELECT max(occurred_monotonic_ns) AS at FROM events WHERE plugin_session_id=? AND type='simulation.started' AND source_clock_ref=?
-    AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=?`, ...range)!.at;
-  const from = (started ?? range[2]) as string;
-  const paused = get(db, `SELECT min(occurred_monotonic_ns) AS at FROM events WHERE plugin_session_id=? AND type='simulation.paused' AND source_clock_ref=?
-    AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=?`, b.session, b.clock, from, range[3])!.at;
   const transfer = get(db, `SELECT 1 FROM events WHERE plugin_session_id=? AND type IN ('player.use.ferry','player.use.train') AND source_clock_ref=?
     AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=? LIMIT 1`, ...range) !== undefined;
-  return {kind: 'running', seconds: Number(BigInt(paused === null ? y.monotonicNs : paused as string) - BigInt(from)) / 1e9, transfer, linked};
+  return {kind: 'running', seconds: Number(runningNs(db, range, BigInt(x.monotonicNs), BigInt(y.monotonicNs))) / 1e9, transfer, linked};
+}
+/**
+ * T17, as the reducer's RunClock: the running simulation time from `from` (a sample, so running) to `to`, switched by
+ * the `occurred_simulation` of each stored event in (from, to] on the capture clock, at its source time, in stream order.
+ * Every running segment counts, and a paused stretch never does, whether or not the resume event is stored yet: protocol
+ * v1 lets a snapshot's state lead the event store, and the emergency journal stores each sample right after its snapshot,
+ * so a resumed reading can be stored before its `simulation.started` and the reconstruction later sees it. Both orders
+ * give the same running time up to the resume-to-reading sliver. Rows are streamed: a long pause costs no memory.
+ */
+function runningNs(db: Database.Database, range: unknown[], from: bigint, to: bigint): bigint {
+  let running = true, mark = from, total = 0n;
+  const events = statement(db, `SELECT occurred_monotonic_ns AS at, occurred_simulation AS simulation FROM events WHERE plugin_session_id=? AND source_clock_ref=?
+    AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=? ORDER BY occurred_monotonic_ns, event_seq`).iterate(...range) as IterableIterator<Row>;
+  for (const event of events) {
+    const at = BigInt(event.at as string), now = event.simulation === 'running';
+    if (running && !now) total += at - mark;
+    else if (!running && now) mark = at;
+    running = now;
+  }
+  return running ? total + to - mark : total;
 }
 
 /**
