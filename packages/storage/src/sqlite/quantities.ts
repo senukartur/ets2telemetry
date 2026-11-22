@@ -59,8 +59,11 @@ const sampleTruckRef = (db: Database.Database, sample: unknown) => get(db, 'SELE
 
 /**
  * The step from the last complete anchor `a` to `b`: another raw member, a source, capture or game clock change or a
- * non-positive time, or running time since the later of `a` and the latest simulation start, with a ferry or train event
- * in (a, b] on the same capture clock (one with an unknown time cannot be placed and is ignored) and the recorder link.
+ * non-positive time, or running time since the later of `a` and the latest simulation start, up to the first
+ * simulation pause after it or `b`, with a ferry or train event in (a, b] on the same capture clock (one with an unknown
+ * time cannot be placed and is ignored) and the recorder link. A paused stretch is not running time (T17), also when
+ * the sample is stored before its resume event: protocol v1 lets a snapshot's state lead the event store, and the
+ * emergency journal stores each sample right after its snapshot.
  */
 function stepOf(db: Database.Database, a: Stored, b: Stored, linked: boolean): QuantityStep {
   if (a.trip !== b.trip) return {kind: 'member'};
@@ -69,9 +72,12 @@ function stepOf(db: Database.Database, a: Stored, b: Stored, linked: boolean): Q
   const range = [b.session, b.clock, x.monotonicNs.padStart(20, '0'), y.monotonicNs.padStart(20, '0')];
   const started = get(db, `SELECT max(occurred_monotonic_ns) AS at FROM events WHERE plugin_session_id=? AND type='simulation.started' AND source_clock_ref=?
     AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=?`, ...range)!.at;
+  const from = (started ?? range[2]) as string;
+  const paused = get(db, `SELECT min(occurred_monotonic_ns) AS at FROM events WHERE plugin_session_id=? AND type='simulation.paused' AND source_clock_ref=?
+    AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=?`, b.session, b.clock, from, range[3])!.at;
   const transfer = get(db, `SELECT 1 FROM events WHERE plugin_session_id=? AND type IN ('player.use.ferry','player.use.train') AND source_clock_ref=?
     AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=? LIMIT 1`, ...range) !== undefined;
-  return {kind: 'running', seconds: Number(BigInt(y.monotonicNs) - BigInt(started === null ? x.monotonicNs : started as string)) / 1e9, transfer, linked};
+  return {kind: 'running', seconds: Number(BigInt(paused === null ? y.monotonicNs : paused as string) - BigInt(from)) / 1e9, transfer, linked};
 }
 
 /**
