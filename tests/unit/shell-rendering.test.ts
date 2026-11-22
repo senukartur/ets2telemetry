@@ -19,7 +19,7 @@ vi.mock('@/components/ui/badge', () => ({
 
 const ROUTES = ['live', 'hardMode', 'journal', 'settings', 'account'] as const satisfies readonly ShellRoute[];
 const nav = (route: ShellRoute, language: AppLanguage) => renderToStaticMarkup(React.createElement(SidebarNav, {route, language, onNavigate: () => undefined}));
-const chips = {connection: {text: 'ETS2 · Single-player', tone: 'ok'}, plugin: {text: 'Plugin 2/2', tone: 'ok'}, hardMode: {text: 'Hard Mode 10/12', tone: 'warn'}} as const;
+const chips = {connection: {text: 'ETS2 · Single-player', tone: 'ok'}, plugin: {text: 'Plugin 2/2', tone: 'ok'}, hardMode: {text: 'Hard Mode 10/13', tone: 'warn'}} as const;
 const bar = (route: ShellRoute, language: AppLanguage, sync?: React.ReactNode) => renderToStaticMarkup(React.createElement(TopBar, {route, language, ...chips}, sync));
 
 it.each([
@@ -53,7 +53,7 @@ it.each([
   const html = bar('live', language);
   expect([...html.matchAll(/data-testid="(shell\.status\.[a-zA-Z]+)"/g)].map(match => match[1])).toEqual(['shell.status.connection', 'shell.status.plugin', 'shell.status.hardMode']);
   expect(html).toContain('data-variant="ok"><span class="yu-chip-dot" aria-hidden="true"></span>ETS2 · Single-player</span>');
-  expect(html).toMatch(/data-testid="shell.status.hardMode" data-variant="warn"><svg[^>]*lucide-flame[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Hard Mode 10\/12<\/span>/);
+  expect(html).toMatch(/data-testid="shell.status.hardMode" data-variant="warn"><svg[^>]*lucide-flame[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Hard Mode 10\/13<\/span>/);
 });
 
 it('shows the site sync chip last and only when synchronization is configured', () => {

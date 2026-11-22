@@ -1,5 +1,6 @@
 // Persisted-settings evidence only. No paths, profile names or raw configuration crosses this contract.
-export const HARD_MODE_RULE_IDS = ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic'] as const;
+const LEGACY_RULE_IDS = ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic'] as const;
+export const HARD_MODE_RULE_IDS = [...LEGACY_RULE_IDS, 'coupling'] as const;
 export type HardModeRuleId = typeof HARD_MODE_RULE_IDS[number];
 export type HardModeReason = 'compliant' | 'outside-limit' | 'missing' | 'malformed' | 'conflicting' | 'source-unproven' | 'interrupted' | 'historical' | 'source-changed' | 'parking-unproven';
 export interface HardModeRule {id: HardModeRuleId; state: 'pass' | 'fail' | 'unknown'; values: (number | null)[]; reason: HardModeReason}
@@ -40,21 +41,31 @@ const reasons: readonly unknown[] = ['compliant', 'outside-limit', 'missing', 'm
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const exact = (v: unknown, keys: string[]): v is Record<string, unknown> => record(v) && Object.keys(v).sort().join(',') === keys.sort().join(',');
 const time = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
-export function isHardModeAssessment(v: unknown): v is HardModeAssessment {
+function assessmentMatches(v: unknown, ruleIds: readonly HardModeRuleId[]): v is HardModeAssessment {
   if (!exact(v, ['observedUtcMs', 'state', 'source', 'rules']) || !time(v.observedUtcMs) || !['pass', 'fail', 'unknown'].includes(v.state as string)
-    || !['local', 'cloud', 'fixture', 'unknown'].includes(v.source as string) || !Array.isArray(v.rules) || v.rules.length !== 12) return false;
-  if (!v.rules.every((r: unknown, i) => exact(r, ['id', 'state', 'values', 'reason']) && r.id === HARD_MODE_RULE_IDS[i]
-    && ['pass', 'fail', 'unknown'].includes(r.state as string) && reasons.includes(r.reason) && Array.isArray(r.values)
-    && r.values.length === (r.id === 'parking' ? 2 : 1) && r.values.every((n: unknown) => n === null || typeof n === 'number' && Number.isFinite(n)))) return false;
+    || !['local', 'cloud', 'fixture', 'unknown'].includes(v.source as string) || !Array.isArray(v.rules) || v.rules.length !== ruleIds.length) return false;
+  const items: unknown[] = v.rules;
+  if (!ruleIds.every((id, i) => {
+    const r = items[i];
+    return exact(r, ['id', 'state', 'values', 'reason']) && r.id === id
+      && ['pass', 'fail', 'unknown'].includes(r.state as string) && reasons.includes(r.reason) && Array.isArray(r.values)
+      && r.values.length === (id === 'parking' ? 2 : 1) && r.values.every((n: unknown) => n === null || typeof n === 'number' && Number.isFinite(n));
+  })) return false;
   const rules = v.rules as HardModeRule[];
   return v.state === (rules.some(r => r.state === 'unknown') ? 'unknown' : rules.every(r => r.state === 'pass') ? 'pass' : 'fail')
     && rules.every(r => r.state === 'pass' ? r.reason === 'compliant' && r.values.every(n => n !== null) : r.state === 'fail' ? r.reason === 'outside-limit' && r.values.every(n => n !== null) : r.reason !== 'compliant' && r.reason !== 'outside-limit');
 }
+export function isHardModeAssessment(v: unknown): v is HardModeAssessment {
+  return assessmentMatches(v, HARD_MODE_RULE_IDS);
+}
+function isSavedAssessment(v: unknown): v is HardModeAssessment {
+  return isHardModeAssessment(v) || assessmentMatches(v, LEGACY_RULE_IDS);
+}
 function isHardModeDetailsV1(v: unknown): v is HardModeDetailsV1 {
-  if (!exact(v, ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery']) || v.version !== 1 || !(v.binding === null || typeof v.binding === 'string' && /^[0-9a-f]{64}$/.test(v.binding)) || !isHardModeAssessment(v.opening) || !isHardModeAssessment(v.latest)
+  if (!exact(v, ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery']) || v.version !== 1 || !(v.binding === null || typeof v.binding === 'string' && /^[0-9a-f]{64}$/.test(v.binding)) || !assessmentMatches(v.opening, LEGACY_RULE_IDS) || !assessmentMatches(v.latest, LEGACY_RULE_IDS)
     || !(v.manualDelivery === null || typeof v.manualDelivery === 'boolean')) return false;
   return v.firstLoss === null || exact(v.firstLoss, ['atUtcMs', 'reason', 'rule', 'values']) && time(v.firstLoss.atUtcMs) && reasons.includes(v.firstLoss.reason)
-    && v.firstLoss.reason !== 'compliant' && (v.firstLoss.rule === null || HARD_MODE_RULE_IDS.includes(v.firstLoss.rule as HardModeRuleId))
+    && v.firstLoss.reason !== 'compliant' && (v.firstLoss.rule === null || LEGACY_RULE_IDS.includes(v.firstLoss.rule as typeof LEGACY_RULE_IDS[number]))
     && (v.firstLoss.values === null || Array.isArray(v.firstLoss.values) && v.firstLoss.values.length === (v.firstLoss.rule === 'parking' ? 2 : 1) && v.firstLoss.values.every((n: unknown) => n === null || typeof n === 'number' && Number.isFinite(n)));
 }
 const uuid = (v: unknown) => typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
@@ -74,7 +85,7 @@ export function isHardModeDetails(v: unknown): v is HardModeDetails {
   if (record(v) && v.version === 1) return isHardModeDetailsV1(v);
   return exact(v, ['version', 'binding', 'opening', 'latest', 'firstLoss', 'manualDelivery', 'passingChecks', 'failingChecks', 'unknownChecks', 'checkpoint', 'firstDiagnostic', 'latestDiagnostic'])
     && v.version === 2 && (v.binding === null || typeof v.binding === 'string' && /^[0-9a-f]{64}$/.test(v.binding))
-    && isHardModeAssessment(v.opening) && isHardModeAssessment(v.latest) && v.firstLoss === null && v.manualDelivery === null && counts(v)
+    && isSavedAssessment(v.opening) && isSavedAssessment(v.latest) && v.firstLoss === null && v.manualDelivery === null && counts(v)
     && (v.checkpoint === null || isHardModeCheckBatch(v.checkpoint) && v.checkpoint.passingChecks <= Number(v.passingChecks)
       && v.checkpoint.failingChecks <= Number(v.failingChecks) && v.checkpoint.unknownChecks <= Number(v.unknownChecks))
     && diagnostic(v.firstDiagnostic) && diagnostic(v.latestDiagnostic) && (v.firstDiagnostic === null) === (v.latestDiagnostic === null);

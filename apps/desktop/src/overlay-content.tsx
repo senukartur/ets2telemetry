@@ -17,7 +17,7 @@ function Value({item}: {item: OverlayItem}) {
     {item.detail ? <span className="overlay-detail" data-testid={item.detailTestId}>{item.detail}</span> : null}
   </span>;
 }
-/** The card and cluster row value of the Hard Mode indicator ("12/12", "N/12", empty or "lost") and its cue slot (ET-070). */
+/** The card and cluster row value of the Hard Mode indicator ("13/13", "N/13", empty or "lost") and its cue slot (ET-070). */
 function HardModeValue({item,qualification}: {item: OverlayHardModeItem;qualification?:OverlayView['qualification']}) {
   return <span className="overlay-value-group"><strong className="overlay-value">{item.rowValue}</strong><HardModeCue cue={item.cue} />{qualification?<QualificationMedal cue={qualification.cue} label={qualification.name}/>:null}</span>;
 }

@@ -234,13 +234,13 @@ it('delivers a valid Hard Mode indicator unchanged and turns a malformed one int
   port.deliver(active, 1); expect(receive.mock.lastCall?.[0]).toEqual(active);
   const as = (hardMode: unknown): OverlayPresentation => ({...active, hardMode: hardMode as OverlayPresentation['hardMode']});
   const cases: [OverlayPresentation, OverlayPresentation][] = [
-    [as({state: 'inactive', passed: 11}), as({state: 'inactive', passed: 11})],
+    [as({state: 'inactive', passed: 12}), as({state: 'inactive', passed: 12})],
     [as({state: 'lost'}), as({state: 'lost'})],
     [as({state: 'active', passed: 12}), as({state: 'inactive'})],
     [as({state: 'ACTIVE'}), as({state: 'inactive'})],
     [as('active'), as({state: 'inactive'})],
     [as(null), as({state: 'inactive'})],
-    [as({state: 'inactive', passed: 12}), as({state: 'inactive'})],
+    [as({state: 'inactive', passed: 13}), as({state: 'inactive'})],
     [as({state: 'inactive', passed: 2.5}), as({state: 'inactive'})],
     [as(Object.defineProperty({}, 'state', {get: () => 'active', enumerable: true})), as({state: 'inactive'})],
     [projected, projected]

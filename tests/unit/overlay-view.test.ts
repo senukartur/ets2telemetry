@@ -245,7 +245,7 @@ it('localizes the break text in Russian and ignores an urgency on any other sect
 it('keeps the Hard Mode indicator apart from the sections and shows anything but valid evidence as not active', () => {
   for (const layout of ['strip', 'card', 'cluster', 'hud'] as const) {
     const view = overlayView({...base, layout, hardMode: {state: 'active'}});
-    expect(view.hardMode, layout).toMatchObject({testId: 'overlay-hard-mode', state: 'active', name: 'Hard Mode active, 12 of 12'});
+    expect(view.hardMode, layout).toMatchObject({testId: 'overlay-hard-mode', state: 'active', name: 'Hard Mode active, 13 of 13'});
     expect(view.items.map(item => item.id), layout).toEqual(['speed', 'rpm', 'fuel', 'sdk-consumption', 'cargo', 'game-time']);
     const parts = overlayCardParts(view);
     expect(JSON.stringify([view.items, view.groups, view.panel, view.gauge ?? null, parts.hero, parts.rows]), layout).not.toMatch(/hard-mode|Hard Mode|HM/);

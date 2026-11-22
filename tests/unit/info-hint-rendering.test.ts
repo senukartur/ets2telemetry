@@ -32,7 +32,7 @@ it('uses a given id, so a control can be described by the same text', () => {
 it('shows inline failure detail and cvar name for a failing Hard Mode rule, and the caveats behind one hint', () => {
   const assessment = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), 0, 'fixture');
   const html = renderToStaticMarkup(React.createElement(HardModeCard, {language: 'en', controller: {status: {assessment, trip: null, verification: {state: 'verified', reason: null, checking: false, lastCheck: null}}, now: 0, busy: false, error: false, loaded: true, check: () => undefined}}));
-  expect(html.match(/data-testid="hard-mode-rule-[a-z]+"/g)).toHaveLength(12);
+  expect(html.match(/data-testid="hard-mode-rule-[a-z]+"/g)).toHaveLength(13);
   expect(html.match(/data-testid="hard-mode-detail-rule-[a-z]+"/g)).toEqual(['data-testid="hard-mode-detail-rule-fatigue"']);
   expect(html).toContain('data-testid="hard-mode-detail-rule-fatigue"><p>Now Off · required On</p></div>');
   // A failing rule makes the in-game fix visible and names it; the caveats are the headline hint's description, not a paragraph.

@@ -7,6 +7,19 @@ const trip = advanceHardMode(null, assessment);
 const VERIFIED = {state: 'verified', reason: null, checking: false, lastCheck: null} as const;
 const publication = (remainingNs = '3000000000') => ({type: 'hard-mode', update: 'assessment', assessment, verification: VERIFIED, remainingNs});
 const tripUpdate = {type: 'hard-mode', update: 'trip', trip};
+it('keeps a legacy trip audit readable while rejecting legacy or reordered current observations', () => {
+  const cache = new HardModeServiceCache(() => 0n);
+  try {
+    cache.accept(tripUpdate);
+    cache.accept(publication());
+    expect(cache.status(true)).toMatchObject({assessment: {state: 'pass'}, trip});
+    expect(trip.opening.rules).toHaveLength(12);
+    for (const rules of [trip.opening.rules, [...assessment.rules].reverse()]) {
+      cache.accept({...publication(), assessment: {...assessment, rules}});
+      expect(cache.status(true)).toMatchObject({assessment: {state: 'unknown'}, trip});
+    }
+  } finally {cache.retire();}
+});
 afterEach(() => vi.restoreAllMocks());
 describe('private Hard Mode relative display lifetime', () => {
   it('keeps an old verified assessment while memory health publications continue and expires after they stop',()=>{

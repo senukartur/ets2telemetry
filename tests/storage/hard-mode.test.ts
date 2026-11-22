@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {StorageClient, workerHandle} from '../../packages/storage/src/client';
 import {TripRecorderSink} from '../../apps/desktop/src/trip-recorder';
-import {advanceHardMode, evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardMode, evaluateHardMode, newHardModeDetails, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import type {HardModeObservation} from '../../packages/contracts/src/hard-mode';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import {TripExportSerializer, tripExportHeader} from '../../apps/desktop/src/journal-export';
@@ -68,7 +68,7 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
   });
   it.each(['truck', 'trailer'] as const)('keeps the original raw %s stability diagnostic through restoration and export', async id => {
     const f = await setup(), raw = id === 'truck' ? 0.255 : 0.26;
-    const failed = evidence(HARD_MODE_CONFIG.replace(`g_${id}_stability "0.25"`, `g_${id}_stability "${raw}"`));
+    const failed = evidence(HARD_MODE_CONFIG.replace(`g_${id}_stability "0"`, `g_${id}_stability "${raw}"`));
     ok(await f.observe( failed, true));
     ok(await f.observe( evidence(), true)); await f.send(manual());
     const trip = ok(await client.getTrip(f.trip))!;
@@ -83,15 +83,16 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     const f = await setup(); await f.send(r.cancelled());
     expect(ok(await client.getTrip(f.trip))).toMatchObject({outcome: 'cancelled', isHardMode: false, hardModeDetails: {firstLoss: null, manualDelivery: null}});
   });
-  it.each([false, true])('preserves saved qualification and legacy parking evidence across reopen (qualified=%s)', async qualified => {
+  it.each([[1, false], [1, true], [2, true]] as const)('preserves saved version-%s evidence and qualification across reopen (qualified=%s)', async (version, qualified) => {
     const f = await setup(); await f.send(manual());
-    const saved = advanceHardMode(null, ok(await client.getTrip(f.trip))!.hardModeDetails!.opening);
-    for (const assessment of [saved.opening, saved.latest]) {
-      for (const rule of assessment.rules) if (rule.id === 'truck' || rule.id === 'trailer') rule.values = [0.5];
+    const legacy = advanceHardMode(null, ok(await client.getTrip(f.trip))!.hardModeDetails!.opening);
+    for (const assessment of [legacy.opening, legacy.latest]) {
+      for (const rule of assessment.rules) if (rule.id === 'truck' || rule.id === 'trailer') rule.values = [0.25];
       assessment.rules[7].values = [0, 2];
     }
-    saved.manualDelivery = qualified;
-    saved.firstLoss = qualified ? null : {atUtcMs: 1000, reason: 'parking-unproven', rule: null, values: null};
+    legacy.manualDelivery = qualified;
+    legacy.firstLoss = qualified ? null : {atUtcMs: 1000, reason: 'parking-unproven', rule: null, values: null};
+    const saved = version === 1 ? legacy : {...newHardModeDetails(legacy.opening, legacy.binding), passingChecks: 19, failingChecks: 1};
     expect(await client.close()).toEqual({clean: true}); await worker.terminate();
     // Emulate earlier saved audits only in this test's temporary database; frozen historical fixtures stay untouched.
     const db = new Database(ws.database), text = JSON.stringify(saved);
@@ -108,11 +109,15 @@ describe('ET-026 worker classification (REG-001/003/005/006/007/014)', () => {
     const trip = ok(await client.getTrip(f.trip))!;
     expect(trip).toMatchObject({isHardMode: qualified, hardModeDetails: saved});
     expect(ok(await client.journalTrips()).trips[0].isHardMode).toBe(qualified);
-    const audit = ok(await client.journalTrip(f.trip)).trip.hardModeDetails!;
+    const detail = ok(await client.journalTrip(f.trip));
+    const audit = detail.trip.hardModeDetails!;
     expect(audit).toEqual(saved);
     const before = structuredClone(audit);
-    expect(hardModeView({assessment: audit.latest, trip: audit}, 2000).rows[5]).toMatchObject({state: 'pass', detected: '100% (0.5)'});
+    expect(hardModeView({assessment: audit.latest, trip: audit}, 2000).rows[5]).toMatchObject({state: 'pass', detected: '50% (0.25)'});
     expect(audit).toEqual(before);
+    const serializer = new TripExportSerializer(detail, tripExportHeader({uuid: '30000000-0000-4000-8000-000000000001', purpose: 'synthetic', schemaVersion: 6}, 'test', Date.now()));
+    const exportTrip = JSON.parse(serializer.begin() + serializer.end()).trip;
+    expect(exportTrip).toMatchObject({is_hard_mode: qualified, hard_mode_details: saved});
     expect(await client.close()).toEqual({clean: true});
     readOnly(ws.database, sql => expect(sql.prepare('SELECT is_hard_mode, hard_mode_details FROM trips').get()).toEqual({is_hard_mode: qualified ? 1 : 0, hard_mode_details: text}));
   });

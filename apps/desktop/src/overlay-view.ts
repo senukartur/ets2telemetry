@@ -66,8 +66,8 @@ export interface OverlayItem {
  * The fixed Hard Mode indicator (ET-070, owner decisions D1-D4), always the last element of every layout and never one of
  * the sections. `short` ("HM") is the strip and HUD label and `label` the card and cluster row label. `cue` is the
  * non-colour cue: a check when active, a cross when lost, none when not active (the strip keeps an empty slot of the same
- * width). `struck` strikes the strip and HUD label through on a loss. `rowValue` is the card and cluster value ("12/12",
- * "N/12", empty without a count, or the localized "lost"); `hudValue` is "N/12" only when not active with a count, since the
+ * width). `struck` strikes the strip and HUD label through on a loss. `rowValue` is the card and cluster value ("13/13",
+ * "N/13", empty without a count, or the localized "lost"); `hudValue` is "N/13" only when not active with a count, since the
  * strip never shows a count (D2). `name` is the accessible name with the state in words.
  */
 export type OverlayHardModeCue = 'check' | 'cross' | 'none';
@@ -153,12 +153,12 @@ export function overlayHardModeItem(value: unknown, language: AppLanguage = 'en'
   const base = {testId: 'overlay-hard-mode' as const, state: hardMode.state, label: strings.overlayHardModeLabel, short: strings.overlayHardModeShort};
   if (hardMode.state === 'active') {
     const count = `${OVERLAY_HARD_MODE_RULES}/${OVERLAY_HARD_MODE_RULES}`;
-    return {...base, cue: 'check', struck: false, rowValue: count, hudValue: '', name: strings.overlayHardModeActiveName};
+    return {...base, cue: 'check', struck: false, rowValue: count, hudValue: '', name: strings.overlayHardModeActiveName.replaceAll('{total}', String(OVERLAY_HARD_MODE_RULES))};
   }
   if (hardMode.state === 'lost') return {...base, cue: 'cross', struck: true, rowValue: strings.overlayHardModeLost, hudValue: '', name: strings.overlayHardModeLostName};
   if (hardMode.passed === undefined) return {...base, cue: 'none', struck: false, rowValue: '', hudValue: '', name: strings.overlayHardModeInactiveName};
   const count = `${hardMode.passed}/${OVERLAY_HARD_MODE_RULES}`;
-  return {...base, cue: 'none', struck: false, rowValue: count, hudValue: count, name: strings.overlayHardModeInactiveCountName.replace('{n}', String(hardMode.passed))};
+  return {...base, cue: 'none', struck: false, rowValue: count, hudValue: count, name: strings.overlayHardModeInactiveCountName.replace('{n}', String(hardMode.passed)).replace('{total}', String(OVERLAY_HARD_MODE_RULES))};
 }
 
 export function overlayView(presentation: OverlayPresentation = OVERLAY_PLACEHOLDER): OverlayView {

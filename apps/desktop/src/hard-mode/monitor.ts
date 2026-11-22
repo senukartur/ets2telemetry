@@ -3,7 +3,7 @@ import {ProfileVerificationError, ProfileSettingsUnavailableError, UnchangedVeri
 import type {HardModeDiagnosticCode, HardModeObservation, HardModeStatus, HardModeVerification, HardModeVerificationReason, HardModeVerificationResult} from '../../../../packages/contracts/src/hard-mode';
 import {HARD_MODE_COVERAGE_NS, type HardModeServiceMessage} from './service-status';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
-import {unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
+import {isLegacyHardModeProofPending, unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
 export const HARD_MODE_POLL_MS = 5000, HARD_MODE_DEADLINE_MS = 2000;
 export interface MonitorSource {source: SourceIdentity; monotonicNs: string; clockId?: string; gameClockId?: string; boundary?: {clockId: string; probeSentClientNs: string; receivedSourceNs: string}}
 /** Null/stale publications retire proof without turning an unchanged process into a new physical scan cadence. */
@@ -64,11 +64,11 @@ export class HardModeMonitor {
   private bindProof(): void {
     if (this.guard && !this.guard.eligible()) {this.retireProof(); return;}
     const pending = this.pendingProof, current = this.source, boundary = current?.boundary;
-    if (pending && this.nowNs() >= pending.deadlineClientNs) {pending.publish(this.unknown('guard-deadline'), this.nowNs()); this.retireProof(); return;}
+    if (pending && this.nowNs() >= pending.deadlineClientNs) {pending.publish(this.withoutCausalProof(pending.value, 'guard-deadline'), this.nowNs()); this.retireProof(); return;}
     if (!pending || !boundary || boundary.clockId !== current?.clockId || BigInt(boundary.probeSentClientNs) <= pending.completedClientNs) return;
     this.pendingProof = undefined;
     this.expireCoverage();
-    if (BigInt(boundary.receivedSourceNs) >= 18446744073709551615n) this.publish(this.unknown());
+    if (BigInt(boundary.receivedSourceNs) >= 18446744073709551615n) this.publish(this.withoutCausalProof(pending.value, 'profile-verification'));
     else pending.publish({...pending.value, sourceMonotonicNs: (BigInt(boundary.receivedSourceNs) + 1n).toString()}, pending.completedClientNs);
     pending.resolve();
   }
@@ -82,6 +82,10 @@ export class HardModeMonitor {
     private readonly publishHealth: () => void = () => undefined, private readonly drain: () => Promise<void> = () => Promise.resolve(),
     private readonly guard?: {eligible: () => boolean; select: (key: string | undefined) => void; deadline?: (source: SourceIdentity) => Error | undefined}) {}
   private unknown(diagnostic: HardModeDiagnosticCode = 'profile-verification'): HardModeObservation {return {diagnostic, assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
+  /** A nonpassing current assessment keeps its verdict when the optional proof for legacy trips is unavailable. */
+  private withoutCausalProof(value: HardModeObservation, diagnostic: HardModeDiagnosticCode): HardModeObservation {
+    return value.assessment.state === 'pass' ? this.unknown(diagnostic) : {...value, sourceMonotonicNs: null, diagnostic};
+  }
   private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.healthNs = this.nowNs(); this.changed(value);}
   private expired(): boolean {return this.observedClientNs === undefined || this.nowNs() < this.observedClientNs;}
   private expireCoverage(): void {
@@ -172,7 +176,14 @@ export class HardModeMonitor {
     let deadlineClientNs = startedNs + BigInt(HARD_MODE_DEADLINE_MS) * 1_000_000n;
     const epoch = this.epoch, controller = this.controller = new AbortController();
     this.activeEpoch = epoch;
-    const expire = () => {controller.abort(this.guard?.deadline?.(current.source)); if (epoch === this.epoch) {if (!this.retain()) complete(this.unknown('guard-deadline')); this.retireProof();}};
+    const expire = () => {
+      controller.abort(this.guard?.deadline?.(current.source));
+      if (epoch !== this.epoch) return;
+      const pending = this.pendingProof;
+      if (pending && pending.value.assessment.state !== 'pass' && (!this.guard || this.guard.eligible())) complete(this.withoutCausalProof(pending.value, 'guard-deadline'));
+      else if (!this.retain()) complete(this.unknown('guard-deadline'));
+      this.retireProof();
+    };
     let deadline = setTimeout(expire, HARD_MODE_DEADLINE_MS);
     this.inFlight = this.read(current.source, current.monotonicNs, Date.now(), controller.signal, manual).then(result => {
       if (epoch === this.epoch) this.recheck = false;
@@ -188,17 +199,22 @@ export class HardModeMonitor {
         deadline = setTimeout(expire, Number(remaining) / 1_000_000);
       }
       if (!controller.signal.aborted && epoch === this.epoch) {
+        const unbound = {...value, sourceMonotonicNs: null};
+        const optionalProof = isLegacyHardModeProofPending(unbound);
+        const needsProof = value.assessment.state === 'pass' || optionalProof;
         if (this.observation.binding !== null && this.observation.binding === value.binding
           && JSON.stringify(this.observation.assessment.rules) === JSON.stringify(value.assessment.rules)
-          && this.observation.assessment.state === value.assessment.state) {
+          && this.observation.assessment.state === value.assessment.state && (!needsProof || this.observation.sourceMonotonicNs !== null)) {
           complete({...value, sourceMonotonicNs: this.observation.sourceMonotonicNs});
           return;
         }
         if (this.observation.binding !== null && this.observation.binding !== value.binding) this.publish(this.unknown());
-        if (value.assessment.state !== 'pass') {complete({...value, sourceMonotonicNs: null}); return;}
+        if (!needsProof) {complete(unbound); return;}
         // A source receipt of a probe sent after the file read is a causal boundary, without clock-origin mapping.
         return new Promise<void>(resolve => {
           this.pendingProof = {value, completedClientNs: completed, deadlineClientNs, resolve, publish: complete};
+          // The current verdict belongs to this check even if delivery arrives before the legacy-only probe.
+          if (optionalProof) complete(unbound, completed);
           this.bindProof();
         });
       }
