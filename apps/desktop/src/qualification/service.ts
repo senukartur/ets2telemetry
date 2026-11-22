@@ -37,14 +37,14 @@ export class QualificationService {
     const resumed=resumedQualificationSource(this.#live,live);
     this.#live=live;
     const active=this.#active;if(!active)return;
-    const changed=active.facts.observe(live);
+    const transition=active.facts.observe(live);
     if(active.previewRequest&&(!live?.state.configuration.job.available||active.previewRequest.source!==qualificationSourceKey(live)))active.previewRequest=null;
-    if(this.#preview&&changed)this.#clearPreview();
+    if(this.#preview&&transition!=='steady')this.#clearPreview();
     for(const game of ['ets2','ats'] as const){
       const activeJob=live?.source.game===game&&live.state.configuration.job.available;
       if(this.#states[game].activeJob!==activeJob)this.#emit(game,{activeJob});
     }
-    if(resumed&&live?.state.configuration.job.available)this.#requestPreview(active,live);
+    if((resumed||transition==='trip-started')&&live?.state.simulation==='running'&&live.state.configuration.job.available)this.#requestPreview(active,live);
   }
   #requestPreview(active:Active,live:QualificationLive):void{
     active.previewRequest={source:qualificationSourceKey(live),retried:false};
@@ -78,6 +78,7 @@ export class QualificationService {
       for(const cache of cached.caches)this.#emit(cache.snapshot.game,{snapshot:cache.snapshot,fetchedUtcMs:cache.fetchedUtcMs,availability:'offline',stale:true,refreshing:false});
       // An explicit activation is an access/configuration change and may resume a previously suspended lane.
       scheduler.request('capabilities');
+      if(!active.previewRequest&&this.#live?.state.simulation==='running'&&this.#live.state.configuration.job.available)this.#requestPreview(active,this.#live);
     }catch{if(this.#active===active)for(const game of ['ets2','ats'] as const)this.#emit(game,{availability:'unavailable',refreshing:false});}
   }
   async #request(route:QualificationRoute,body:unknown,active:Active):Promise<QualificationHttpResult>{

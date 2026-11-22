@@ -43,9 +43,10 @@ function sizeError():QualificationHttpResult {
   if(!fixture)throw Error('MISSING_REVIEWED_SIZE_ERROR_FIXTURE');return {...success(fixture.value),statusCode:422};
 }
 describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
-  it('checks the active job on resume and keeps its preview visible between resumes',async()=>{
+  it('checks a trip on start and resume and keeps its preview visible between checks',async()=>{
     vi.useFakeTimers();
-    const root=randomUUID(),jobConfig=job(),checkpoint=new Script(ETS2_A).checkpoint(jobConfig);
+    let root=randomUUID(),jobConfig=job();
+    const script=new Script(ETS2_A),checkpoint=script.checkpoint(jobConfig);
     const live={source:{...checkpoint.source,origin:'game' as const},capture:checkpoint.capture,state:checkpoint.data.state};
     const template=fixtures.find(f=>f.schema==='Preview')!.value as QualificationWire['Preview'];
     let metres='99999',materialVersion='1',missingLocalReads=1,previewFailures=0;
@@ -67,9 +68,8 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
     const previews=()=>f.http.request.mock.calls.filter(([route])=>route==='preview');
     try{
       await f.service.activate(configuration,'protected-token');
-      observe('running');await vi.advanceTimersByTimeAsync(10000);
-      expect(previews()).toHaveLength(0);
-      observe('paused');await vi.advanceTimersByTimeAsync(5000);expect(previews()).toHaveLength(0);
+      f.service.observe({...live,state:script.checkpoint(null).data.state});
+      await vi.advanceTimersByTimeAsync(10000);expect(previews()).toHaveLength(0);
       observe('running');await vi.advanceTimersByTimeAsync(4000);expect(previews()).toHaveLength(0);expect(missingLocalReads).toBe(0);
       await vi.advanceTimersByTimeAsync(6000);expect(previews()).toHaveLength(1);
       const first=f.service.get('ets2').preview;expect(first).not.toBeNull();
@@ -83,12 +83,24 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
       expect(f.service.get('ets2').preview).toBeNull();expect(previews()).toHaveLength(2);
       observe('paused');observe('running');f.service.observe(null);
       const replacement={...live,source:{...live.source,pluginSessionId:randomUUID()}};
-      f.service.observe(replacement);await vi.advanceTimersByTimeAsync(10000);expect(previews()).toHaveLength(2);
+      f.service.observe({...replacement,state:script.checkpoint(null).data.state});
+      await vi.advanceTimersByTimeAsync(10000);expect(previews()).toHaveLength(2);
       metres='100002';previewFailures=2;
-      f.service.refresh('ets2');await vi.advanceTimersByTimeAsync(30000);
+      f.service.observe(replacement);await vi.advanceTimersByTimeAsync(30000);
       expect(previews()).toHaveLength(4);expect(f.service.get('ets2').preview).toBeNull();
       f.service.refresh('ets2');await vi.advanceTimersByTimeAsync(10000);
       expect(previews()).toHaveLength(5);expect(f.service.get('ets2').preview).not.toBeNull();
+      const previous=f.service.get('ets2').preview;
+      jobConfig=job({cargoId:{available:true,value:'next-cargo'},cargoLoaded:{available:true,value:true}});root=randomUUID();
+      const next={...replacement,state:script.checkpoint(jobConfig).data.state};
+      f.service.observe(next);expect(f.service.get('ets2').preview).toBeNull();
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(6);
+      const current=f.service.get('ets2').preview;
+      expect(current).not.toBeNull();expect(current?.requestId).not.toBe(previous?.requestId);
+      f.service.observe({...next,state:script.checkpoint({...jobConfig,cargoLoaded:{available:true,value:false}}).data.state});
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(6);expect(f.service.get('ets2').preview).toEqual(current);
       f.service.observe(null);expect(f.service.get('ets2').preview).toBeNull();
     }finally{await f.service.stop();}
   });
