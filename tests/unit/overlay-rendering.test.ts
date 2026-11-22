@@ -204,8 +204,8 @@ const enabled = (preset: keyof typeof OVERLAY_PRESETS) => OVERLAY_SECTION_IDS.fi
 const SECTION_SETS: [string, readonly OverlaySectionId[]][] = [['every section', OVERLAY_SECTION_IDS], ['driving-only', enabled('driving-only')],
   ['job-focus', enabled('job-focus')], ['speed only', ['speed']], ['fuel only', ['fuel']], ['gauge only', ['speed', 'gear', 'rpm']]];
 const HARD_MODE_STATES: {hardMode: OverlayHardMode; state: string; cue: string; en: {name: string; row: string}; ru: {name: string; row: string}}[] = [
-  {hardMode: {state: 'active'}, state: 'active', cue: 'check', en: {name: 'Hard Mode active, 12 of 12', row: '12/12'}, ru: {name: 'Hard Mode активен, 12 из 12', row: '12/12'}},
-  {hardMode: {state: 'inactive', passed: 11}, state: 'inactive', cue: 'none', en: {name: 'Hard Mode not active, 11 of 12', row: '11/12'}, ru: {name: 'Hard Mode не активен, 11 из 12', row: '11/12'}},
+  {hardMode: {state: 'active'}, state: 'active', cue: 'check', en: {name: 'Hard Mode active, 13 of 13', row: '13/13'}, ru: {name: 'Hard Mode активен, 13 из 13', row: '13/13'}},
+  {hardMode: {state: 'inactive', passed: 12}, state: 'inactive', cue: 'none', en: {name: 'Hard Mode not active, 12 of 13', row: '12/13'}, ru: {name: 'Hard Mode не активен, 12 из 13', row: '12/13'}},
   {hardMode: {state: 'inactive'}, state: 'inactive', cue: 'none', en: {name: 'Hard Mode not active', row: ''}, ru: {name: 'Hard Mode не активен', row: ''}},
   {hardMode: {state: 'lost'}, state: 'lost', cue: 'cross', en: {name: 'Hard Mode lost for this trip', row: 'lost'}, ru: {name: 'Hard Mode потерян для этого рейса', row: 'потерян'}}
 ];

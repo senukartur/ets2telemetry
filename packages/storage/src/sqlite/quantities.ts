@@ -59,19 +59,37 @@ const sampleTruckRef = (db: Database.Database, sample: unknown) => get(db, 'SELE
 
 /**
  * The step from the last complete anchor `a` to `b`: another raw member, a source, capture or game clock change or a
- * non-positive time, or running time since the later of `a` and the latest simulation start, with a ferry or train event
- * in (a, b] on the same capture clock (one with an unknown time cannot be placed and is ignored) and the recorder link.
+ * non-positive time, or the running time in (a, b], with a ferry or train event in (a, b] on the same capture clock (one
+ * with an unknown time cannot be placed and is ignored) and the recorder link.
  */
 function stepOf(db: Database.Database, a: Stored, b: Stored, linked: boolean): QuantityStep {
   if (a.trip !== b.trip) return {kind: 'member'};
   const x = a.anchor, y = b.anchor;
   if (x.pluginSessionId !== y.pluginSessionId || x.sourceClockId !== y.sourceClockId || x.gameClockId !== y.gameClockId || BigInt(y.monotonicNs) <= BigInt(x.monotonicNs)) return {kind: 'boundary'};
   const range = [b.session, b.clock, x.monotonicNs.padStart(20, '0'), y.monotonicNs.padStart(20, '0')];
-  const started = get(db, `SELECT max(occurred_monotonic_ns) AS at FROM events WHERE plugin_session_id=? AND type='simulation.started' AND source_clock_ref=?
-    AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=?`, ...range)!.at;
   const transfer = get(db, `SELECT 1 FROM events WHERE plugin_session_id=? AND type IN ('player.use.ferry','player.use.train') AND source_clock_ref=?
     AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=? LIMIT 1`, ...range) !== undefined;
-  return {kind: 'running', seconds: Number(BigInt(y.monotonicNs) - BigInt(started === null ? x.monotonicNs : started as string)) / 1e9, transfer, linked};
+  return {kind: 'running', seconds: Number(runningNs(db, range, BigInt(x.monotonicNs), BigInt(y.monotonicNs))) / 1e9, transfer, linked};
+}
+/**
+ * T17, as the reducer's RunClock: the running simulation time from `from` (a sample, so running) to `to`, switched by
+ * the `occurred_simulation` of each stored event in (from, to] on the capture clock, at its source time, in stream order.
+ * Every running segment counts, and a paused stretch never does, whether or not the resume event is stored yet: protocol
+ * v1 lets a snapshot's state lead the event store, and the emergency journal stores each sample right after its snapshot,
+ * so a resumed reading can be stored before its `simulation.started` and the reconstruction later sees it. Both orders
+ * give the same running time up to the resume-to-reading sliver. Rows are streamed: a long pause costs no memory.
+ */
+function runningNs(db: Database.Database, range: unknown[], from: bigint, to: bigint): bigint {
+  let running = true, mark = from, total = 0n;
+  const events = statement(db, `SELECT occurred_monotonic_ns AS at, occurred_simulation AS simulation FROM events WHERE plugin_session_id=? AND source_clock_ref=?
+    AND occurred_monotonic_ns>? AND occurred_monotonic_ns<=? ORDER BY occurred_monotonic_ns, event_seq`).iterate(...range) as IterableIterator<Row>;
+  for (const event of events) {
+    const at = BigInt(event.at as string), now = event.simulation === 'running';
+    if (running && !now) total += at - mark;
+    else if (!running && now) mark = at;
+    running = now;
+  }
+  return running ? total + to - mark : total;
 }
 
 /**
@@ -365,13 +383,44 @@ function quantityHead(db: Database.Database, head: unknown): Row | undefined {
   return point?.quantity_flags === null || point?.quantity_flags === undefined ? undefined : point;
 }
 /**
- * Engine 1 reads its head row: the values are the row's, not observed when NULL and invalid when negative; the coverage
- * endpoint and the raw totals are not used. Undefined for an engine-0 head, which keeps its own read.
+ * Distance breaks the odometer difference cannot cover: a truck change, a step that is not continuous movement (inside a
+ * reading hole too), an odometer change across a ferry or train, and an unproven rollback. Reading holes and recording
+ * gaps are covered, because the game's odometer keeps counting through them.
+ */
+const DIFFERENCE_BREAKS = F.distanceTruck | F.distanceJump | F.distanceTransfer | F.distanceUnproven;
+const COVERED_BREAKS = F.distanceHole | F.distanceGap;
+/**
+ * The trip distance at an engine-1 head row: the odometer of the head's last complete anchor minus the start odometer of
+ * the ledger's first run, on one truck. The flags are the head's, without the breaks the difference covers. A difference
+ * break, a prefix path longer than ACCOUNTING_PATH's 256 steps, a first run that is itself a gap point, an end anchor
+ * outside the latest recording, a different truck at the ends or a lower end odometer keeps the ledger's supported
+ * subtotal and all its flags. Summing continuous steps telescopes to the same difference, so the rule changes the value
+ * only where a hole or gap broke the sum.
+ */
+function headDistance(db: Database.Database, point: Row): {value: number | null; flags: number} {
+  const flags = Number(point.quantity_flags), ledger = {value: real(point.distance_m), flags};
+  if (flags & DIFFERENCE_BREAKS) return ledger;
+  // The deepest row of the depth-capped path (ACCOUNTING_PATH's bound): the first run, unless the path was truncated.
+  const first = get(db, `WITH RECURSIVE path(id,prefix_ref,depth) AS (SELECT id,prefix_ref,0 FROM logical_progress WHERE id=?
+    UNION ALL SELECT p.id,p.prefix_ref,x.depth+1 FROM path x JOIN logical_progress p ON p.id=x.prefix_ref WHERE x.depth<256)
+    SELECT p.start_odometer_m,p.truck_ref,p.quantity_flags,x.prefix_ref IS NOT NULL AS truncated
+    FROM path x JOIN logical_progress p ON p.id=x.id ORDER BY x.depth DESC LIMIT 1`, point.id);
+  const anchor = get(db, `SELECT s.odometer_m,s.trip_ref=l.latest_trip_ref AS latest FROM samples s JOIN logical_trips l ON l.id=? WHERE s.id=?`,
+    point.logical_ref, point.anchor_sample_ref);
+  const end = real(anchor?.odometer_m), start = real(first?.start_odometer_m);
+  // The end must be a reading of the trip's latest recording: an older anchor (a gap row of an unreplayed member) is stale.
+  if (!first || first.truncated || !anchor?.latest || first.quantity_flags === null || Number(first.quantity_flags) & F.distanceGap || first.truck_ref === null
+    || first.truck_ref !== sampleTruckRef(db, point.anchor_sample_ref) || start === null || end === null || end < start) return ledger;
+  return {value: end - start, flags: flags & ~COVERED_BREAKS};
+}
+/**
+ * Engine 1 reads its head row: the distance by headDistance, fuel used as the row's, not observed when NULL and invalid
+ * when negative; the coverage endpoint and the raw totals are not used. Undefined for an engine-0 head, which keeps its own read.
  */
 export function applyQuantities(db: Database.Database, row: Row, head: unknown): Row | undefined {
   const point = quantityHead(db, head);
   if (!point) return undefined;
-  for (const [column, value] of [['observed_distance_m', real(point.distance_m)], ['fuel_used_l', real(point.fuel_used_l)]] as const) {
+  for (const [column, value] of [['observed_distance_m', headDistance(db, point).value], ['fuel_used_l', real(point.fuel_used_l)]] as const) {
     const invalid = value !== null && value < 0;
     row[column] = value === null || invalid ? null : value;
     row[`${column}_state`] = invalid ? 'invalid' : value === null ? 'not-observed' : 'available';
@@ -392,8 +441,8 @@ export function journalAccounting(db: Database.Database, logical: unknown, head:
   if (!quantitiesEnabled(db) || logical === null || logical === undefined) return undefined;
   const group = get(db, 'SELECT accounting_engine FROM logical_trips WHERE id=?', logical);
   if (group === undefined || Number(group.accounting_engine) !== 1) return undefined;
-  const flags = Number(quantityHead(db, head)?.quantity_flags ?? 0);
-  const distance = named(flags, 0, JOURNAL_DISTANCE_BREAKS), fuel = named(flags, 8, JOURNAL_FUEL_BREAKS);
+  const point = quantityHead(db, head), flags = Number(point?.quantity_flags ?? 0);
+  const distance = named(point ? headDistance(db, point).flags : 0, 0, JOURNAL_DISTANCE_BREAKS), fuel = named(flags, 8, JOURNAL_FUEL_BREAKS);
   return {engine: 1, distance: {status: statusOf(distanceAvailable, distance), breaks: distance, quality: named(flags, 6, JOURNAL_DISTANCE_QUALITY)},
     fuel: {status: statusOf(fuelAvailable, fuel), breaks: fuel, quality: named(flags, 13, JOURNAL_FUEL_QUALITY)}};
 }
@@ -401,8 +450,8 @@ export function journalAccounting(db: Database.Database, logical: unknown, head:
 export function quantitiesIncomplete(db: Database.Database, head: bigint | null): boolean {
   const point = quantityHead(db, head);
   if (!point) return false;
-  const flags = Number(point.quantity_flags);
-  return quantityStatus(real(point.distance_m), flags, 'distance') !== 'complete' || quantityStatus(real(point.fuel_used_l), flags, 'fuel') !== 'complete';
+  const distance = headDistance(db, point);
+  return quantityStatus(distance.value, distance.flags, 'distance') !== 'complete' || quantityStatus(real(point.fuel_used_l), Number(point.quantity_flags), 'fuel') !== 'complete';
 }
 /**
  * Upload event v1.2 (ET-113): the accounting status of each quantity at the snapshot ledger head, from the same head row
@@ -412,12 +461,12 @@ export function quantitiesIncomplete(db: Database.Database, head: bigint | null)
 export function uploadAccounting(db: Database.Database, head: bigint | null): UploadAccounting {
   const point = quantityHead(db, head);
   if (!point) return {distance: 'unknown', fuel: 'unknown'};
-  const flags = Number(point.quantity_flags);
-  const status = (value: number | null, quantity: 'distance' | 'fuel'): UploadAccounting['distance'] => {
+  const status = (value: number | null, flags: number, quantity: 'distance' | 'fuel'): UploadAccounting['distance'] => {
     const found = quantityStatus(value !== null && value < 0 ? null : value, flags, quantity);
     return found === 'unavailable' ? 'unknown' : found;
   };
-  return {distance: status(real(point.distance_m), 'distance'), fuel: status(real(point.fuel_used_l), 'fuel')};
+  const distance = headDistance(db, point);
+  return {distance: status(distance.value, distance.flags, 'distance'), fuel: status(real(point.fuel_used_l), Number(point.quantity_flags), 'fuel')};
 }
 
 /** The raw members of `logical` in join order: the order of reconstruction and of the upgrade's replay. */

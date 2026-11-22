@@ -1,7 +1,7 @@
 import {performance} from 'node:perf_hooks';
 /** Browser-local passive capture. Fixed identifiers only; never inspect text or mutate tooltip/input state. */
 export function hardModeTooltipDiagnostics({action, token, phase, criterion, language}) {
-  const ids = ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic','caveats'];
+  const ids = ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic','coupling','caveats'];
   if (!Number.isInteger(token) || token < 1 || token > 64 || !ids.includes(criterion) ||
       !['hover','keyboard'].includes(phase) || !['en','ru'].includes(language)) return null;
   const key = '__ets2HardModeTooltipDiagnosticsV1';
@@ -216,7 +216,7 @@ export async function hardModeFixtureSnapshot({hint, details, tripBanners} = {})
 function matchesFixture(snapshot, expected) {
   const assessment = snapshot.status?.assessment;
   if (snapshot.status?.trip?.firstLoss || assessment?.state !== 'fail' || assessment.source !== 'fixture' ||
-      snapshot.language !== expected.language || assessment.rules?.length !== 12 || snapshot.rows?.length !== 12 || expected.rules.length !== 12) return false;
+      snapshot.language !== expected.language || assessment.rules?.length !== 13 || snapshot.rows?.length !== 13 || expected.rules.length !== 13) return false;
   if (expected.sourceText && (!snapshot.source || snapshot.source.count !== 1 || !snapshot.source.visible ||
       !snapshot.source.text.match(expected.sourceText))) return false;
   if (expected.tripBanners) {

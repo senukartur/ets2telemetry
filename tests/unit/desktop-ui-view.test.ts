@@ -357,15 +357,15 @@ describe('compact shell chips and Live states (ET-074, REG-009, REG-002)', () =>
     expect(pluginChip([], 'en')).toEqual({text: 'Plugin · Unknown', tone: 'neutral'});
     expect(pluginChip([{state: 'excluded'}], 'en').text).toBe('Plugin · Not managed (game excluded)');
   });
-  it('shows Hard Mode n/12, the loss for this trip and an unknown assessment in words', () => {
+  it('shows Hard Mode n/13, the loss for this trip and an unknown assessment in words', () => {
     const base: Pick<HardModeStatus, 'assessment' | 'trip'> = {assessment: unknownHardMode(0), trip: null};
-    const assessed = (passing: number): Pick<HardModeStatus, 'assessment' | 'trip'> => ({...base, assessment: {...base.assessment, state: passing === 12 ? 'pass' : 'fail',
+    const assessed = (passing: number): Pick<HardModeStatus, 'assessment' | 'trip'> => ({...base, assessment: {...base.assessment, state: passing === 13 ? 'pass' : 'fail',
       rules: base.assessment.rules.map((rule, index) => ({...rule, state: index < passing ? 'pass' : 'fail'}))}});
     const lost = {firstLoss: {}} as HardModeStatus['trip'];
-    expect(hardModeChip(assessed(12), 0, 'en')).toEqual({text: 'Hard Mode 12/12', tone: 'ok'});
-    expect(hardModeChip(assessed(10), 0, 'ru')).toEqual({text: 'Hard Mode 10/12', tone: 'warn'});
-    expect(hardModeChip({...assessed(12), trip: lost}, 0, 'en')).toEqual({text: 'Hard Mode lost', tone: 'error'});
-    expect(hardModeChip({...assessed(12), trip: lost}, 0, 'ru').text).toBe('Hard Mode потерян');
+    expect(hardModeChip(assessed(13), 0, 'en')).toEqual({text: 'Hard Mode 13/13', tone: 'ok'});
+    expect(hardModeChip(assessed(10), 0, 'ru')).toEqual({text: 'Hard Mode 10/13', tone: 'warn'});
+    expect(hardModeChip({...assessed(13), trip: lost}, 0, 'en')).toEqual({text: 'Hard Mode lost', tone: 'error'});
+    expect(hardModeChip({...assessed(13), trip: lost}, 0, 'ru').text).toBe('Hard Mode потерян');
     expect(hardModeChip(base, 0, 'en')).toEqual({text: 'Hard Mode unknown', tone: 'neutral'});
   });
   it.each([

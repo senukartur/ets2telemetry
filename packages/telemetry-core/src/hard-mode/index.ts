@@ -1,18 +1,20 @@
 import type {HardModeAssessment, HardModeDetails, HardModeDetailsV1, HardModeDetailsV2, HardModeCounts, HardModeObservation, HardModeDiagnostic, HardModeReason, HardModeRuleId, HardModeVerification} from '../../../contracts/src/hard-mode';
 export const HARD_MODE_TOLERANCE = 1e-6;
+export const LEGACY_HARD_MODE_STABILITY_LIMIT = 0.25;
 export const HARD_MODE_RULES = [
   {id: 'fuel', label: 'Realistic fuel consumption', keys: ['g_fuel_simulation'], required: '= 1', limit: 1, op: 'eq'},
   {id: 'air', label: 'Air brake simulation', keys: ['g_hardcore_simulation'], required: '= 1', limit: 1, op: 'eq'},
   {id: 'police', label: 'Police offences and fines', keys: ['g_police'], required: '= 1', limit: 1, op: 'eq'},
   {id: 'fatigue', label: 'Driver fatigue', keys: ['g_fatigue'], required: '= 1', limit: 1, op: 'eq'},
   {id: 'limiter', label: 'Speed limiter', keys: ['g_use_speed_limiter'], required: '= 1', limit: 1, op: 'eq'},
-  {id: 'truck', label: 'Truck stability', keys: ['g_truck_stability'], required: '≤ 0.25', limit: 0.25, op: 'max'},
-  {id: 'trailer', label: 'Trailer stability', keys: ['g_trailer_stability'], required: '≤ 0.25', limit: 0.25, op: 'max'},
+  {id: 'truck', label: 'Truck stability', keys: ['g_truck_stability'], required: '= 0', limit: 0, op: 'eq'},
+  {id: 'trailer', label: 'Trailer stability', keys: ['g_trailer_stability'], required: '= 0', limit: 0, op: 'eq'},
   {id: 'parking', label: 'Configured Normal parking', keys: ['g_simple_parking_doubles', 'g_parking_difficulty'], required: '= 0 or 1 and = 2', limit: 0, op: 'parking'},
   {id: 'rain', label: 'Rain probability', keys: ['g_bad_weather_factor'], required: '≥ 0.12', limit: 0.12, op: 'min'},
   {id: 'events', label: 'Random road events', keys: ['g_road_events'], required: '≥ 0.30', limit: 0.30, op: 'min'},
   {id: 'braking', label: 'Braking intensity', keys: ['g_brake_intensity'], required: '≤ 0.75', limit: 0.75, op: 'max'},
-  {id: 'traffic', label: 'Traffic density', keys: ['g_traffic'], required: '≥ 1.0', limit: 1, op: 'min'}
+  {id: 'traffic', label: 'Traffic density', keys: ['g_traffic'], required: '≥ 1.0', limit: 1, op: 'min'},
+  {id: 'coupling', label: 'Advanced trailer coupling', keys: ['g_trailer_advanced_coupling'], required: '= 1', limit: 1, op: 'eq'}
 ] as const;
 export type ParsedSetting = {value: number | null; reason: 'compliant' | 'missing' | 'malformed' | 'conflicting'};
 export type ParsedSettings = Readonly<Record<string, ParsedSetting>>;
@@ -25,9 +27,10 @@ export function parseHardModeConfig(text: string): ParsedSettings {
   for (const line of text.split(/\r?\n/)) {
     const key = /^\s*uset\s+([^\s]+)/.exec(line)?.[1];
     if (!key || !KEYS.has(key)) continue;
-    const match = line.length <= 8192 ? /^\s*uset\s+[^\s]+\s+"([^"]*)"\s*(?:(?:#|\/\/).*)?$/.exec(line) : null;
-    const number = match && NUMBER.test(match[1]) ? Number(match[1]) : NaN;
-    const setting: ParsedSetting = Number.isFinite(number) ? {value: number, reason: 'compliant'} : {value: null, reason: 'malformed'};
+    const raw = /^\s*uset\s+[^\s]+\s+"([^"]*)"\s*(?:(?:#|\/\/).*)?$/.exec(line)?.[1] ?? '';
+    const number = NUMBER.test(raw) ? Number(raw) : NaN;
+    const underflow = number === 0 && (key === 'g_truck_stability' || key === 'g_trailer_stability') && /^[^eE]*[1-9]/.test(raw);
+    const setting: ParsedSetting = Number.isFinite(number) && !underflow ? {value: number, reason: 'compliant'} : {value: null, reason: 'malformed'};
     const old = result[key];
     if (!old) result[key] = setting;
     else if (old.reason !== 'compliant' || setting.reason !== 'compliant' || old.value !== setting.value) result[key] = {value: null, reason: old.reason === 'malformed' || setting.reason === 'malformed' ? 'malformed' : 'conflicting'};
@@ -44,19 +47,38 @@ export function evaluateHardMode(settings: ParsedSettings, observedUtcMs: number
     return {id: rule.id, state: invalid ? 'unknown' as const : pass ? 'pass' as const : 'fail' as const, values,
       reason: invalid?.reason ?? (pass ? 'compliant' as const : 'outside-limit' as const)};
   });
-  return {observedUtcMs, source, rules, state: rules.some(r => r.state === 'unknown') ? 'unknown' : rules.every(r => r.state === 'pass') ? 'pass' : 'fail'};
+  return {observedUtcMs, source, rules, state: assessmentState(rules)};
+}
+function assessmentState(rules: HardModeAssessment['rules']): HardModeAssessment['state'] {
+  return rules.some(r => r.state === 'unknown') ? 'unknown' : rules.every(r => r.state === 'pass') ? 'pass' : 'fail';
 }
 export function unknownHardMode(at: number, reason: HardModeReason = 'source-unproven'): HardModeAssessment {
   return {observedUtcMs: at, state: 'unknown', source: 'unknown', rules: HARD_MODE_RULES.map(({id}) => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))};
+}
+/** A continuing version-1 audit still uses its original rule set and stability limits. */
+export function legacyHardModeAssessment(assessment: HardModeAssessment): HardModeAssessment {
+  if (assessment.rules.length !== HARD_MODE_RULES.length) return assessment;
+  const rules = assessment.rules.filter(rule => rule.id !== 'coupling').map(rule => {
+    if ((rule.id !== 'truck' && rule.id !== 'trailer') || rule.state === 'unknown') return rule;
+    const pass = rule.values[0]! <= LEGACY_HARD_MODE_STABILITY_LIMIT + HARD_MODE_TOLERANCE;
+    return {...rule, state: pass ? 'pass' as const : 'fail' as const, reason: pass ? 'compliant' as const : 'outside-limit' as const};
+  });
+  return {...assessment, rules, state: assessmentState(rules)};
+}
+/** A verified current non-pass can report its verdict while it waits for optional legacy proof. */
+export function isLegacyHardModeProofPending(observation: HardModeObservation, legacy?: HardModeAssessment): boolean {
+  return observation.assessment.state !== 'pass' && observation.binding !== null && observation.pluginSessionId !== null && observation.sourceMonotonicNs === null
+    && observation.diagnostic === undefined && (legacy ?? legacyHardModeAssessment(observation.assessment)).state === 'pass';
 }
 /** Ordered observer offers replace latest; queued intake reapplication only latches loss, independently of UTC labels. */
 export function advanceHardMode(previous: HardModeDetailsV1 | null, assessment: HardModeAssessment, loss?: HardModeReason, latest?: 'publication' | 'frozen'): HardModeDetailsV1;
 export function advanceHardMode(previous: HardModeDetails, assessment: HardModeAssessment, loss?: HardModeReason, latest?: 'publication' | 'frozen'): HardModeDetails;
 export function advanceHardMode(previous: HardModeDetails | null, assessment: HardModeAssessment, loss?: HardModeReason, latest: 'publication' | 'frozen' = 'publication'): HardModeDetails {
   if (previous?.version === 2) return advanceHardModeV2(previous, {assessment, binding: previous.binding, pluginSessionId: null, sourceMonotonicNs: null}, latest);
-  const failed = assessment.rules.find(r => r.state !== 'pass');
-  const firstLoss = previous?.firstLoss ?? (loss || failed ? {atUtcMs: assessment.observedUtcMs, reason: loss ?? failed!.reason, rule: loss ? null : failed!.id, values: loss ? null : [...failed!.values]} : null);
-  return {version: 1, binding: previous?.binding ?? null, opening: previous?.opening ?? assessment, latest: previous && latest === 'frozen' ? previous.latest : assessment, firstLoss, manualDelivery: previous?.manualDelivery ?? null};
+  const legacy = legacyHardModeAssessment(assessment);
+  const failed = legacy.rules.find(r => r.state !== 'pass');
+  const firstLoss = previous?.firstLoss ?? (loss || failed ? {atUtcMs: legacy.observedUtcMs, reason: loss ?? failed!.reason, rule: loss ? null : failed!.id, values: loss ? null : [...failed!.values]} : null);
+  return {version: 1, binding: previous?.binding ?? null, opening: previous?.opening ?? legacy, latest: previous && latest === 'frozen' ? previous.latest : legacy, firstLoss, manualDelivery: previous?.manualDelivery ?? null};
 }
 export function hardModeLoss(details: HardModeDetailsV1, atUtcMs: number, reason: HardModeReason, rule: HardModeRuleId | null = null): HardModeDetailsV1 {
   return {...details, firstLoss: details.firstLoss ?? {atUtcMs, reason, rule, values: rule ? details.latest.rules.find(r => r.id === rule)?.values ?? null : null}};

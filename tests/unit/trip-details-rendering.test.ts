@@ -115,10 +115,13 @@ describe('compact trip page (ET-077)', () => {
 
   it('names the latest evaluation by the outcome and counts the passing rules', () => {
     const details = hardMode();
+    // A continued trip can keep the original rule count for its opening assessment.
+    details.opening = {...details.opening, rules: details.opening.rules.slice(0, 12)};
     const delivered = side({...DELIVERED, trip: {...DELIVERED.trip, isHardMode: true, hardModeDetails: details}}, 'en');
     expect(delivered).toContain('At job start'); expect(delivered).toContain('At delivery'); expect(delivered).not.toContain('Latest check');
     expect(delivered).toContain('This trip qualifies'); expect(delivered).toContain('Settings snapshot kept with the trip');
     expect(delivered).toMatch(/data-testid="trip\.hardMode\.opening" data-state="pass"><span aria-hidden="true">✓ <\/span><span class="sr-only">pass: <\/span>12 of 12/);
+    expect(delivered).toMatch(/data-testid="trip\.hardMode\.latest" data-state="pass"><span aria-hidden="true">✓ <\/span><span class="sr-only">pass: <\/span>13 of 13/);
     const open = side({...OPEN, trip: {...OPEN.trip, hardModeDetails: details}}, 'ru');
     expect(open).toContain('В начале заказа'); expect(open).toContain('Последняя проверка'); expect(open).not.toContain('При доставке');
   });

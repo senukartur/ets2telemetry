@@ -24,7 +24,7 @@ const makeController = (overrides?: Partial<HardModeController>): HardModeContro
 });
 
 describe('HardModeCard rendering (REG-009, REG-010)', () => {
-  it('renders active state with badge-ok, 12 of 12 progress, and all rows passing in EN and RU', () => {
+  it('renders active state with badge-ok, 13 of 13 progress, and all rows passing in EN and RU', () => {
     for (const language of ['en', 'ru'] as const) {
       const html = renderToStaticMarkup(
         React.createElement(HardModeCard, {
@@ -34,13 +34,13 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
       );
       expect(html).toContain('data-testid="hard-mode-card"');
       expect(html).toContain('badge-ok');
-      expect(html).toContain(language === 'en' ? 'Hard Mode settings active · 12 of 12' : 'Настройки Hard Mode активны · 12 из 12');
+      expect(html).toContain(language === 'en' ? 'Hard Mode settings active · 13 of 13' : 'Настройки Hard Mode активны · 13 из 13');
       expect(html).toContain('data-testid="hard-mode-details"');
       expect(html).not.toContain('data-testid="hard-mode-fix"');
       expect(html).not.toContain('data-testid="hard-mode-loss"');
 
-      // 12 rule items present
-      for (const id of ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']) {
+      // All current rule items are present
+      for (const id of ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic', 'coupling']) {
         expect(html).toContain(`data-testid="hard-mode-rule-${id}"`);
         expect(html).toContain(`data-testid="hard-mode-name-${id}"`);
       }
@@ -58,7 +58,7 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
         })
       );
       expect(html).toContain('badge-warn');
-      expect(html).toContain(language === 'en' ? 'Hard Mode not active · 11 of 12' : 'Hard Mode не активен · 11 из 12');
+      expect(html).toContain(language === 'en' ? 'Hard Mode not active · 12 of 13' : 'Hard Mode не активен · 12 из 13');
       expect(html).toContain('data-testid="hard-mode-fix"');
       expect(html).toContain('data-testid="hard-mode-detail-rule-fuel"');
       expect(html).not.toContain('data-testid="hard-mode-detail-rule-police"');
@@ -135,7 +135,7 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
       expect(html).toContain(language === 'en' ? 'Unknown' : 'Неизвестно');
       expect(html).not.toContain('data-state="pass"');
       expect(html).not.toContain('data-state="fail"');
-      for (const id of ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']) {
+      for (const id of ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic', 'coupling']) {
         expect(html).toContain(`data-testid="hard-mode-rule-${id}" data-state="unknown"`);
       }
       expect(html).toContain('<span class="yu-hard-mode-mark" aria-hidden="true">?</span>');
@@ -154,7 +154,7 @@ describe('HardModeCard rendering (REG-009, REG-010)', () => {
       );
       expect(html).toContain('badge-neutral');
       expect(html).toContain(language === 'en' ? 'Reading settings…' : 'Чтение настроек…');
-      expect(html).not.toMatch(/· \d+ of 12|· \d+ из 12/);
+      expect(html).not.toMatch(/· \d+ of 13|· \d+ из 13/);
     }
   });
 

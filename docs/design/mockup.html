@@ -285,7 +285,7 @@ table.t tbody tr:hover td { background: rgba(255,255,255,.025); }
     <div class="ctl"><span>Language</span><div class="pseg" id="c-lang"><button data-lang="en">EN</button><button data-lang="ru">RU</button></div></div>
     <div class="ctl"><span>Game</span><div class="pseg" id="c-game"><button data-game="ets2">ETS2</button><button data-game="ats">ATS</button></div></div>
     <div class="ctl"><span>Connection</span><div class="pseg" id="c-conn"><button data-conn="live">Live</button><button data-conn="paused">Paused</button><button data-conn="waiting">Waiting</button><button data-conn="lost">Lost</button></div></div>
-    <div class="ctl"><span>Hard Mode</span><div class="pseg" id="c-hm"><button data-hm="pass">12/12</button><button data-hm="fail">10/12</button><button data-hm="lost">Lost mid-trip</button></div></div>
+    <div class="ctl"><span>Hard Mode</span><div class="pseg" id="c-hm"><button data-hm="pass">13/13</button><button data-hm="fail">11/13</button><button data-hm="lost">Lost mid-trip</button></div></div>
     <div class="ctl"><span>Inspect</span><div class="pseg" id="c-inspect"><button data-inspect="off">Off</button><button data-inspect="on">Spec ids</button></div></div>
   </nav>
   <div class="stage" id="stage"><div class="scaled" id="host"></div></div>
@@ -306,7 +306,7 @@ en: {
   'rec.recording': 'Recording', 'rec.trip': 'Trip · {d}', 'rec.paused': 'Recording paused', 'rec.pausedSub': 'Resumes with the game',
   'rec.waiting': 'Not recording', 'rec.waitingSub': 'Waiting for the game', 'rec.lost': 'Connection lost', 'rec.lostSub': 'Missing time is kept as a gap',
   'chip.game.live': '{game} · {mode}', 'chip.game.paused': '{game} paused', 'chip.game.waiting': 'Waiting for the game', 'chip.game.lost': 'No data · 12 s',
-  'chip.plugin': 'Plugin {n}/{m}', 'chip.hm.pass': 'Hard Mode', 'chip.hm.fail': 'Hard Mode {n}/12', 'chip.hm.lost': 'Hard Mode lost', 'chip.sync': 'Dashboard · later',
+  'chip.plugin': 'Plugin {n}/{m}', 'chip.hm.pass': 'Hard Mode', 'chip.hm.fail': 'Hard Mode {n}/13', 'chip.hm.lost': 'Hard Mode lost', 'chip.sync': 'Dashboard · later',
   'mode.sp': 'Single-player', 'mode.tmp': 'TruckersMP', 'stale': 'stale 12 s', 'paused': 'paused',
   'live.title': 'Live', 'live.speed': 'Speed', 'live.gear': 'Gear', 'live.rpm': 'Engine RPM', 'live.fuel': 'Fuel', 'live.of': 'of {v}', 'live.range': 'Range', 'live.rangeNote': "game's estimate",
   'live.cons': 'Average consumption', 'live.consNote': 'SDK mean, not a trip average', 'live.consNoteAts': 'SDK mean; mostly static in ATS',
@@ -315,13 +315,13 @@ en: {
   'live.truck': 'Truck', 'live.plate': 'Plate', 'live.trailer': 'Trailer', 'live.odometer': 'Odometer', 'live.session': 'Game session', 'live.clock': 'Game clock', 'live.mode': 'Mode', 'live.protocol': 'Protocol', 'live.lostEvents': 'Lost events',
   'live.waitTitle': 'Waiting for the game', 'live.waitText': 'Start Euro Truck Simulator 2 or American Truck Simulator. The plugin connects on its own; nothing to click here.',
   'complete.complete': 'Complete', 'complete.partial': 'Partial', 'complete.unknown': 'Unknown',
-  'hm.title': 'Hard Mode', 'hm.active': 'Active', 'hm.inactive': 'Not active', 'hm.lost': 'Lost for this trip', 'hm.count': '{n} of 12 settings meet Hard Mode',
+  'hm.title': 'Hard Mode', 'hm.active': 'Active', 'hm.inactive': 'Not active', 'hm.lost': 'Lost for this trip', 'hm.count': '{n} of 13 settings meet Hard Mode',
   'hm.lostText': '{what} changed to {v} at {time}. This trip will be recorded as standard.', 'hm.tripYes': 'This trip qualifies', 'hm.tripNo': 'This trip does not qualify',
   'hm.profile': 'Profile', 'hm.file': 'Settings file', 'hm.read': 'Read {s} s ago', 'hm.recheck': 'Check again',
   'hm.col.setting': 'Setting', 'hm.col.required': 'Required', 'hm.col.detected': 'In game', 'hm.readonly': 'Read-only: the app never changes game settings. Change them in the game under Options → Gameplay; this list updates on its own.',
-  'hm.rule': 'All 12 must pass at the same time. Relaxing any of them during a job removes Hard Mode from that trip.',
+  'hm.rule': 'A current check passes when all 13 rules pass. A delivered trip qualifies with at least 95% passing known checks.',
   'hm.c.fuel': 'Realistic fuel consumption', 'hm.c.airbrake': 'Air brake simulation', 'hm.c.police': 'Police and fines', 'hm.c.fatigue': 'Fatigue simulation', 'hm.c.limiter': 'Speed limiter',
-  'hm.c.truckstab': 'Truck stability', 'hm.c.trailerstab': 'Trailer stability', 'hm.c.parking': 'Difficult parking', 'hm.c.rain': 'Rain probability', 'hm.c.events': 'Random road events', 'hm.c.brake': 'Braking intensity', 'hm.c.traffic': 'Traffic density',
+  'hm.c.truckstab': 'Truck stability', 'hm.c.trailerstab': 'Trailer stability', 'hm.c.parking': 'Difficult parking', 'hm.c.rain': 'Rain probability', 'hm.c.events': 'Random road events', 'hm.c.brake': 'Braking intensity', 'hm.c.traffic': 'Traffic density', 'hm.c.coupling': 'Advanced trailer coupling',
   'val.on': 'On', 'val.off': 'Off', 'val.expert': 'Expert', 'val.simple': 'Simple',
   'j.title': 'Trip journal', 'j.all': 'All', 'j.outcome': 'Outcome', 'j.recording': 'Recording', 'j.anyOutcome': 'Any outcome', 'j.anyRecording': 'Any recording', 'j.search': 'Search cargo or city', 'j.export': 'Export JSON', 'j.refresh': 'Refresh',
   'col.started': 'Started', 'col.game': 'Game', 'col.cargo': 'Cargo', 'col.route': 'Route', 'col.distance': 'Distance', 'col.money': 'Revenue', 'col.outcome': 'Outcome', 'col.recording': 'Recording', 'col.sync': 'Sync',
@@ -375,7 +375,7 @@ ru: {
   'rec.recording': 'Запись идёт', 'rec.trip': 'Рейс · {d}', 'rec.paused': 'Запись на паузе', 'rec.pausedSub': 'Продолжится вместе с игрой',
   'rec.waiting': 'Запись не идёт', 'rec.waitingSub': 'Ожидание игры', 'rec.lost': 'Связь потеряна', 'rec.lostSub': 'Пропуск будет отмечен в журнале',
   'chip.game.live': '{game} · {mode}', 'chip.game.paused': '{game} на паузе', 'chip.game.waiting': 'Ожидание игры', 'chip.game.lost': 'Нет данных · 12 с',
-  'chip.plugin': 'Плагин {n}/{m}', 'chip.hm.pass': 'Hard Mode', 'chip.hm.fail': 'Hard Mode {n}/12', 'chip.hm.lost': 'Hard Mode потерян', 'chip.sync': 'Сайт · позже',
+  'chip.plugin': 'Плагин {n}/{m}', 'chip.hm.pass': 'Hard Mode', 'chip.hm.fail': 'Hard Mode {n}/13', 'chip.hm.lost': 'Hard Mode потерян', 'chip.sync': 'Сайт · позже',
   'mode.sp': 'Одиночная игра', 'mode.tmp': 'TruckersMP', 'stale': 'устарело 12 с', 'paused': 'пауза',
   'live.title': 'Сейчас', 'live.speed': 'Скорость', 'live.gear': 'Передача', 'live.rpm': 'Обороты', 'live.fuel': 'Топливо', 'live.of': 'из {v}', 'live.range': 'Запас хода', 'live.rangeNote': 'оценка игры',
   'live.cons': 'Средний расход', 'live.consNote': 'среднее SDK, не за рейс', 'live.consNoteAts': 'среднее SDK; в ATS почти не меняется',
@@ -384,13 +384,13 @@ ru: {
   'live.truck': 'Грузовик', 'live.plate': 'Номер', 'live.trailer': 'Прицеп', 'live.odometer': 'Одометр', 'live.session': 'Игровая сессия', 'live.clock': 'Часы игры', 'live.mode': 'Режим', 'live.protocol': 'Протокол', 'live.lostEvents': 'Потеряно событий',
   'live.waitTitle': 'Ожидание игры', 'live.waitText': 'Запустите Euro Truck Simulator 2 или American Truck Simulator. Плагин подключится сам, здесь ничего нажимать не нужно.',
   'complete.complete': 'Полная', 'complete.partial': 'С пропусками', 'complete.unknown': 'Неизвестно',
-  'hm.title': 'Hard Mode', 'hm.active': 'Активен', 'hm.inactive': 'Не активен', 'hm.lost': 'Потерян для этого рейса', 'hm.count': '{n} из 12 настроек соответствуют Hard Mode',
+  'hm.title': 'Hard Mode', 'hm.active': 'Активен', 'hm.inactive': 'Не активен', 'hm.lost': 'Потерян для этого рейса', 'hm.count': '{n} из 13 настроек соответствуют Hard Mode',
   'hm.lostText': '{what}: значение изменено на {v} в {time}. Рейс будет записан как обычный.', 'hm.tripYes': 'Рейс засчитывается как Hard Mode', 'hm.tripNo': 'Рейс не засчитывается как Hard Mode',
   'hm.profile': 'Профиль', 'hm.file': 'Файл настроек', 'hm.read': 'Прочитано {s} с назад', 'hm.recheck': 'Проверить снова',
   'hm.col.setting': 'Настройка', 'hm.col.required': 'Нужно', 'hm.col.detected': 'В игре', 'hm.readonly': 'Только чтение: программа не меняет настройки игры. Измените их в игре: Опции → Геймплей; список обновится сам.',
-  'hm.rule': 'Все 12 условий должны выполняться одновременно. Если ослабить любую настройку во время заказа, рейс теряет Hard Mode.',
+  'hm.rule': 'Для успешной проверки нужны все 13 правил. Доставленный рейс засчитывается при 95% успешных проверок среди известных.',
   'hm.c.fuel': 'Реалистичный расход топлива', 'hm.c.airbrake': 'Пневмотормоза', 'hm.c.police': 'Штрафы / полиция', 'hm.c.fatigue': 'Усталость', 'hm.c.limiter': 'Ограничитель скорости',
-  'hm.c.truckstab': 'Стабилизация тягача', 'hm.c.trailerstab': 'Стабилизация прицепа', 'hm.c.parking': 'Сложная парковка', 'hm.c.rain': 'Вероятность дождя', 'hm.c.events': 'Случайные события', 'hm.c.brake': 'Интенсивность торможения', 'hm.c.traffic': 'Плотность трафика',
+  'hm.c.truckstab': 'Стабилизация тягача', 'hm.c.trailerstab': 'Стабилизация прицепа', 'hm.c.parking': 'Сложная парковка', 'hm.c.rain': 'Вероятность дождя', 'hm.c.events': 'Случайные события', 'hm.c.brake': 'Интенсивность торможения', 'hm.c.traffic': 'Плотность трафика', 'hm.c.coupling': 'Продвинутая симуляция сцепки прицепа',
   'val.on': 'Вкл.', 'val.off': 'Выкл.', 'val.expert': 'Сложная', 'val.simple': 'Простая',
   'j.title': 'Журнал рейсов', 'j.all': 'Все', 'j.outcome': 'Итог', 'j.recording': 'Запись', 'j.anyOutcome': 'Любой итог', 'j.anyRecording': 'Любая запись', 'j.search': 'Поиск по грузу или городу', 'j.export': 'Экспорт JSON', 'j.refresh': 'Обновить',
   'col.started': 'Начало', 'col.game': 'Игра', 'col.cargo': 'Груз', 'col.route': 'Маршрут', 'col.distance': 'Дистанция', 'col.money': 'Доход', 'col.outcome': 'Итог', 'col.recording': 'Запись', 'col.sync': 'Сайт',
@@ -522,13 +522,14 @@ var HM = [
   ['police', 'g_police', 'bool', '=', 1, 1, 1],
   ['fatigue', 'g_fatigue', 'bool', '=', 1, 1, 1],
   ['limiter', 'g_speed_limiter', 'bool', '=', 1, 1, 1],
-  ['truckstab', 'g_truck_stability', 'pct', '<=', 0.5, 0.4, 0.7],
-  ['trailerstab', 'g_trailer_stability', 'pct', '<=', 0.5, 0.5, 0.5],
+  ['truckstab', 'g_truck_stability', 'pct', '=', 0, 0, 0.7],
+  ['trailerstab', 'g_trailer_stability', 'pct', '=', 0, 0, 0],
   ['parking', 'g_simple_parking_doubles', 'parking', '=', 0, 0, 0],
   ['rain', 'g_rain_probability', 'pct', '>=', 0.12, 0.15, 0.15],
   ['events', 'g_road_events', 'pct', '>=', 0.3, 0.4, 0.4],
   ['brake', 'g_brake_intensity', 'pct', '<=', 0.75, 0.7, 0.7],
-  ['traffic', 'g_traffic', 'pct', '>=', 1, 1.2, 0.8]
+  ['traffic', 'g_traffic', 'pct', '>=', 1, 1.2, 1.2],
+  ['coupling', 'g_trailer_advanced_coupling', 'bool', '=', 1, 1, 0]
 ];
 function hmRows() {
   return HM.map(function (c) {
@@ -536,7 +537,7 @@ function hmRows() {
     if (S.hm === 'lost' && c[0] === 'traffic') det = c[5];
     var pass = c[3] === '=' ? det === c[4] : c[3] === '<=' ? det <= c[4] + 1e-9 : det >= c[4] - 1e-9;
     var fmt = function (v) { return c[2] === 'bool' ? t(v ? 'val.on' : 'val.off') : c[2] === 'parking' ? t(v === 0 ? 'val.expert' : 'val.simple') : Math.round(v * 100) + '%'; };
-    var req = c[2] === 'pct' ? (c[3] === '<=' ? '≤ ' : '≥ ') + Math.round(c[4] * 100) + '%' : fmt(c[4]);
+    var req = c[2] === 'pct' && c[3] !== '=' ? (c[3] === '<=' ? '≤ ' : '≥ ') + Math.round(c[4] * 100) + '%' : fmt(c[4]);
     return { id: c[0], cvar: c[1], req: req, det: fmt(det), pass: pass };
   });
 }
@@ -666,14 +667,14 @@ function liveScreen() {
 }
 function hardModeScreen() {
   var rows = hmRows(), hp = hmPassed(), hs = hmState(), d = D();
-  var status = hs === 'active' ? '<span class="chip ok">' + ic('flame', 's') + t('hm.active') + ' · 12/12</span>' : hs === 'lost' ? '<span class="chip err">' + ic('flame', 's') + t('hm.lost') + '</span>' : '<span class="chip warn">' + ic('flame', 's') + t('hm.inactive') + ' · ' + hp + '/12</span>';
+  var status = hs === 'active' ? '<span class="chip ok">' + ic('flame', 's') + t('hm.active') + ' · 13/13</span>' : hs === 'lost' ? '<span class="chip err">' + ic('flame', 's') + t('hm.lost') + '</span>' : '<span class="chip warn">' + ic('flame', 's') + t('hm.inactive') + ' · ' + hp + '/13</span>';
   var list = rows.map(function (r, i) {
     return '<div class="crit ' + (r.pass ? '' : 'bad') + '"><span class="sicon ' + (r.pass ? 'ok' : 'err') + '">' + ic(r.pass ? 'check' : 'x', 's') + '</span><div style="min-width:0"><div class="b6">' + (i + 1) + '. ' + t('hm.c.' + r.id) + '</div><div class="cv">' + r.cvar + '</div></div>' +
       '<span class="req">' + r.req + '</span><span class="det">' + r.det + '</span></div>';
   }).join('');
   return '<div class="card" data-spec="hardMode.screen"><div class="ch"><h2 class="ct">' + t('hm.title') + '</h2>' + status + '</div><div class="cb">' +
     '<div class="row between"><p>' + t('hm.count', {n: hp}) + '</p><button class="btn p">' + ic('refresh', 's') + t('hm.recheck') + '</button></div>' +
-    '<progress max="12" value="' + hp + '" aria-label="' + t('hm.count', {n: hp}) + '" style="width:100%;margin:12px 0"></progress>' +
+    '<progress max="13" value="' + hp + '" aria-label="' + t('hm.count', {n: hp}) + '" style="width:100%;margin:12px 0"></progress>' +
     '<p class="muted">' + t('hm.profile') + ': ' + d.profile + ' · ' + d.name + ' · ' + t('hm.read', {s:4}) + '</p>' +
     (hs === 'lost' ? '<p class="badge err">' + t('hm.lostText', {what:t('hm.c.truckstab'),v:'70%',time:'09:31'}) + '</p>' : '') +
     '<div class="crit" style="color:var(--yu-text-muted)"><span></span><span>' + t('hm.col.setting') + '</span><span class="req">' + t('hm.col.required') + '</span><span class="det">' + t('hm.col.detected') + '</span></div>' +
@@ -745,7 +746,7 @@ function tripScreen() {
   }
   var left = '<div class="card" data-spec="trip.detailTabs"><div class="ch"><div class="seg">' + tab('summary') + tab('timeline') + tab('completeness') + '</div><span class="small muted">' + t('tr.samples') + '</span></div><div class="cb">' + body + '</div></div>';
   var hmc = '<div class="card" data-spec="trip.hardMode"><div class="ch"><h2 class="ct">Hard Mode</h2>' + (tr.hm ? '<span class="chip ok">' + ic('flame', 's') + t('hm.tripYes') + '</span>' : '<span class="chip neutral">' + ic('flame', 's') + t('hm.tripNo') + '</span>') + '</div><div class="cb">' +
-    '<div class="kv"><span>' + t('tr.hmStart') + '</span><b>' + (tr.hm ? '12/12' : '9/12') + '</b></div><div class="kv"><span>' + t('tr.hmEnd') + '</span><b>' + (tr.hm ? '12/12' : '9/12') + '</b></div><div class="small muted" style="margin-top:6px">' + t('tr.hmSnapshot') + '</div></div></div>';
+    '<div class="kv"><span>' + t('tr.hmStart') + '</span><b>' + (tr.hm ? '13/13' : '9/13') + '</b></div><div class="kv"><span>' + t('tr.hmEnd') + '</span><b>' + (tr.hm ? '13/13' : '9/13') + '</b></div><div class="small muted" style="margin-top:6px">' + t('tr.hmSnapshot') + '</div></div></div>';
   var money = '<div class="card" data-spec="trip.money"><div class="ch"><h2 class="ct">' + t('tr.money') + '</h2></div><div class="cb"><div class="kv"><span>' + t('tr.fines') + '</span><b>' + (S.trip === 1 ? '400 EUR' : '0') + '</b></div><div class="kv"><span>' + t('tr.tolls') + '</span><b>' + (S.trip === 1 ? '82 EUR' : '0') + '</b></div><div class="kv"><span>' + t('tr.ferry') + '</span><b>0</b></div></div></div>';
   return head + tiles + '<div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr);align-items:start">' + left + '<div class="grid">' + hmc + money + '</div></div>';
 }
@@ -890,7 +891,7 @@ function overlayScene() {
   var handle = function (pos) { return '<span class="handle" style="' + pos + '">' + ic('move', 's') + t('ov.drag') + '</span>'; };
   var open = function (spec, style) { return '<div class="ovl ' + (edit ? 'edit' : '') + '" data-conn="' + S.conn + '" data-spec="' + spec + '" style="' + style + '">'; };
   var v = function (s) { return '<span class="val">' + s + '</span>'; };
-  var hmIcon = '<span class="sx hm ' + (hs === 'active' ? 'ok' : 'bad') + '" title="Hard Mode">' + ic('flame', 's') + '<span>' + (hs === 'active' ? 'HM' : 'HM ' + hmPassed() + '/12') + '</span></span>';
+  var hmIcon = '<span class="sx hm ' + (hs === 'active' ? 'ok' : 'bad') + '" title="Hard Mode">' + ic('flame', 's') + '<span>' + (hs === 'active' ? 'HM' : 'HM ' + hmPassed() + '/13') + '</span></span>';
   var html;
   if (S.ovl === 'strip') {
     var sx = function (icon, inner, title) { return '<span class="sx" title="' + title + '">' + ic(icon, 's') + inner + '</span>'; };
@@ -944,7 +945,7 @@ function overlayScene() {
 
 /* ---------- Notes per screen (English, for agents) ---------- */
 var NOTES = {
-  live: ['Live (ui-spec §5.1)', ['Variant B instrument layout in Yukon style: hero gradient tile with the speed gauge (ring = speed, inner arc = RPM), gear block and fuel tank.', 'Hard Mode has its own page between Live and Journal, with all conditions inline and no drawer. Try the Hard Mode control above: 12/12, 10/12 and lost mid-trip.', 'Waiting shows the empty-state banner and dashes; Lost greys values and shows a stale badge; Paused keeps values with a paused badge.'],
+  live: ['Live (ui-spec §5.1)', ['Variant B instrument layout in Yukon style: hero gradient tile with the speed gauge (ring = speed, inner arc = RPM), gear block and fuel tank.', 'Hard Mode has its own page between Live and Journal, with all conditions inline and no drawer. Try the Hard Mode control above: 13/13, 11/13 and lost mid-trip.', 'Waiting shows the empty-state banner and dashes; Lost greys values and shows a stale badge; Paused keeps values with a paused badge.'],
     ['shell.topbar.status', 'live.instrument', 'live.job', 'live.trip']],
   journal: ['Journal (ui-spec §5.3)', ['Table per the Yukon guide: header #1A2332, dividers #2B3544, numbers right-aligned, no zebra.', 'Columns map to JournalTripSummary: outcome open/delivered/cancelled/none, recording complete/partial/unknown. "Delivered late" is a display of a delivered outcome with lateness.', 'Sync column is server-phase (Later) and is hidden until sync exists. Click a row for trip details.'],
     ['journal.filters', 'journal.table', 'journal.pager']],
@@ -953,7 +954,7 @@ var NOTES = {
   settingsRu: ['Настройки (ui-spec §5.5)', ['Одна страница «Оверлей»: видимость, вид, положение и размер, наборы и четырнадцать переключателей без технических пояснений в скобках.', 'При редактировании вид заблокирован; размер и сброс — черновик до «Готово», а отмена ничего не записывает. Непрозрачность запланирована.'], ['settings.nav', 'settings.overlay', 'settings.overlay.presets', 'settings.overlay.groups']],
   settings : ['Settings (ui-spec §5.5)', ['Left sub-navigation replaces the current single long dashboard column. Each panel is a card with the blue title bar.', 'One Overlay page contains visibility, layout, position and size, presets and all fourteen section switches without parenthetical technical notes. Layout is locked during editing; scale and reset are drafts until Done, and Cancel writes nothing. Opacity is Planned.', 'Start with Windows is shown as Planned: autostart is not authorized yet.'],
     ['settings.nav', 'settings.overlay', 'settings.overlay.presets', 'settings.overlay.groups']],
-  hardMode: ['Hard Mode (ET-047)', ['Dedicated page between Live and Journal. All twelve conditions and evidence are inline; no drawer. Current settings do not restore lost trip qualification.'], ['hardMode.screen', 'hardMode.criteria']],
+  hardMode: ['Hard Mode (ET-047)', ['Dedicated page between Live and Journal. All thirteen conditions and evidence are inline; no drawer. Current settings do not restore lost trip qualification.'], ['hardMode.screen', 'hardMode.criteria']],
   account: ['Account & sync (ui-spec §5.6)', ['Server phase, not in the MVP. Drawn so the shell reserves its place and the dashboard team sees the flow.', 'Token is masked by default; uploading is not acceptance.', 'Switch Connection to Lost to see the offline queue state.'], ['account.token', 'account.status', 'account.firstSync']],
   onboarding: ['First run (ui-spec §5.7)', ['Four steps: find games, install plugin, language and units, overlay layout. Use Back/Next inside the window.', 'Plugin installation keeps the existing rules: only while the game is closed, hash-verified, never overwriting unknown files.'], ['onboarding.steps', 'onboarding.step']],
   states: ['Empty and error states (ui-spec §6)', ['Every state pairs an icon, a title and one sentence that says what to do. Status colour is never the only signal.', 'Token, offline and first-sync states belong to the server phase.'], ['states.*']],

@@ -364,7 +364,7 @@ export function commitEvent(conn: StorageConnection, input: {message: unknown; e
     if (result.changes !== 1) fail('CONSTRAINT_VIOLATION');
     const eventRef = BigInt(result.lastInsertRowid);
     normalize(db, session.id, eventRef, record);
-    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
+    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'loss');
     if (input.hardMode) updateOpenHardMode(db, session.game, input.hardMode, now, input.hardModeFresh === true, 'frozen');
     applyEffects({db, session, game: session.game, now, eventRef, eventType: record.type, carrierEventSeq: seqKey,
       cargoOpening: redelivered ? undefined : input.cargoOpening}, input.effects);
@@ -415,7 +415,7 @@ export function commitGap(conn: StorageConnection, input: {message: unknown; eff
       return {status: 'covered', committedThroughEventSeq: previouslyCoveredThrough, previouslyCoveredThrough};
     }
     const now = conn.now(), clock = clockRef(db, session.id, 'source-monotonic', m.capture.clockId);
-    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'frozen');
+    if (input.hardModeLoss) updateOpenHardMode(db, session.game, input.hardModeLoss, now, false, 'loss');
     recordGapHardMode(db, m.source.pluginSessionId, now);
     updateOpenHardMode(db, session.game, {assessment: unknownHardMode(now, 'interrupted'), binding: null, pluginSessionId: null, sourceMonotonicNs: null}, now, false, 'frozen');
     const [firstLost, firstLostState] = availabilityColumns(d.firstLostMonotonicNs, u64Key), [lastLost, lastLostState] = availabilityColumns(d.lastLostMonotonicNs, u64Key);

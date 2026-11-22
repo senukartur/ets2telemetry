@@ -15,10 +15,10 @@ export function HardModeBadge({short = false, language = 'en'}: {short?: boolean
 }
 
 const HM_MARKS = {pass: '✓', fail: '✕', unknown: '?'} as const;
-/** One evaluation of a trip: its mark and state in words and how many of the twelve rules passed then. */
+/** One evaluation of a trip with the rule count recorded at the time. */
 function HardModeEvaluation({label, assessment, language, testId}: {label: string; assessment: HardModeDetails['opening']; language: AppLanguage; testId: string}) {
   const passed = assessment.rules.filter(rule => rule.state === 'pass').length;
-  return <div className="yu-trip-row"><dt>{label}</dt><dd data-testid={testId} data-state={assessment.state}><span aria-hidden="true">{HM_MARKS[assessment.state]} </span><span className="sr-only">{hardModeState(assessment.state, language)}: </span>{t('hm.configuredCount', {n: passed}, language)}</dd></div>;
+  return <div className="yu-trip-row"><dt>{label}</dt><dd data-testid={testId} data-state={assessment.state}><span aria-hidden="true">{HM_MARKS[assessment.state]} </span><span className="sr-only">{hardModeState(assessment.state, language)}: </span>{t('hm.configuredCount', {n: passed, total: assessment.rules.length}, language)}</dd></div>;
 }
 
 /** A trip's Hard Mode card (ET-077, mockup T4): the result, the evaluation at job start and the latest one, and the v2 and first-loss evidence. */
@@ -41,6 +41,7 @@ export function HardModeTrip({qualified, details, delivered = false, language = 
 export function HardModeCard({language = 'en', controller}: {language?: AppLanguage; controller: HardModeController}) {
   const {status, now, busy, error, loaded, check} = controller;
   const view = hardModeView(status, now, language);
+  const count = t('hm.configuredCount', {n: view.passed, total: view.total}, language);
   const failing = view.rows.filter(row => row.state === 'fail');
   const isLost = Boolean(status.trip?.firstLoss);
   const isPass = loaded && !error && status.assessment.state === 'pass';
@@ -64,7 +65,7 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
       ? t('hm.unavailable', undefined, language)
       : isUnknown
         ? view.verification.headline ?? view.headline
-        : `${view.headline} · ${t('hm.configuredCount', {n: view.passed}, language)}`;
+        : `${view.headline} · ${count}`;
 
   return (
     <div className="yu-stack" data-testid="hard-mode-card" data-state={isLost ? 'lost' : status.assessment.state}>
@@ -114,12 +115,12 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
           <div className="yu-hard-mode-progress">
             <progress
               value={view.passed}
-              max={12}
+              max={view.total}
               aria-label={t('hm.progress', undefined, language)}
               data-state={status.assessment.state}
             />
             <p role="status" className="text-xs font-medium">
-              {!loaded ? t('hm.reading', undefined, language) : t('hm.configuredCount', {n: view.passed}, language)}
+              {!loaded ? t('hm.reading', undefined, language) : count}
             </p>
           </div>
 
@@ -182,7 +183,7 @@ export function HardModeCard({language = 'en', controller}: {language?: AppLangu
                           type="button"
                           data-testid={`hard-mode-name-${row.id}`}
                           aria-label={`${row.label}: ${row.stateText}`}
-                          className="font-medium text-sm text-left truncate flex items-center gap-1.5 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                          className="font-medium text-sm text-left whitespace-normal flex items-center gap-1.5 hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
                         >
                           <span className="yu-hard-mode-mark" aria-hidden="true">{mark}</span>
                           <span>{row.label}</span>

@@ -3059,7 +3059,7 @@ async function hardModeFixtures() {
   const {evaluateHardMode, parseHardModeConfig, advanceHardMode} = await import('../../packages/telemetry-core/src/hard-mode');
   const {HARD_MODE_CONFIG} = await import('../shared/hard-mode');
   const pass = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG), Date.now(), 'fixture');
-  // Fatigue off: eleven of the twelve rules pass.
+  // Fatigue off: twelve of the thirteen rules pass.
   const fail = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), Date.now(), 'fixture');
   const publish = (assessment: unknown, remainingNs = '3000000000') => child.emit('message', {type: 'hard-mode', update: 'assessment', assessment, verification: HM_VERIFIED, remainingNs});
   return {pass, fail, publish, lostTrip: advanceHardMode(advanceHardMode(null, pass), fail)};
@@ -3067,11 +3067,11 @@ async function hardModeFixtures() {
 it('ET-070 projects the overlay Hard Mode indicator from the lease-checked status: active only on a pass, lost on a trip loss', async () => {
   await ready(); vi.spyOn(process.hrtime, 'bigint').mockImplementation(() => 0n);
   const {pass, fail, publish, lostTrip} = await hardModeFixtures();
-  expect(fail.state).toBe('fail'); expect(fail.rules.filter(rule => rule.state === 'pass')).toHaveLength(11);
-  // A ready service without evidence has twelve unknown rules: not active, without a count.
+  expect(fail.state).toBe('fail'); expect(fail.rules.filter(rule => rule.state === 'pass')).toHaveLength(12);
+  // A ready service without evidence has thirteen unknown rules: not active, without a count.
   expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
   publish(pass); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
-  publish(fail); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive', passed: 11});
+  publish(fail); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive', passed: 12});
   // A malformed publication invalidates the evidence; it never keeps or yields active.
   publish(pass); publish({...pass, filename: 'private'}); expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});
   publish(pass); child.emit('message', {type: 'hard-mode', update: 'trip', trip: lostTrip});
@@ -3101,7 +3101,7 @@ it('ET-070 keeps a passing publication accepted before service readiness not act
   // First start: no consumer can subscribe before readiness; after it the indicator is active.
   publish(pass); child.emit('message', {type: 'ready'}); await settle();
   expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'active'});
-  // A restarted service: its pass before readiness is computed from status(false), twelve unknown rules, so not active.
+  // A restarted service: its pass before readiness is computed from status(false), thirteen unknown rules, so not active.
   child.emit('exit', 1); await vi.advanceTimersByTimeAsync(250); const replacement = children[1];
   replacement.emit('message', {type: 'hard-mode', update: 'assessment', assessment: pass, verification: HM_VERIFIED, remainingNs: '3000000000'});
   expect(hydrateConsumers().overlay.hardMode).toStrictEqual({state: 'inactive'});

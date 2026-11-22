@@ -167,12 +167,13 @@ export function pluginChip(targets: readonly Pick<PluginTargetView, 'state'>[], 
   return {text, tone: pluginTone(targets)};
 }
 
-/** "Hard Mode n/12" from the current assessment; a loss for this trip and an unknown assessment say so in words. */
+/** The current Hard Mode progress, in words for a legacy loss or unknown assessment. */
 export function hardModeChip(status: Pick<HardModeStatus, 'assessment' | 'trip'>, nowUtcMs: number, language: AppLanguage = 'en'): StatusChip {
   const tone = hardModeTone(status);
   if (status.trip?.firstLoss) return {text: t('chip.hm.lost', undefined, language), tone};
   if (status.assessment.state === 'unknown') return {text: t('hm.status.unknown', undefined, language), tone};
-  return {text: t('chip.hm.fail', {n: hardModeView(status, nowUtcMs, language).passed}, language), tone};
+  const {passed, total} = hardModeView(status, nowUtcMs, language);
+  return {text: t('chip.hm.fail', {n: passed, total}, language), tone};
 }
 
 /**

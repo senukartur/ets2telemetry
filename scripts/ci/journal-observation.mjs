@@ -415,7 +415,7 @@ const EUR = {status: 'sdk-documented', code: 'EUR', source: 'scs-sdk-1.15/includ
 /** Independent zero-check expectation for current synthetic seeds; historical fixtures remain null/v1. */
 export function unobservedHardModeAudit(atUtcMs) {
   const assessment={observedUtcMs:atUtcMs,state:'unknown',source:'unknown',rules:
-    ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic'].map(id=>({id,state:'unknown',values:id==='parking'?[null,null]:[null],reason:'historical'}))};
+    ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic','coupling'].map(id=>({id,state:'unknown',values:id==='parking'?[null,null]:[null],reason:'historical'}))};
   return {version:2,binding:null,opening:assessment,latest:structuredClone(assessment),firstLoss:null,manualDelivery:null,
     passingChecks:0,failingChecks:0,unknownChecks:0,checkpoint:null,firstDiagnostic:null,latestDiagnostic:null};
 }

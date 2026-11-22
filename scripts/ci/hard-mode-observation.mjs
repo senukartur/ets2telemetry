@@ -16,14 +16,15 @@ uset g_hardcore_simulation "1"
 uset g_police "1"
 uset g_fatigue "1"
 uset g_use_speed_limiter "1"
-uset g_truck_stability "0.25"
-uset g_trailer_stability "0.25"
+uset g_truck_stability "0"
+uset g_trailer_stability "0"
 uset g_simple_parking_doubles "1"
 uset g_parking_difficulty "2"
 uset g_bad_weather_factor "0.12"
 uset g_road_events "0.30"
 uset g_brake_intensity "0.75"
-uset g_traffic "1.0"`;
+uset g_traffic "1.0"
+uset g_trailer_advanced_coupling "1"`;
 export async function startHardModeSource(config) {
   const directory = path.join(smokeDataRoot(config), 'synthetic', 'hard-mode-fixture', 'Documents', 'Euro Truck Simulator 2');
   const id = Buffer.from('Synthetic Hard Mode').toString('hex').toUpperCase(), profile = path.join(directory, 'profiles', id);
@@ -149,11 +150,11 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   await screen(dashboard, 'hardMode');
   await until(() => {healthy(); return source.connected();}, Boolean, 'HARD_MODE_DURABLE_SOURCE', 10000);
   await until(async () => (await readStatus()).assessment.state, value => value === 'unknown', 'HARD_MODE_UNKNOWN', 5000); record.unknown = true;
-  await overlayPhase('unknown', 'inactive', 'Hard Mode not active'); await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 12, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
+  await overlayPhase('unknown', 'inactive', 'Hard Mode not active'); await until(() => dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="unknown"]').count(), count => count === 13, 'HARD_MODE_UNKNOWN_NAMES', 5000); await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-unknown.png')});
   await source.settings('fail');
   await until(async () => (await readStatus()).assessment.state, value => value === 'fail', 'HARD_MODE_FAIL', 8000); record.fail = true;
-  // Eleven of the twelve rules pass (fatigue is off); the strip shows no count (D2), only the name carries it.
-  await overlayPhase('fail', 'inactive', 'Hard Mode not active, 11 of 12');
+  // Twelve of the thirteen rules pass (fatigue is off); the strip shows no count (D2), only the name carries it.
+  await overlayPhase('fail', 'inactive', 'Hard Mode not active, 12 of 13');
   // Accumulate real scheduled failures during the required bilingual hint journey, rather than after it.
   // The separate qualifying trip starts only after verified recovery; the product's 5 s cadence stays unchanged.
   await source.begin('ratio');
@@ -161,10 +162,11 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   const hints = [
     ['fuel', 'On (1)', 'On (1)', 'Meets the required setting'], ['air', 'On (1)', 'On (1)', 'Meets the required setting'],
     ['police', 'On (1)', 'On (1)', 'Meets the required setting'], ['fatigue', 'Off (0)', 'On (1)', 'Does not meet the required setting'],
-    ['limiter', 'On (1)', 'On (1)', 'Meets the required setting'], ['truck', '50% (0.25)', '≤ 50% (0.25)', 'Meets the required setting'],
-    ['trailer', '50% (0.25)', '≤ 50% (0.25)', 'Meets the required setting'], ['parking', 'Simplified double-trailer parking: On (1) / Normal (2)', 'Normal (2)', 'Meets the required setting'],
+    ['limiter', 'On (1)', 'On (1)', 'Meets the required setting'], ['truck', '0% (0)', '0% (0)', 'Meets the required setting'],
+    ['trailer', '0% (0)', '0% (0)', 'Meets the required setting'], ['parking', 'Simplified double-trailer parking: On (1) / Normal (2)', 'Normal (2)', 'Meets the required setting'],
     ['rain', '12% (0.12)', '≥ 12% (0.12)', 'Meets the required setting'], ['events', '30% (0.3)', '≥ 30% (0.3)', 'Meets the required setting'],
-    ['braking', '75% (0.75)', '≤ 75% (0.75)', 'Meets the required setting'], ['traffic', '100% (1)', '≥ 100% (1)', 'Meets the required setting']
+    ['braking', '75% (0.75)', '≤ 75% (0.75)', 'Meets the required setting'], ['traffic', '100% (1)', '≥ 100% (1)', 'Meets the required setting'],
+    ['coupling', 'On (1)', 'On (1)', 'Meets the required setting']
   ];
   const language = async value => {
     await chooseLanguage(dashboard, value);
@@ -177,10 +179,10 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   let englishFixture;
   for (const lang of ['en', 'ru']) {
     await language(lang);
-    const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured Normal parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная нормальная парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика'];
+    const names = lang === 'en' ? ['Realistic fuel consumption', 'Air brake simulation', 'Police and fines', 'Fatigue simulation', 'Speed limiter', 'Truck stability', 'Trailer stability', 'Configured Normal parking', 'Rain probability', 'Random road events', 'Braking intensity', 'Traffic density', 'Advanced trailer coupling'] : ['Реалистичный расход топлива', 'Пневмотормоза', 'Штрафы / полиция', 'Усталость', 'Ограничитель скорости', 'Стабилизация тягача', 'Стабилизация прицепа', 'Настроенная нормальная парковка', 'Вероятность дождя', 'Случайные события', 'Интенсивность торможения', 'Плотность трафика', 'Продвинутая симуляция сцепки прицепа'];
     const expected = localizedHints(lang), fail = lang === 'en' ? 'fail' : 'не выполнено', pass = lang === 'en' ? 'pass' : 'выполнено';
     const detectedLabel = lang === 'en' ? 'Detected' : 'Обнаружено', requiredLabel = lang === 'en' ? 'Required' : 'Требуется', reasonLabel = lang === 'en' ? 'Reason' : 'Причина';
-    const values = [[1],[1],[1],[0],[1],[0.25],[0.25],[1,2],[0.12],[0.3],[0.75],[1]], short = text => text.replace(/ \([^)]*\)/g, '');
+    const values = [[1],[1],[1],[0],[1],[0],[0],[1,2],[0.12],[0.3],[0.75],[1],[1]], short = text => text.replace(/ \([^)]*\)/g, '');
     const fixtureRules = expected.map(([id, detected, required, reason], index) => {
       const label = `${names[index]}: ${id === 'fatigue' ? fail : pass}`;
       return {id, state: id === 'fatigue' ? 'fail' : 'pass', values: values[index], reason: id === 'fatigue' ? 'outside-limit' : 'compliant',
@@ -195,7 +197,7 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
         expected: {language: lang, rules: fixtureRules, ...options}, record: observation, message});
     };
     if (lang === 'en') englishFixture = renderedFixture;
-    assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
+    assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 13);
     // Journal opening can precede the dashboard poll that inserts the banners above the rule triggers.
     const tripBanners = lang === 'en'
       ? {ratio: /Required: ≥95%/, diagnostic: /^Verified setting does not meet the rule · .* · Fatigue simulation: 0$/}
@@ -259,7 +261,7 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   const beforeUnknown = await until(readStatus, value => value.trip?.version === 2 && value.trip.failingChecks > 0, 'HARD_MODE_SCHEDULED_FAILURE', 8000);
   assert.ok(beforeUnknown.trip.passingChecks * 100 < (beforeUnknown.trip.passingChecks + beforeUnknown.trip.failingChecks) * 95);
   assert.match(await dashboard.getByTestId('hard-mode-trip-ratio').innerText(), /Required: ≥95%/);
-  await overlayPhase('belowThreshold', 'inactive', 'Hard Mode not active, 11 of 12');
+  await overlayPhase('belowThreshold', 'inactive', 'Hard Mode not active, 12 of 13');
   record.belowThreshold = true;
   await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-below-threshold.png')});
   await source.settings('unknown');
@@ -275,19 +277,19 @@ export async function runHardModeSmoke({application, dashboard, overlay, source,
   // The read that notices the rewrite reports it as changing; a later read confirms it. Scheduled reads are 5 s apart, so
   // drive the trusted refresh boundary instead of waiting for two ticks. Refreshes carry no sampling weight.
   await source.settings('pass'); await proof('HARD_MODE_RESTORED_SETTINGS', value => value.assessment.state === 'pass');
-  await until(() => dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), text => text === '12 of 12', 'HARD_MODE_RENDERED_RESTORATION', 5000);
+  await until(() => dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), text => text === '13 of 13', 'HARD_MODE_RENDERED_RESTORATION', 5000);
   assert.equal(await dashboard.getByTestId('hard-mode-card').getAttribute('data-state'), 'pass');
   assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /lost for this trip|cannot be restored/);
-  await overlayPhase('restored', 'active', 'Hard Mode active, 12 of 12');
+  await overlayPhase('restored', 'active', 'Hard Mode active, 13 of 13');
   const recovered = await readStatus();
   assert.ok(recovered.trip.passingChecks * 100 < (recovered.trip.passingChecks + recovered.trip.failingChecks) * 95);
-  await overlayPhase('belowThresholdRecovered', 'active', 'Hard Mode active, 12 of 12');
-  record.pass = true; await overlayPhase('pass', 'active', 'Hard Mode active, 12 of 12');
+  await overlayPhase('belowThresholdRecovered', 'active', 'Hard Mode active, 13 of 13');
+  record.pass = true; await overlayPhase('pass', 'active', 'Hard Mode active, 13 of 13');
   await dashboard.getByTestId('hard-mode-card').screenshot({path: path.join(config.output, 'hard-mode-pass.png')});
   await dashboard.evaluate(() => globalThis.desktop.setLanguage('ru'));
   await until(() => dashboard.getByTestId('hard-mode-trip-ratio').innerText(), text => text.includes('Неизвестно:') && text.includes('Порог: ≥95%'), 'HARD_MODE_PAGE_HOT_LANGUAGE', 5000);
-  assert.equal(await dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), '12 из 12');
-  await overlayPhase('restoredRu', 'active', 'Hard Mode активен, 12 из 12');
+  assert.equal(await dashboard.locator('[data-testid="hard-mode-card"] .yu-hard-mode-progress [role="status"]').innerText(), '13 из 13');
+  await overlayPhase('restoredRu', 'active', 'Hard Mode активен, 13 из 13');
   assert.doesNotMatch(await dashboard.getByTestId('hard-mode-card').innerText(), /Detected:|Required:|Current settings|Qualification cannot/);
   await dashboard.screenshot({path: path.join(config.output, 'hard-mode-recovered-ru.png')});
   await screen(dashboard, 'live'); await screen(dashboard, 'hardMode');

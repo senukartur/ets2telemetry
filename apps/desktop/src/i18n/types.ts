@@ -588,7 +588,7 @@ export type I18nKey =
   | 'hm.col.setting' | 'hm.col.required' | 'hm.col.detected' | 'hm.fix'
   | 'hm.rule'
   | 'hm.c.fuel' | 'hm.c.airbrake' | 'hm.c.police' | 'hm.c.fatigue' | 'hm.c.limiter'
-  | 'hm.c.truckstab' | 'hm.c.trailerstab' | 'hm.c.parking' | 'hm.c.rain' | 'hm.c.events' | 'hm.c.brake' | 'hm.c.traffic'
+  | 'hm.c.truckstab' | 'hm.c.trailerstab' | 'hm.c.parking' | 'hm.c.rain' | 'hm.c.events' | 'hm.c.brake' | 'hm.c.traffic' | 'hm.c.coupling'
   | 'val.on' | 'val.off' | 'val.expert' | 'val.simple'
   | 'j.title' | 'j.all' | 'j.outcome' | 'j.recording' | 'j.anyOutcome' | 'j.anyRecording' | 'j.search' | 'j.otherJobType' | 'j.unknownJobType' | 'j.export' | 'j.refresh'
   | 'cargo.fragile' | 'cargo.valuable' | 'cargo.adr' | 'cargo.heavy' | 'cargo.unknown' | `cargo.adrClass.${AdrClass}`
