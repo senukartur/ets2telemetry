@@ -104,7 +104,16 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test-v2'}));
       const ids=[ETS2_A,ETS2_B,'10000000-0000-4000-8000-0000000000d4'];
       for(let i=0;i<sessions;i++) {
-        if(i>0) {expect(await client.close()).toEqual({clean:true});worker=storageWorker(ENGINE_0);client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
+        if(i>0) {
+          expect(await client.close()).toEqual({clean:true});
+          if(i===1) {
+            // Model an update after the first member's checks had already been saved under the twelve-rule policy.
+            const beforeUpdate=new Database(ws.database);
+            try {
+              beforeUpdate.prepare("UPDATE trips SET hard_mode_details=json_remove(hard_mode_details,'$.opening.rules[12]','$.latest.rules[12]') WHERE trip_uuid=?").run(original);
+            } finally {beforeUpdate.close();}
+          }
+          worker=storageWorker(ENGINE_0);client=new StorageClient(worker.handle,{closeGraceMs:TEST_CLOSE_GRACE_MS});
           ok(await client.open({path:ws.database,backupsDirectory:ws.backups,purpose:'synthetic',appVersion:'test-v2'}));}
         const script=new Script(ids[i]);ok(await client.upsertSession({message:script.welcome()}));
         const configured=script.event(r.jobConfigured()),uuid=tripUuidFor(script.session,configured.data.eventSeq);original ||= uuid;
@@ -128,6 +137,8 @@ describe('REG-003/005/008/012/014 durable logical trips', () => {
       const list=ok(await client.journalTrips());expect(list.trips).toHaveLength(1);
       const detail=ok(await client.journalTrip(original));expect(detail.trip).toMatchObject({outcome:'delivered',isHardMode:true,
         hardModeDetails:{version:2,passingChecks:95,failingChecks:5,unknownChecks:7,firstLoss:null}});
+      expect(detail.trip.hardModeDetails?.opening.rules).toHaveLength(sessions===1?13:12);
+      expect(detail.trip.hardModeDetails?.latest.rules).toHaveLength(13);
       expect(detail.exportBounds.sourceTotal).toBe(sessions);
     } finally {expect(await client.close()).toEqual({clean:true});}
     readOnly(ws.database, db=> {

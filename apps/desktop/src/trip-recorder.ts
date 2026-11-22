@@ -16,7 +16,7 @@ import {jobKey} from '../../../packages/telemetry-core/src/trips/identity';
 // game is idle opens a late-attach trip through DurableDelivery's `attach` op once the replayed events drained. Node-safe:
 // it talks to storage only through the StorageClient interface. See docs/telemetry-service-v1.md.
 import type {HardModeDiagnostic, HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
-import {hardModeDiagnostic, unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
+import {hardModeDiagnostic, legacyHardModeAssessment, unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {JobConfiguration, SourceIdentity, Uint64} from '../../../packages/contracts/src/protocol-v1';
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
@@ -133,7 +133,7 @@ export class TripRecorderSink implements DurableSink {
       if (kind === 'job.configured') {
         capture.checkBoundary = 'job';
         const obs = capture.observation, check = obs.check, occurred = message.data.occurred.monotonicNs;
-        capture.openingCheck = capture.fresh && check !== undefined && obs.pluginSessionId === message.source.pluginSessionId && obs.binding !== null
+        capture.openingCheck = capture.fresh && obs.assessment.state === 'pass' && check !== undefined && obs.pluginSessionId === message.source.pluginSessionId && obs.binding !== null
           && obs.sourceMonotonicNs !== null && occurred.available && BigInt(occurred.value) >= BigInt(obs.sourceMonotonicNs) && !message.data.redelivered;
         const previous = this.checkOwner?.checkTarget?.lastCheck ?? this.checkOwner?.checks?.lastCheck ?? this.checkTarget?.lastCheck;
         capture.checks = {passingChecks:0,failingChecks:0,unknownChecks:0,lastCheck:check && newerCheck(previous,check) ? `${check.producer}:${check.sequence}` : previous};
@@ -180,11 +180,12 @@ export class TripRecorderSink implements DurableSink {
     if (!captured) {
       // The provider ages proof on the monitor's monotonic clock at synchronous intake, never at commit.
       const observation = structuredClone(this.options.hardModeEvidence());
-      captured = {game: message.source.game, pluginSessionId: message.source.pluginSessionId, observation, fresh: observation.assessment.state === 'pass', firstUnsafe: null};
+      const fresh = observation.assessment.state === 'pass' || observation.binding !== null && observation.sourceMonotonicNs !== null;
+      captured = {game: message.source.game, pluginSessionId: message.source.pluginSessionId, observation, fresh, firstUnsafe: null};
     }
     const pending = this.pendingObservation;
-    if (captured.firstUnsafe === null && pending?.game === captured.game && pending.value.assessment.state !== 'pass') captured.firstUnsafe = structuredClone(pending.value);
-    if (captured.firstUnsafe === null && this.observationError) captured.firstUnsafe = {assessment: unknownHardMode(Date.now(), 'interrupted'), diagnostic: 'storage-failure', binding: null, pluginSessionId: null, sourceMonotonicNs: null};
+    if (pending?.game === captured.game && pending.value.assessment.state !== 'pass') this.latchUnsafe(captured, pending.value, pending.fresh);
+    if (this.observationError) this.latchUnsafe(captured, {assessment: unknownHardMode(Date.now(), 'interrupted'), diagnostic: 'storage-failure', binding: null, pluginSessionId: null, sourceMonotonicNs: null});
     this.prepareCheckCapture(message, captured, true);
     this.pendingCaptures.add(captured); return captured;
   }
@@ -219,13 +220,14 @@ export class TripRecorderSink implements DurableSink {
   /** One in-flight command and one cumulative pending batch, with bounded diagnostic endpoints. */
   observeHardMode(game: TripGame, value: HardModeObservation): void {
     // Validate positive offers against the monitor's monotonic-aged proof synchronously, before any write await.
-    const current = value.assessment.state === 'pass' ? this.options.hardModeEvidence?.() : undefined;
-    const fresh = value.assessment.state === 'pass' && current?.assessment.state === 'pass' && current.binding !== null
+    const current = value.assessment.state === 'pass' || value.sourceMonotonicNs !== null ? this.options.hardModeEvidence?.() : undefined;
+    const fresh = current?.assessment.state === value.assessment.state && current.binding !== null
       && current.binding === value.binding && current.pluginSessionId === value.pluginSessionId && current.sourceMonotonicNs === value.sourceMonotonicNs;
     if (value.assessment.state === 'pass' && !fresh) value = {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'interrupted')};
+    if (!fresh && value.sourceMonotonicNs !== null) value = {...value, sourceMonotonicNs: null};
     const previousBinding = this.observationBinding;
     this.observationBinding = value.binding;
-    this.latchCaptureLoss(game, value);
+    this.latchCaptureLoss(game, value, fresh);
     this.countCheck(game, value);
     if (!this.client.observeHardMode) return;
     const target = this.checkTarget;
@@ -236,11 +238,18 @@ export class TripRecorderSink implements DurableSink {
     this.pendingObservation = {game, value: structuredClone(value), fresh, diagnostics};
     this.startObservationWrite();
   }
-  private latchCaptureLoss(game: TripGame, value: HardModeObservation): void {
-    for (const capture of new Set([...this.pendingCaptures, ...this.capturedEvidence.values()])) if (capture.game === game && capture.firstUnsafe === null) {
-      if (value.assessment.state !== 'pass') capture.firstUnsafe = structuredClone(value);
-      else if (capture.observation.binding !== value.binding) capture.firstUnsafe = {...structuredClone(value), assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')};
-    }
+  private latchUnsafe(capture: HardModeCapture, value: HardModeObservation, fresh = false): void {
+    if (capture.firstUnsafe && capture.firstLegacyUnsafe) return;
+    const changed = capture.observation.binding !== value.binding;
+    if (value.assessment.state === 'pass' && !changed) return;
+    const unsafe = value.assessment.state === 'pass' ? {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')} : value;
+    const legacyPass = fresh && !changed && value.sourceMonotonicNs !== null && legacyHardModeAssessment(value.assessment).state === 'pass';
+    const saved = structuredClone(unsafe);
+    capture.firstUnsafe ??= saved;
+    if (!legacyPass) capture.firstLegacyUnsafe ??= saved;
+  }
+  private latchCaptureLoss(game: TripGame, value: HardModeObservation, fresh = false): void {
+    for (const capture of new Set([...this.pendingCaptures, ...this.capturedEvidence.values()])) if (capture.game === game) this.latchUnsafe(capture, value, fresh);
   }
   private startObservationWrite(): void {
     if (this.observing || !this.pendingObservation || this.checkTarget?.ready === false) return;
@@ -438,8 +447,13 @@ export class TripRecorderSink implements DurableSink {
     const hardMode = capture ? {...capture.observation, ...(target && target.batch.sequence ? {member:target.batch.tripUuid,batch:{...target.batch},batchSessionId:target.session} : {})} : undefined;
     // An optional observer command cannot veto healthy recording. Its retained checkpoint instead commits atomically
     // with the next ordinary event/gap, so no check or original diagnostic disappears before ACK.
+    const firstUnsafe = capture?.firstUnsafe, legacyUnsafe = capture?.firstLegacyUnsafe;
+    // A legacy loss can follow a current-only failure. Carry both diagnostics with the legacy loss evidence.
+    const capturedLoss = firstUnsafe && legacyUnsafe && firstUnsafe !== legacyUnsafe
+      ? {...legacyUnsafe, diagnostics: [hardModeDiagnostic(firstUnsafe), hardModeDiagnostic(legacyUnsafe)].filter(value => value !== null)}
+      : firstUnsafe;
     const hardModeLoss = retained ? {...retained.value, assessment: unknownHardMode(Date.now(), 'interrupted'), diagnostic: 'storage-failure' as const,
-      ...(retained.diagnostics?.length ? {diagnostics: retained.diagnostics} : {})} : capture?.firstUnsafe;
+      ...(retained.diagnostics?.length ? {diagnostics: retained.diagnostics} : {})} : capturedLoss;
     const input = {message, ...(stepped.effects.length ? {effects: stepped.effects} : {}), ...(hardMode ? {hardMode, hardModeFresh: capture?.fresh ?? false} : {}),
       ...(hardModeLoss ? {hardModeLoss} : {}), ...(cargo?.current() ? {cargoOpening: cargo.opening} : {})};
     const result = message.kind === 'event' ? await this.client.commitEvent(input) : await this.client.commitGap(input);

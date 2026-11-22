@@ -37,7 +37,7 @@ export type SinkResult<T> = {ok: true; value: T} | {ok: false; error: SinkError}
 /** One recording member's bounded cumulative checkpoint, shared with its retained intake capture across retries. */
 export interface HardModeCheckTarget {game: 'ets2' | 'ats'; session: string; batch: HardModeCheckBatch; lastCheck?: string; ready: boolean}
 /** Bounded per-coverage intake evidence and the scheduled-check interval owned by a job boundary. */
-export interface HardModeCapture {game: 'ets2' | 'ats'; pluginSessionId?: string; observation: HardModeObservation; fresh: boolean; firstUnsafe: HardModeObservation | null; checks?: HardModeCounts & {lastCheck?: string}; checkBoundary?: 'job' | 'terminal'; openingCheck?: boolean; checkTarget?: HardModeCheckTarget}
+export interface HardModeCapture {game: 'ets2' | 'ats'; pluginSessionId?: string; observation: HardModeObservation; fresh: boolean; firstUnsafe: HardModeObservation | null; firstLegacyUnsafe?: HardModeObservation; checks?: HardModeCounts & {lastCheck?: string}; checkBoundary?: 'job' | 'terminal'; openingCheck?: boolean; checkTarget?: HardModeCheckTarget}
 export interface CommitContext {
   receivedUtcMs: number;
   hardModeCapture?: HardModeCapture;

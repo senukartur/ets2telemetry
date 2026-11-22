@@ -129,3 +129,27 @@ it('counts scheduled cached verification once while manual refreshes, polls and 
     expect(f.publications.filter(v=>v.check)).toHaveLength(5);
   } finally {f.close();}
 });
+
+it('keeps verified coupling failure on a proof timeout and binds an unchanged observation at the next causal probe', async () => {
+  const verdict = evaluateHardMode(parseHardModeConfig(HARD_MODE_CONFIG.replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"')), 0, 'fixture');
+  const publications: HardModeObservation[] = [], target = {source, monotonicNs: '100', clockId: 'clock'};
+  const monitor = new HardModeMonitor(() => Promise.resolve({assessment: verdict, binding: 'a'.repeat(64), pluginSessionId: source.pluginSessionId, sourceMonotonicNs: '100'}),
+    value => publications.push(value), () => BigInt(Date.now()) * 1_000_000n);
+  try {
+    monitor.select(target);
+    const initial = monitor.refresh();
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(publications.filter(value => value.check)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await initial;
+    expect(monitor.evidence()).toMatchObject({assessment: {state: 'fail'}, sourceMonotonicNs: null});
+    expect(publications.filter(value => value.check)).toHaveLength(1);
+
+    const retry = monitor.refresh(true);
+    await Promise.resolve();
+    monitor.select({...target, boundary: {clockId: 'clock', receivedSourceNs: '200', probeSentClientNs: '2000000001'}});
+    await retry;
+    expect(monitor.evidence()).toMatchObject({assessment: {state: 'fail'}, sourceMonotonicNs: '201'});
+    expect(publications.filter(value => value.check)).toHaveLength(1);
+  } finally {monitor.close();}
+});

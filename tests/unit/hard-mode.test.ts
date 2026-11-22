@@ -6,13 +6,13 @@ import {t} from '../../apps/desktop/src/i18n';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 const evaluate = (text = HARD_MODE_CONFIG) => evaluateHardMode(parseHardModeConfig(text), 1000, 'fixture');
 describe('ET-026 persisted settings (REG-009/010)', () => {
-  it.each(['truck', 'trailer'] as const)('uses the game slider scale and raw 0.25 limit for %s stability', id => {
-    for (const [raw, percent, state] of [[0, 0, 'pass'], [0.25, 50, 'pass'], [0.255, 51, 'fail'], [0.26, 52, 'fail'], [0.5, 100, 'fail']] as const) {
+  it.each(['truck', 'trailer'] as const)('uses the game slider scale and an exact zero limit for %s stability', id => {
+    for (const [raw, percent, state] of [[0, 0, 'pass'], [0.25, 50, 'fail'], [0.255, 51, 'fail'], [0.26, 52, 'fail'], [0.5, 100, 'fail']] as const) {
       const a = evaluate(HARD_MODE_CONFIG.replace(new RegExp(`g_${id}_stability "[^"]+"`), `g_${id}_stability "${raw}"`));
       expect(a.rules.find(rule => rule.id === id)).toMatchObject({state, values: [raw]});
       for (const language of ['en', 'ru'] as const) {
         expect(hardModeView({assessment: a, trip: null}, 1000, language).rows.find(rule => rule.id === id)).toMatchObject({
-          detected: `${percent}% (${raw})`, required: '≤ 50% (0.25)'});
+          detected: `${percent}% (${raw})`, required: '0% (0)'});
       }
     }
   });
@@ -21,13 +21,41 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
     expect(a.rules.find(rule => rule.id === 'parking')).toMatchObject({state: 'pass', values: [flag, 2]});
     expect(advanceHardMode(null, a).manualDelivery).toBeNull();
   });
-  it.each(['truck', 'trailer'] as const)('retains raw-unit tolerance and unavailable values for %s stability', id => {
-    for (const [raw, state] of [[0.250001, 'pass'], [0.250002, 'fail']] as const) {
+  it.each(['truck', 'trailer'] as const)('requires exact persisted zero and distinguishes unavailable %s stability', id => {
+    for (const [raw, state] of [[0, 'pass'], [-0.25, 'fail'], [0.00000001, 'fail'], [0.250001, 'fail'], [0.250002, 'fail']] as const) {
       expect(evaluate(HARD_MODE_CONFIG.replace(new RegExp(`g_${id}_stability "[^"]+"`), `g_${id}_stability "${raw}"`)).rules.find(rule => rule.id === id)).toMatchObject({state, values: [raw]});
     }
     const a = evaluate(HARD_MODE_CONFIG.replace(new RegExp(`uset g_${id}_stability "[^"]+"`), ''));
     expect(a.rules.find(rule => rule.id === id)).toMatchObject({state: 'unknown', reason: 'missing', values: [null]});
-    expect(hardModeView({assessment: a, trip: null}, 1000).rows.find(rule => rule.id === id)).toMatchObject({detected: 'Unknown', required: '≤ 50% (0.25)'});
+    expect(hardModeView({assessment: a, trip: null}, 1000).rows.find(rule => rule.id === id)).toMatchObject({detected: 'Unknown', required: '0% (0)'});
+    const setting = (raw: string) => evaluate(HARD_MODE_CONFIG.replace(`g_${id}_stability "0"`, `g_${id}_stability "${raw}"`)).rules.find(rule => rule.id === id);
+    for (const raw of ['-0', '+.0', '0.0e-300']) expect(setting(raw)).toMatchObject({state: 'pass'});
+    expect(setting('1e-999')).toMatchObject({state: 'unknown', reason: 'malformed', values: [null]});
+  });
+  it('requires the persisted coupling switch and presents it in both languages', () => {
+    const key = 'g_trailer_advanced_coupling', rule = `uset ${key} "1"`;
+    const result = (config: string) => evaluate(config).rules.find(row => row.id === 'coupling');
+    expect(result(HARD_MODE_CONFIG)).toMatchObject({state: 'pass', values: [1]});
+    const off = HARD_MODE_CONFIG.replace(rule, `uset ${key} "0"`);
+    expect(result(off)).toMatchObject({state: 'fail', values: [0]});
+    expect(evaluate(off).state).toBe('fail');
+    for (const [config, reason] of [[HARD_MODE_CONFIG.replace(rule, ''), 'missing'],
+      [HARD_MODE_CONFIG.replace(rule, `uset ${key} "bad"`), 'malformed'], [HARD_MODE_CONFIG + `\nuset ${key} "0"`, 'conflicting']]) {
+      expect(result(config)).toMatchObject({state: 'unknown', reason, values: [null]});
+      expect(evaluate(config).state).toBe('unknown');
+    }
+    const status = {assessment: evaluate(off), trip: null};
+    expect(hardModeView(status, 1000, 'en').rows.at(-1)).toMatchObject({label: 'Advanced trailer coupling', keys: key, detected: 'Off (0)', required: 'On (1)'});
+    expect(hardModeView(status, 1000, 'ru').rows.at(-1)).toMatchObject({label: 'Продвинутая симуляция сцепки прицепа', keys: key, detected: 'Выкл. (0)', required: 'Вкл. (1)'});
+  });
+  it('retains the legacy tolerance and ignores coupling in a continued version-1 audit', () => {
+    const earlier = advanceHardMode(null, evaluate());
+    const current = (raw: number) => evaluate(HARD_MODE_CONFIG.replace('g_truck_stability "0"', `g_truck_stability "${raw}"`)
+      .replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"'));
+    const within = advanceHardMode(earlier, current(0.250001));
+    expect(within).toMatchObject({opening: earlier.opening, latest: {state: 'pass'}, firstLoss: null});
+    expect(within.latest.rules).toHaveLength(12);
+    expect(advanceHardMode(within, current(0.250002)).firstLoss).toMatchObject({rule: 'truck', values: [0.250002]});
   });
   it('retains the existing display scales and limits for other numeric settings', () => {
     const rows = hardModeView({assessment: evaluate(), trip: null}, 1000).rows;
@@ -72,10 +100,10 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
       expect(view.loss).toContain('0.255'); expect(old).toEqual(before);
     }
   });
-  it('passes exactly twelve independently supplied configured rules and retains the compatibility field', () => {
-    const a = evaluate(); expect(a.state).toBe('pass'); expect(a.rules).toHaveLength(12);
+  it('passes exactly thirteen independently supplied configured rules and retains the compatibility field', () => {
+    const a = evaluate(); expect(a.state).toBe('pass'); expect(a.rules).toHaveLength(13);
     const details = advanceHardMode(null, a); expect(details.firstLoss).toBeNull(); expect(details.manualDelivery).toBeNull(); expect(isHardModeDetails(details)).toBe(true);
-    expect(hardModeView({assessment: a, trip: details}, 2000)).toMatchObject({headline: 'Hard Mode settings active', passed: 12, age: '1 s since observation'});
+    expect(hardModeView({assessment: a, trip: details}, 2000)).toMatchObject({headline: 'Hard Mode settings active', passed: 13, age: '1 s since observation'});
   });
   it.each([
     ['g_fuel_simulation', '0', 'fuel'], ['g_hardcore_simulation', '0', 'air'], ['g_police', '0', 'police'], ['g_fatigue', '0', 'fatigue'],
@@ -119,7 +147,7 @@ describe('ET-026 persisted settings (REG-009/010)', () => {
   it('orders published latest by actual offer order and preserves it against a numerically newer frozen intake', () => {
     const opening = {...evaluate(), observedUtcMs: 2000}, lost = {...evaluate(HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"')), observedUtcMs: 1000};
     const details = advanceHardMode(advanceHardMode(advanceHardMode(null, opening), lost), opening, undefined, 'frozen');
-    expect(details.latest).toEqual(lost); expect(details.firstLoss).toMatchObject({atUtcMs: 1000, rule: 'fatigue', values: [0]});
+    expect(details.latest).toEqual(advanceHardMode(null, lost).latest); expect(details.firstLoss).toMatchObject({atUtcMs: 1000, rule: 'fatigue', values: [0]});
     expect(advanceHardMode(details, {...opening, observedUtcMs: 500})).toMatchObject({latest: {state: 'pass', observedUtcMs: 500}, firstLoss: {rule: 'fatigue', values: [0]}});
   });
   it('renders Russian rule states, exact values and retained loss without mutating the stored audit or global language', () => {

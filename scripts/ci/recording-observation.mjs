@@ -546,7 +546,7 @@ function recordingHardModeAudit(document, record) {
   assert.ok(record.hardModeAdmissionUtcMs <= opening && opening <= latest && latest <= record.journal.readStartedUtcMs,
     'Hard Mode observation clocks must be ordered within source admission and the journal read');
   const unknown = (at, reason) => ({observedUtcMs: at, state: 'unknown', source: 'unknown', rules:
-    ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic']
+    ['fuel', 'air', 'police', 'fatigue', 'limiter', 'truck', 'trailer', 'parking', 'rain', 'events', 'braking', 'traffic', 'coupling']
       .map(id => ({id, state: 'unknown', values: id === 'parking' ? [null, null] : [null], reason}))});
   const audit=document.trip.hard_mode_details;
   assert.equal(audit.passingChecks,0);assert.equal(audit.failingChecks,0);

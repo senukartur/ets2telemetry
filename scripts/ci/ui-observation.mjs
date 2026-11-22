@@ -1125,10 +1125,10 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
         await focusRoute(dashboard, 'hardMode');
         assert.equal(await dashboard.getByTestId('hard-mode-checklist').count(), 0);
         assert.equal(await dashboard.getByTestId('hard-mode-drawer').count(), 0);
-        // ET-057: twelve rules; only those that do not pass repeat their values in the grid.
-        assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 12);
+        // Thirteen rules; only those that do not pass repeat their values in the grid.
+        assert.equal(await dashboard.locator('[data-testid^="hard-mode-rule-"]').count(), 13);
         assert.equal(await dashboard.locator('[data-testid^="hard-mode-detail-rule-"]').count(), await dashboard.locator('[data-testid^="hard-mode-rule-"][data-state="fail"]').count());
-        assert.equal(await dashboard.locator('[data-testid^="hard-mode-name-"]').evaluateAll(nodes => nodes.length === 12 && nodes.every(node => node.getBoundingClientRect().height >= 32 && node.scrollWidth <= node.clientWidth)), true, `UI_HM_NAMES_OVERFLOW_${language}_${size.width}`); record.flags.hmNamesReadable = true;
+        assert.equal(await dashboard.locator('[data-testid^="hard-mode-name-"]').evaluateAll(nodes => nodes.length === 13 && nodes.every(node => node.getBoundingClientRect().height >= 32 && node.scrollWidth <= node.clientWidth)), true, `UI_HM_NAMES_OVERFLOW_${language}_${size.width}`); record.flags.hmNamesReadable = true;
         await screen(dashboard, 'live');
         await waitLiveInstrument(dashboard, language);
         await save('current', language, size);

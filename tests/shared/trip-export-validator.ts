@@ -100,10 +100,10 @@ export function tripExportProblems(document: unknown): string[] {
       const safe = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
       const countKeys = ['passingChecks', 'failingChecks', 'unknownChecks'];
       const codes = ['settings-changing', 'settings-unavailable', 'profile-verification', 'source-changed', 'guard-deadline', 'session-transition', 'storage-failure', 'rule-failed'];
-      const ruleIds = ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic'];
+      const ruleIds = ['fuel','air','police','fatigue','limiter','truck','trailer','parking','rain','events','braking','traffic','coupling'];
       const values = (v: unknown, rule: unknown) => Array.isArray(v) && v.length === (rule === 'parking' ? 2 : 1) && v.every(n => n === null || typeof n === 'number' && Number.isFinite(n));
       const assessment = (v: unknown) => {
-        if (!isObject(v) || !(Object.keys(v).length === 4 && ['observedUtcMs','state','source','rules'].every(k=>Object.hasOwn(v,k))) || !safe(v.observedUtcMs) || !['local','cloud','fixture','unknown'].includes(textOf(v.source)) || !Array.isArray(v.rules) || v.rules.length !== 12) return false;
+        if (!isObject(v) || !(Object.keys(v).length === 4 && ['observedUtcMs','state','source','rules'].every(k=>Object.hasOwn(v,k))) || !safe(v.observedUtcMs) || !['local','cloud','fixture','unknown'].includes(textOf(v.source)) || !Array.isArray(v.rules) || ![12, 13].includes(v.rules.length)) return false;
         const rules = v.rules;
         if (!rules.every((r,i) => isObject(r) && sameKeys(r,['id','state','values','reason']) && r.id === ruleIds[i] && values(r.values,r.id)
           && (r.state === 'pass' ? r.reason === 'compliant' && (r.values as unknown[]).every(n=>n!==null) : r.state === 'fail' ? r.reason === 'outside-limit' && (r.values as unknown[]).every(n=>n!==null)

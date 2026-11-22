@@ -1,4 +1,5 @@
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import {mkdir, writeFile, stat, utimes, realpath, symlink} from 'node:fs/promises';
 import {TripExportSerializer, tripExportHeader} from '../../apps/desktop/src/journal-export';
 import {tripExportProblems} from '../shared/trip-export-validator';
@@ -14,7 +15,7 @@ import {DurableDelivery} from '../../apps/desktop/src/v1-durable-delivery';
 import {decodePayload, type ClientMessage} from '../../packages/contracts/src/protocol-v1';
 import type {EventRecord} from '../../packages/contracts/src/protocol-v1';
 import type {TripEffect} from '../../packages/storage/src/api';
-import {evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
+import {advanceHardMode, evaluateHardMode, parseHardModeConfig, unknownHardMode} from '../../packages/telemetry-core/src/hard-mode';
 import {HARD_MODE_CONFIG} from '../shared/hard-mode';
 import {Script, ETS2_A, ETS2_B, cargoMarketJob, job, r} from '../shared/trip-messages';
 import {ok, failed, TEST_CLOSE_GRACE_MS, workspace} from './helpers';
@@ -29,6 +30,75 @@ const opening: TripEffect = {kind: 'trip.open', tripUuid: id, game: 'ets2', game
 function delivery(): EventRecord {const d = r.delivered(); if (d.type !== 'job.delivered') throw new Error('fixture'); return {...d, autoParkUsed: {available: true, value: false}};}
 function sinkOk<T>(result: {ok: true; value: T} | {ok: false; error: {code: string}}): T {if (!result.ok) throw new Error(result.error.code); return result.value;}
 describe('ET-026 integrity (REG-005/006/007)', () => {
+  it.each([['observation', true], ['observation', false], ['delivery', true], ['delivery', false], ['replayed loss', true], ['replayed loss', false]] as const)('requires positive proof when a current failure passes the legacy policy at %s (fresh=%s)', async (boundary, fresh) => {
+    const original = await ws.open({now: Date.now}), script = new Script(ETS2_A);
+    ok(original.upsertSession({message: script.welcome()}));
+    const passing = evidence();
+    ok(original.commitEvent({message: script.event(r.jobConfigured()), hardMode: passing, hardModeFresh: true, effects: [opening]}));
+    const previous = {...advanceHardMode(null, passing.assessment), binding: passing.binding};
+    original.close();
+    const db = new Database(ws.database);
+    try {db.prepare('UPDATE trips SET hard_mode_details = ? WHERE trip_uuid = ?').run(JSON.stringify(previous), id);} finally {db.close();}
+    const storage = await ws.open({now: Date.now});
+
+    const failing = evidence(HARD_MODE_CONFIG.replace('g_truck_stability "0"', 'g_truck_stability "0.25"')
+      .replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"'));
+    expect(failing.assessment.state).toBe('fail');
+    if (boundary === 'observation') {
+      ok(storage.observeHardMode('ets2', failing, fresh));
+      const audit = ok(storage.getTrip(id))!.hardModeDetails!;
+      expect(audit.latest.rules).toHaveLength(12);
+      expect(audit.latest.state).toBe(fresh ? 'pass' : 'unknown');
+    }
+    const effects: TripEffect[] = [{kind: 'trip.close', tripUuid: id, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete', endedUtcMs: Date.now()}];
+    const hardModeLoss = boundary === 'replayed loss' ? {...failing, sourceMonotonicNs: fresh ? '1' : null} : undefined;
+    ok(storage.commitEvent({message: script.event(delivery()), hardMode: boundary === 'delivery' ? failing : passing, hardModeFresh: boundary === 'delivery' ? fresh : true, hardModeLoss, effects}));
+    const trip = ok(storage.getTrip(id))!;
+    expect(trip.isHardMode).toBe(fresh);
+    expect(trip.hardModeDetails?.firstLoss?.reason ?? null).toBe(fresh ? null : 'interrupted');
+  });
+  it('keeps the first current-policy diagnostic when a legacy failure follows a proved coupling failure during opening', async () => {
+    const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;
+    if (!directory) throw new Error('Run storage suite');
+    worker = new Worker(path.join(directory, 'storage-worker.cjs'), {workerData: {kind: 'storage'}});
+    const client = new StorageClient(workerHandle(worker), {closeGraceMs: TEST_CLOSE_GRACE_MS});
+    const script = new Script(ETS2_A), welcome = script.welcome(), target = {source: welcome.source, clockId: script.clockId, monotonicNs: '100'};
+    let config = HARD_MODE_CONFIG, now = 0n, recording = false;
+    const recorder = new TripRecorderSink(client, {hardModeEvidence: () => monitor.evidence()});
+    const monitor = new HardModeMonitor(() => Promise.resolve(evidence(config)), offer => {if (recording) recorder.observeHardMode('ets2', offer);}, () => now);
+    const prove = async (work: Promise<void>) => {
+      await Promise.resolve();
+      monitor.select({...target, boundary: {clockId: script.clockId, probeSentClientNs: String(now + 1n), receivedSourceNs: '1'}});
+      await work;
+    };
+    try {
+      ok(await client.open({path: ws.database, purpose: 'synthetic', backupsDirectory: ws.backups, appVersion: 'test-et123'}));
+      monitor.select(target);
+      await prove(monitor.refresh());
+      sinkOk(await recorder.openSession(welcome));
+      recording = true;
+      const event = script.event(r.jobConfigured()), capture = recorder.capture(event)!;
+      config = HARD_MODE_CONFIG.replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"');
+      now += 1_000_000_000n;
+      await prove(monitor.refresh(true));
+      expect(monitor.evidence()).toMatchObject({sourceMonotonicNs: '2', assessment: {state: 'fail'}});
+      expect(capture.firstUnsafe?.assessment.rules.at(-1)).toMatchObject({id: 'coupling', state: 'fail'});
+      expect(capture.firstLegacyUnsafe).toBeUndefined();
+
+      config = HARD_MODE_CONFIG.replace('g_fatigue "1"', 'g_fatigue "0"');
+      now += 1_000_000_000n;
+      await monitor.refresh(true);
+      expect(capture.firstLegacyUnsafe?.assessment.rules[3]).toMatchObject({id: 'fatigue', state: 'fail'});
+      sinkOk(await recorder.commit(event, {receivedUtcMs: Date.now(), hardModeCapture: capture}));
+      const trip = ok(await client.journalTrips()).trips[0];
+      const details = ok(await client.journalTrip(trip.tripUuid)).trip.hardModeDetails;
+      expect(details).toMatchObject({version: 2, passingChecks: 1, failingChecks: 0, firstDiagnostic: {rule: 'coupling', values: [0]},
+        latestDiagnostic: {rule: 'fatigue', values: [0]}});
+    } finally {
+      recording = false; monitor.close();
+      expect(await client.close()).toEqual({clean: true});
+    }
+  });
   it('persists a gap diagnostic only for its source session without changing counts or frozen evidence',async()=>{
     const directory=process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;if(!directory)throw new Error('Run storage suite');
     worker=new Worker(path.join(directory,'storage-worker.cjs'),{workerData:{kind:'storage'}});
