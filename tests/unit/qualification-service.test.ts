@@ -50,8 +50,10 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
     const live={source:{...checkpoint.source,origin:'game' as const},capture:checkpoint.capture,state:checkpoint.data.state};
     const template=fixtures.find(f=>f.schema==='Preview')!.value as QualificationWire['Preview'];
     let metres='99999',materialVersion='1',missingLocalReads=1,previewFailures=0;
+    let pendingCapabilities:Promise<QualificationHttpResult>|null=null;
     const f=harness((route,body)=>{
-      if(route!=='preview')return Promise.resolve(success(route==='capabilities'?cap:{...snapshot,game:route.endsWith('ats')?'ats':'ets2'}));
+      if(route==='capabilities')return pendingCapabilities??Promise.resolve(success(cap));
+      if(route!=='preview')return Promise.resolve(success({...snapshot,game:route.endsWith('ats')?'ats':'ets2'}));
       if(previewFailures>0){previewFailures--;return Promise.resolve({...success({}),statusCode:503});}
       const input=JSON.parse(new TextDecoder().decode(body)) as QualificationWire['PreviewInput'];
       return Promise.resolve(success({...template,requestId:input.requestId,contextRevision:input.contextRevision,evidenceRevision:input.evidenceRevision,
@@ -101,6 +103,11 @@ describe('companion recovery and retirement (REG-010/011/012/014)',()=>{
       f.service.observe({...next,state:script.checkpoint({...jobConfig,cargoLoaded:{available:true,value:false}}).data.state});
       await vi.advanceTimersByTimeAsync(10000);
       expect(previews()).toHaveLength(6);expect(f.service.get('ets2').preview).toEqual(current);
+      const capabilities=Promise.withResolvers<QualificationHttpResult>();pendingCapabilities=capabilities.promise;
+      await f.service.activate(configuration,'protected-token');await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(6);
+      capabilities.resolve(success(cap));pendingCapabilities=null;await vi.advanceTimersByTimeAsync(10000);
+      expect(previews()).toHaveLength(7);expect(f.service.get('ets2').preview).not.toBeNull();
       f.service.observe(null);expect(f.service.get('ets2').preview).toBeNull();
     }finally{await f.service.stop();}
   });
