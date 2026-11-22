@@ -229,7 +229,7 @@ If a saved job resumes after a game restart, its summary includes the trailers r
 Every overlay layout ends with a Hard Mode indicator: a flame icon with **HM** in the strip and the Minimal HUD, or a **Hard Mode** row in the Card and the Cluster panel. It cannot be switched off and does not count as a section.
 
 - **Active** (green, with a check): your saved settings currently meet all thirteen Hard Mode rules. The Card and the Cluster show `13/13`.
-- **Not active** (amber, no check): a rule does not pass, or the application cannot confirm the settings yet. The Card, the Cluster and the HUD show how many rules pass, for example `11/12`, when it is known; the strip shows only **HM**.
+- **Not active** (amber, no check): a rule does not pass, or the application cannot confirm the settings yet. The Card, the Cluster and the HUD show how many rules pass, for example `12/13`, when it is known; the strip shows only **HM**.
 - **Lost** (red, with a cross): a legacy trip recorded under the original policy has lost Hard Mode for good. The strip and the HUD strike through **HM**; the Card and the Cluster show **lost** (Russian **потерян**). Fixing the settings does not restore the trip.
 
 For new trips, the indicator shows current settings even when the trip's passing-check ratio is below 95%; a verified recovery makes it active again. Open the **Hard Mode** page for the separate trip ratio, rules and reasons. It makes the Card, the Cluster panel and the Minimal HUD one row taller and can give the strip one more row; the extra space is transparent.
