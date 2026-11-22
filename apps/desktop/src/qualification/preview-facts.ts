@@ -41,19 +41,21 @@ export class QualificationPreviewFacts {
   #job='';#couplings:(string|null)[]=[];
   constructor(private readonly db:PreviewStorage,private readonly authority:QualificationAuthority){}
   get current():QualificationPreviewInput|null{return this.#current?structuredClone(this.#current):null;}
-  observe(live:QualificationLive|null):boolean {
+  observe(live:QualificationLive|null):'trip-started'|'changed'|'steady' {
     const before=this.#live;
     const sourceChanged=qualificationSourceKey(before)!==qualificationSourceKey(live);
     const trailerChanged=JSON.stringify(before?.state.configuration.trailers[0])!==JSON.stringify(live?.state.configuration.trailers[0]);
-    const jobChanged=JSON.stringify(before?.state.configuration.job)!==JSON.stringify(live?.state.configuration.job);
+    const previousJob=before?.state.configuration.job,job=live?.state.configuration.job;
+    const jobChanged=previousJob?.available!==job?.available||!!(previousJob?.available&&job?.available&&
+      JSON.stringify(previousJob.value)!==JSON.stringify(job.value)&&canonicalJobKey(previousJob.value)!==canonicalJobKey(job.value));
     this.#live=live;
-    if(sourceChanged||!live?.state.configuration.job.available){this.#couplings=[];this.#job='';this.#proof=null;}
+    if(sourceChanged||jobChanged){this.#couplings=[];this.#job='';this.#proof=null;}
     else if(before&&this.#job&&trailerChanged){
       if(this.#couplings.length<9)this.#couplings.push(firstBody(before.state.configuration.trailers));else this.#couplings[8]=null;
     }
-    const changed=sourceChanged||jobChanged||trailerChanged;
-    if(changed){this.#generation++;this.#current=null;this.#context='';}
-    return changed;
+    if(!sourceChanged&&!jobChanged&&!trailerChanged)return 'steady';
+    this.#generation++;this.#current=null;this.#context='';
+    return job?.available&&(sourceChanged||jobChanged)?'trip-started':'changed';
   }
   async #release():Promise<void>{const pin=this.#pin;if(!pin)return;for(let turn=0;turn<64;turn++){const value=await this.db.releaseQualificationPreview({...this.authority,pinId:pin});if(!value.ok)throw Error('PREVIEW_RELEASE_FAILED');if(value.value.state==='released'){this.#pin=null;return;}}throw Error('PREVIEW_RELEASE_PENDING');}
   read():Promise<QualificationPreviewInput|null>{
