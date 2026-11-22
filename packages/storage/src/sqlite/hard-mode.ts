@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import {isHardModeDetails, isHardModeObservation, type HardModeDetails, type HardModeObservation, type HardModeReason} from '../../../contracts/src/hard-mode';
 import type {ServerMessage} from '../../../contracts/src/protocol-v1';
-import {hardModeDiagnostic, advanceHardMode, advanceHardModeV2, legacyHardModeAssessment, newHardModeDetails, qualifiesHardMode, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
+import {hardModeDiagnostic, advanceHardMode, advanceHardModeV2, isLegacyHardModeProofPending, legacyHardModeAssessment, newHardModeDetails, qualifiesHardMode, unknownHardMode} from '../../../telemetry-core/src/hard-mode';
 import {fail} from '../errors';
 export function readHardModeDetails(value: unknown): HardModeDetails | null {
   if (value === null || value === undefined) return null;
@@ -42,7 +42,9 @@ export function updateOpenHardMode(db: Database.Database, game: string, observat
     }
     // Freshness was frozen at offer/intake on the service's monotonic clock, before this FIFO/transaction.
     const legacy = legacyHardModeAssessment(observation.assessment);
-    if (intake === 'loss' && legacy.state === 'pass' && observation.sourceMonotonicNs !== null && observation.binding !== null && previous.binding === observation.binding) continue;
+    const sameSource = observation.binding !== null && previous.binding === observation.binding && observation.pluginSessionId === row.plugin_session_uuid;
+    if (sameSource && (isLegacyHardModeProofPending(observation, legacy)
+      || intake === 'loss' && legacy.state === 'pass' && observation.sourceMonotonicNs !== null)) continue;
     const assessment = !fresh && legacy.state === 'pass' ? unknownHardMode(now, 'interrupted') : legacy;
     const loss = assessment.state === 'unknown' ? 'interrupted' : previous.binding !== observation.binding ? 'source-changed' : undefined;
     write(db, row.id, advanceHardMode(previous, assessment, loss, latest));

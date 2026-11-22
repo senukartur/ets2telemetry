@@ -65,6 +65,11 @@ export function legacyHardModeAssessment(assessment: HardModeAssessment): HardMo
   });
   return {...assessment, rules, state: assessmentState(rules)};
 }
+/** A verified current non-pass can report its verdict while it waits for optional legacy proof. */
+export function isLegacyHardModeProofPending(observation: HardModeObservation, legacy?: HardModeAssessment): boolean {
+  return observation.assessment.state !== 'pass' && observation.binding !== null && observation.pluginSessionId !== null && observation.sourceMonotonicNs === null
+    && observation.diagnostic === undefined && (legacy ?? legacyHardModeAssessment(observation.assessment)).state === 'pass';
+}
 /** Ordered observer offers replace latest; queued intake reapplication only latches loss, independently of UTC labels. */
 export function advanceHardMode(previous: HardModeDetailsV1 | null, assessment: HardModeAssessment, loss?: HardModeReason, latest?: 'publication' | 'frozen'): HardModeDetailsV1;
 export function advanceHardMode(previous: HardModeDetails, assessment: HardModeAssessment, loss?: HardModeReason, latest?: 'publication' | 'frozen'): HardModeDetails;

@@ -99,7 +99,7 @@ The compact mockup (T1) uses `#64748B` for muted text, which measures 3.66:1 on 
 | Journal | `BookOpen` |
 | Settings | `Settings2` |
 | Account and sync | `Cloud` (offline: `CloudOff`) |
-| Hard Mode | `Flame` in every state; the state is carried by the chip colour and its words ("Hard Mode ✓", "Hard Mode 10/12", "Hard Mode lost"). Do not use shield or badge-check shapes: the owner asked for a mark that cannot be confused with VTCBase's |
+| Hard Mode | `Flame` in every state; the state is carried by the chip colour and its words ("Hard Mode ✓", "Hard Mode 10/13", "Hard Mode lost"). Do not use shield or badge-check shapes: the owner asked for a mark that cannot be confused with VTCBase's |
 | Plugin | `Plug` |
 | Recording | a dot (`--yu-online` with a 3 px 18% halo when recording) |
 | Cargo, origin, destination | `Package`, `MapPin`, `Flag` |
@@ -133,7 +133,7 @@ Top-bar status chips:
 | --- | --- | --- | --- | --- | --- |
 | Game connection | `LiveTelemetry.status` | `connected`: "ETS2 · Single-player", or "ETS2 · Connected" without a known mode | `paused`: "ETS2 paused" | `stale`, `disconnected`: "ETS2 · No current data" / "ETS2 · Disconnected" (never an age); `incompatible`, `service-failed`: the status word | `waiting`: "Waiting for the game"; `unavailable`, `restarting`: the status word |
 | Plugin | `AppState.plugins` targets (`PluginTargetState`) | all discovered games `installed` ("Plugin 2/2") | any `outdated`, `working` | any `blocked` | `missing`, `excluded` only |
-| Hard Mode | ET-026 status (ET-026c) | all 12 pass ("Hard Mode 12/12") | some fail ("Hard Mode 10/12") | lost during the current trip ("Hard Mode lost") | not evaluated ("Hard Mode unknown") |
+| Hard Mode | ET-026 status (ET-026c) | all 13 pass ("Hard Mode 13/13") | some fail ("Hard Mode 10/13") | lost during the current trip ("Hard Mode lost") | not evaluated ("Hard Mode unknown") |
 | Site sync | Validated upload status DTO, configured origins only | "Connected" / "Подключено"; while sending "Uploading 3 of 10" / "Отправка 3 из 10" | "No network" / "Нет сети"; "Needs attention" / "Нужно внимание" for trips awaiting identity, held trips, queue pressure or another upload error | "New token needed" / "Нужен новый токен" (rejected or unusable token); "Needs attention" for a reconciliation hold, configuration or contract error | Before a connection, the state word ("Not connected", "Awaiting confirmation"); hidden when the deployment origin is unset |
 
 "Plugin n/m" counts the installed targets of the games that are not excluded; while not all are installed the state words follow ("Plugin 1/2 · Blocked"). The game mode comes from the current v1 mode evidence: TruckersMP only with strong evidence, single-player with strong evidence or the ordinary weak module scan; otherwise only the game and the connection word are shown.
@@ -150,7 +150,7 @@ Top-bar status chips:
 | Switch, select, radio | `switch`, `select`, `radio-group` (exist) | Checked uses `--yu-accent` |
 | Slider | `slider` (add) | Track `--yu-border`, range `--yu-accent-light` |
 | Progress bar | `progress` (add) | 8 px high; fill `--yu-accent-light`, `--yu-ok-fg` when complete, `--yu-progress-pending` for low fuel or pending |
-| Hard Mode parameter hints | `tooltip` | Each of the twelve parameter names: hover and keyboard focus; noninteractive, Escape dismissal |
+| Hard Mode parameter hints | `tooltip` | Each of the thirteen parameter names: hover and keyboard focus; noninteractive, Escape dismissal |
 | Hard Mode page | `card`, `button`, `tooltip` | Inline evidence and caveats; ordinary page scroll, no drawer (ET-047) |
 | Language menu | `dropdown-menu` (add) | Panel `--yu-bg-card`, selected item `--yu-accent` with white text |
 | Tooltips on icon-only items | `tooltip` (add) | Overlay icons have no tooltips (the overlay never takes the mouse while driving) |
@@ -191,7 +191,7 @@ Owner decision, October 23, 2026 (ET-047): Hard Mode is a dedicated Drive destin
 The full page follows the compact UI layout (T2 mockup, ET-075):
 1. **Summary card "Current settings":** CardTitle with Flame icon, localized "Current settings" heading, caveats InfoHint (`hard-mode-caveats`), adaptive status badge (Active `.badge-ok`, Not active `.badge-warn`, Lost `.badge-error` with `{headline} · {n} of 13`), source and observation age subline (`hard-mode-source`), outline "Check again" button (`hard-mode-refresh`, "Checking…" while a check runs), the last manual check's result below that row (`hard-mode-check-result`, "Last check {s} s ago: …", kept in place while a new check runs, its line reserved before the first check), and a progress bar with an `{n} of 13` counter. While the assessment is unknown and nothing is lost, the badge says "Unable to verify profile", "Waiting for game telemetry" or "Checking the game profile…" instead of "Hard Mode unknown"; an unverified profile also gets a status line with its reason (`hard-mode-verification`), separate from the fix banner of a verified failing rule.
 2. **Status explanations:** Inactive banner (`hard-mode-fix`) detailing which settings to adjust under Options → Gameplay; Lost banner (`hard-mode-loss`) detailing which setting changed, value, time, and that qualification cannot be restored; and current trip ratio when auditing a v2 trip.
-3. **Conditions list:** 2-column CSS grid (`hard-mode-details`, collapsing to 1 column at <=680px) titled "All 12 must hold at the same time". Each row displays a pass/fail/unknown mark (`✓`, `✕`, `?`), readable parameter trigger button with accessible tooltip (`hard-mode-name-*`, `hard-mode-hint-*`), cvar subtitle in monospace muted text, and inline Required and In game detected values. Failing rows retain the inline diagnostic line (`hard-mode-detail-rule-*`).
+3. **Conditions list:** 2-column CSS grid (`hard-mode-details`, collapsing to 1 column at <=680px) titled "All 13 must hold at the same time". Each row displays a pass/fail/unknown mark (`✓`, `✕`, `?`), readable parameter trigger button with accessible tooltip (`hard-mode-name-*`, `hard-mode-hint-*`), cvar subtitle in monospace muted text, and inline Required and In game detected values. Failing rows retain the inline diagnostic line (`hard-mode-detail-rule-*`).
 4. **"What is checked" note card:** explains that only persisted profile settings are read, parking is checked only by settings, and current settings compliance does not guarantee finished trip qualification.
 
 Unknown values are always displayed as unknown, never as pass or fail. Texts never promise or claim that a trip will count as Hard Mode. Retain first-loss value/time even after settings recover. No View checklist trigger or Hard Mode drawer remains. Use two columns when the card is wider than 680px, otherwise one, with normal page scrolling and wrapping. Reuse Yukon tokens, offline Huninn and lucide Flame; status includes text/icons as well as color.

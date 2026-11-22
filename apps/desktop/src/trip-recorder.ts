@@ -16,7 +16,7 @@ import {jobKey} from '../../../packages/telemetry-core/src/trips/identity';
 // game is idle opens a late-attach trip through DurableDelivery's `attach` op once the replayed events drained. Node-safe:
 // it talks to storage only through the StorageClient interface. See docs/telemetry-service-v1.md.
 import type {HardModeDiagnostic, HardModeDetails, HardModeObservation} from '../../../packages/contracts/src/hard-mode';
-import {hardModeDiagnostic, legacyHardModeAssessment, unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
+import {hardModeDiagnostic, isLegacyHardModeProofPending, legacyHardModeAssessment, unknownHardMode} from '../../../packages/telemetry-core/src/hard-mode';
 import type {RecordingLosses, RecordingTrip} from '../../../packages/contracts/src';
 import type {JobConfiguration, SourceIdentity, Uint64} from '../../../packages/contracts/src/protocol-v1';
 import {isUint64} from '../../../packages/contracts/src/protocol-v0';
@@ -220,11 +220,17 @@ export class TripRecorderSink implements DurableSink {
   /** One in-flight command and one cumulative pending batch, with bounded diagnostic endpoints. */
   observeHardMode(game: TripGame, value: HardModeObservation): void {
     // Validate positive offers against the monitor's monotonic-aged proof synchronously, before any write await.
-    const current = value.assessment.state === 'pass' || value.sourceMonotonicNs !== null ? this.options.hardModeEvidence?.() : undefined;
-    const fresh = current?.assessment.state === value.assessment.state && current.binding !== null
-      && current.binding === value.binding && current.pluginSessionId === value.pluginSessionId && current.sourceMonotonicNs === value.sourceMonotonicNs;
+    const pending = isLegacyHardModeProofPending(value);
+    const current = value.assessment.state === 'pass' || value.sourceMonotonicNs !== null || pending ? this.options.hardModeEvidence?.() : undefined;
+    const same = current?.assessment.state === value.assessment.state && current.binding !== null
+      && current.binding === value.binding && current.pluginSessionId === value.pluginSessionId && current.sourceMonotonicNs === value.sourceMonotonicNs
+      && (!pending || current.assessment.observedUtcMs === value.assessment.observedUtcMs && isLegacyHardModeProofPending(current));
+    const fresh = same && !pending;
     if (value.assessment.state === 'pass' && !fresh) value = {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'interrupted')};
-    if (!fresh && value.sourceMonotonicNs !== null) value = {...value, sourceMonotonicNs: null};
+    if (!same && (pending || value.sourceMonotonicNs !== null)) {
+      value = {...value, sourceMonotonicNs: null};
+      if (isLegacyHardModeProofPending(value)) value = {...value, diagnostic: 'profile-verification'};
+    }
     const previousBinding = this.observationBinding;
     this.observationBinding = value.binding;
     this.latchCaptureLoss(game, value, fresh);
@@ -243,10 +249,11 @@ export class TripRecorderSink implements DurableSink {
     const changed = capture.observation.binding !== value.binding;
     if (value.assessment.state === 'pass' && !changed) return;
     const unsafe = value.assessment.state === 'pass' ? {...value, assessment: unknownHardMode(value.assessment.observedUtcMs, 'source-changed')} : value;
-    const legacyPass = fresh && !changed && value.sourceMonotonicNs !== null && legacyHardModeAssessment(value.assessment).state === 'pass';
+    const legacySafe = !changed && capture.observation.pluginSessionId === value.pluginSessionId
+      && (isLegacyHardModeProofPending(value) || fresh && value.sourceMonotonicNs !== null && legacyHardModeAssessment(value.assessment).state === 'pass');
     const saved = structuredClone(unsafe);
     capture.firstUnsafe ??= saved;
-    if (!legacyPass) capture.firstLegacyUnsafe ??= saved;
+    if (!legacySafe) capture.firstLegacyUnsafe ??= saved;
   }
   private latchCaptureLoss(game: TripGame, value: HardModeObservation, fresh = false): void {
     for (const capture of new Set([...this.pendingCaptures, ...this.capturedEvidence.values()])) if (capture.game === game) this.latchUnsafe(capture, value, fresh);

@@ -29,18 +29,20 @@ const id = '70000000-0000-4000-8000-000000000001';
 const opening: TripEffect = {kind: 'trip.open', tripUuid: id, game: 'ets2', gameMode: {mode: 'unknown', method: 'none', confidence: 'none'}, jobConfiguration: 'this-event', recordingCompleteness: 'complete', startedUtcMs: Date.now()};
 function delivery(): EventRecord {const d = r.delivered(); if (d.type !== 'job.delivered') throw new Error('fixture'); return {...d, autoParkUsed: {available: true, value: false}};}
 function sinkOk<T>(result: {ok: true; value: T} | {ok: false; error: {code: string}}): T {if (!result.ok) throw new Error(result.error.code); return result.value;}
+async function openLegacyTrip() {
+  const original = await ws.open({now: Date.now}), script = new Script(ETS2_A);
+  ok(original.upsertSession({message: script.welcome()}));
+  const passing = evidence();
+  ok(original.commitEvent({message: script.event(r.jobConfigured()), hardMode: passing, hardModeFresh: true, effects: [opening]}));
+  const previous = {...advanceHardMode(null, passing.assessment), binding: passing.binding};
+  original.close();
+  const db = new Database(ws.database);
+  try {db.prepare('UPDATE trips SET hard_mode_details = ? WHERE trip_uuid = ?').run(JSON.stringify(previous), id);} finally {db.close();}
+  return {storage: await ws.open({now: Date.now}), script, passing};
+}
 describe('ET-026 integrity (REG-005/006/007)', () => {
   it.each([['observation', true], ['observation', false], ['delivery', true], ['delivery', false], ['replayed loss', true], ['replayed loss', false]] as const)('requires positive proof when a current failure passes the legacy policy at %s (fresh=%s)', async (boundary, fresh) => {
-    const original = await ws.open({now: Date.now}), script = new Script(ETS2_A);
-    ok(original.upsertSession({message: script.welcome()}));
-    const passing = evidence();
-    ok(original.commitEvent({message: script.event(r.jobConfigured()), hardMode: passing, hardModeFresh: true, effects: [opening]}));
-    const previous = {...advanceHardMode(null, passing.assessment), binding: passing.binding};
-    original.close();
-    const db = new Database(ws.database);
-    try {db.prepare('UPDATE trips SET hard_mode_details = ? WHERE trip_uuid = ?').run(JSON.stringify(previous), id);} finally {db.close();}
-    const storage = await ws.open({now: Date.now});
-
+    const {storage, script, passing} = await openLegacyTrip();
     const failing = evidence(HARD_MODE_CONFIG.replace('g_truck_stability "0"', 'g_truck_stability "0.25"')
       .replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"'));
     expect(failing.assessment.state).toBe('fail');
@@ -51,13 +53,30 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       expect(audit.latest.state).toBe(fresh ? 'pass' : 'unknown');
     }
     const effects: TripEffect[] = [{kind: 'trip.close', tripUuid: id, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete', endedUtcMs: Date.now()}];
-    const hardModeLoss = boundary === 'replayed loss' ? {...failing, sourceMonotonicNs: fresh ? '1' : null} : undefined;
+    const hardModeLoss = boundary === 'replayed loss' ? {...failing, sourceMonotonicNs: fresh ? '1' : null, ...(fresh ? {} : {diagnostic: 'guard-deadline' as const})} : undefined;
     ok(storage.commitEvent({message: script.event(delivery()), hardMode: boundary === 'delivery' ? failing : passing, hardModeFresh: boundary === 'delivery' ? fresh : true, hardModeLoss, effects}));
     const trip = ok(storage.getTrip(id))!;
     expect(trip.isHardMode).toBe(fresh);
     expect(trip.hardModeDetails?.firstLoss?.reason ?? null).toBe(fresh ? null : 'interrupted');
   });
-  it('keeps the first current-policy diagnostic when a legacy failure follows a proved coupling failure during opening', async () => {
+  it.each(['proof before delivery', 'delivery before proof', 'proof timeout', 'changed binding'] as const)('keeps legacy pending proof distinct from an interruption at %s', async scenario => {
+    const {storage, script} = await openLegacyTrip();
+    const pending = {...evidence(HARD_MODE_CONFIG.replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"')), sourceMonotonicNs: null};
+    ok(storage.observeHardMode('ets2', pending, false));
+    ok(storage.commitEvent({message: script.event(r.fined()), hardMode: pending, hardModeLoss: pending}));
+    expect(ok(storage.getTrip(id))!.hardModeDetails).toMatchObject({firstLoss: null, latest: {state: 'pass'}});
+
+    const proof = {...pending, sourceMonotonicNs: '1'};
+    if (scenario === 'proof timeout') ok(storage.observeHardMode('ets2', {...pending, diagnostic: 'guard-deadline'}, false));
+    if (scenario === 'changed binding') ok(storage.observeHardMode('ets2', {...pending, binding: 'b'.repeat(64)}, false));
+    const closing = scenario === 'delivery before proof' ? pending : proof;
+    const effects: TripEffect[] = [{kind: 'trip.close', tripUuid: id, outcome: 'delivered', closeReason: 'outcome', outcomeEvent: 'this-event', recordingCompleteness: 'complete', endedUtcMs: Date.now()}];
+    ok(storage.commitEvent({message: script.event(delivery()), hardMode: closing, hardModeFresh: closing === proof, effects}));
+    const trip = ok(storage.getTrip(id))!;
+    expect(trip.isHardMode).toBe(scenario === 'proof before delivery');
+    expect(trip.hardModeDetails?.firstLoss === null).toBe(scenario === 'proof before delivery');
+  });
+  it.each(['opening diagnostics', 'delivery before proof'] as const)('preserves current coupling failure evidence at %s', async scenario => {
     const directory = process.env.ETS2TELEMETRY_STORAGE_TEST_BUNDLES;
     if (!directory) throw new Error('Run storage suite');
     worker = new Worker(path.join(directory, 'storage-worker.cjs'), {workerData: {kind: 'storage'}});
@@ -78,9 +97,32 @@ describe('ET-026 integrity (REG-005/006/007)', () => {
       sinkOk(await recorder.openSession(welcome));
       recording = true;
       const event = script.event(r.jobConfigured()), capture = recorder.capture(event)!;
+      if (scenario === 'delivery before proof') {
+        sinkOk(await recorder.commit(event, {receivedUtcMs: Date.now(), hardModeCapture: capture}));
+        const trip = ok(await client.journalTrips()).trips[0];
+        expect(trip.hardModeDetails).toMatchObject({passingChecks: 1, failingChecks: 0});
+
+        config = HARD_MODE_CONFIG.replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"');
+        now += 5_000_000_000n;
+        const proof = monitor.refresh();
+        await Promise.resolve();
+        const terminal = script.event(delivery()), closing = recorder.capture(terminal)!;
+        expect(closing.observation).toMatchObject({sourceMonotonicNs: null, assessment: {state: 'fail'}, check: {sequence: 2}});
+        const commit = recorder.commit(terminal, {receivedUtcMs: Date.now(), hardModeCapture: closing});
+        await prove(proof);
+        sinkOk(await commit);
+        await recorder.flushHardMode();
+        expect(ok(await client.journalTrip(trip.tripUuid)).trip).toMatchObject({outcome: 'delivered', isHardMode: false,
+          hardModeDetails: {passingChecks: 1, failingChecks: 1, unknownChecks: 0, firstDiagnostic: {rule: 'coupling', values: [0]}}});
+        return;
+      }
       config = HARD_MODE_CONFIG.replace('g_trailer_advanced_coupling "1"', 'g_trailer_advanced_coupling "0"');
       now += 1_000_000_000n;
-      await prove(monitor.refresh(true));
+      const proof = monitor.refresh(true);
+      await Promise.resolve();
+      expect(capture.firstUnsafe?.assessment.rules.at(-1)).toMatchObject({id: 'coupling', state: 'fail'});
+      expect(capture.firstLegacyUnsafe).toBeUndefined();
+      await prove(proof);
       expect(monitor.evidence()).toMatchObject({sourceMonotonicNs: '2', assessment: {state: 'fail'}});
       expect(capture.firstUnsafe?.assessment.rules.at(-1)).toMatchObject({id: 'coupling', state: 'fail'});
       expect(capture.firstLegacyUnsafe).toBeUndefined();

@@ -3,7 +3,7 @@ import {ProfileVerificationError, ProfileSettingsUnavailableError, UnchangedVeri
 import type {HardModeDiagnosticCode, HardModeObservation, HardModeStatus, HardModeVerification, HardModeVerificationReason, HardModeVerificationResult} from '../../../../packages/contracts/src/hard-mode';
 import {HARD_MODE_COVERAGE_NS, type HardModeServiceMessage} from './service-status';
 import type {SourceIdentity} from '../../../../packages/contracts/src/protocol-v1';
-import {legacyHardModeAssessment, unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
+import {isLegacyHardModeProofPending, unknownHardMode} from '../../../../packages/telemetry-core/src/hard-mode';
 export const HARD_MODE_POLL_MS = 5000, HARD_MODE_DEADLINE_MS = 2000;
 export interface MonitorSource {source: SourceIdentity; monotonicNs: string; clockId?: string; gameClockId?: string; boundary?: {clockId: string; probeSentClientNs: string; receivedSourceNs: string}}
 /** Null/stale publications retire proof without turning an unchanged process into a new physical scan cadence. */
@@ -84,7 +84,7 @@ export class HardModeMonitor {
   private unknown(diagnostic: HardModeDiagnosticCode = 'profile-verification'): HardModeObservation {return {diagnostic, assessment: unknownHardMode(Date.now()), binding: null, pluginSessionId: null, sourceMonotonicNs: null};}
   /** A nonpassing current assessment keeps its verdict when the optional proof for legacy trips is unavailable. */
   private withoutCausalProof(value: HardModeObservation, diagnostic: HardModeDiagnosticCode): HardModeObservation {
-    return value.assessment.state === 'pass' ? this.unknown(diagnostic) : {...value, sourceMonotonicNs: null};
+    return value.assessment.state === 'pass' ? this.unknown(diagnostic) : {...value, sourceMonotonicNs: null, diagnostic};
   }
   private publish(value: HardModeObservation, observedClientNs = this.nowNs()): void {this.observation = value; this.observedClientNs = observedClientNs; this.healthNs = this.nowNs(); this.changed(value);}
   private expired(): boolean {return this.observedClientNs === undefined || this.nowNs() < this.observedClientNs;}
@@ -199,7 +199,9 @@ export class HardModeMonitor {
         deadline = setTimeout(expire, Number(remaining) / 1_000_000);
       }
       if (!controller.signal.aborted && epoch === this.epoch) {
-        const needsProof = value.assessment.state === 'pass' || value.binding !== null && legacyHardModeAssessment(value.assessment).state === 'pass';
+        const unbound = {...value, sourceMonotonicNs: null};
+        const optionalProof = isLegacyHardModeProofPending(unbound);
+        const needsProof = value.assessment.state === 'pass' || optionalProof;
         if (this.observation.binding !== null && this.observation.binding === value.binding
           && JSON.stringify(this.observation.assessment.rules) === JSON.stringify(value.assessment.rules)
           && this.observation.assessment.state === value.assessment.state && (!needsProof || this.observation.sourceMonotonicNs !== null)) {
@@ -207,10 +209,12 @@ export class HardModeMonitor {
           return;
         }
         if (this.observation.binding !== null && this.observation.binding !== value.binding) this.publish(this.unknown());
-        if (!needsProof) {complete({...value, sourceMonotonicNs: null}); return;}
+        if (!needsProof) {complete(unbound); return;}
         // A source receipt of a probe sent after the file read is a causal boundary, without clock-origin mapping.
         return new Promise<void>(resolve => {
           this.pendingProof = {value, completedClientNs: completed, deadlineClientNs, resolve, publish: complete};
+          // The current verdict belongs to this check even if delivery arrives before the legacy-only probe.
+          if (optionalProof) complete(unbound, completed);
           this.bindProof();
         });
       }

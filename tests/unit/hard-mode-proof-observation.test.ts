@@ -139,10 +139,12 @@ it('keeps verified coupling failure on a proof timeout and binds an unchanged ob
     monitor.select(target);
     const initial = monitor.refresh();
     await vi.advanceTimersByTimeAsync(1999);
-    expect(publications.filter(value => value.check)).toHaveLength(0);
+    expect(publications.filter(value => value.check)).toHaveLength(1);
+    expect(monitor.evidence()).toMatchObject({assessment: {state: 'fail'}, sourceMonotonicNs: null});
+    expect(monitor.evidence().diagnostic).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1);
     await initial;
-    expect(monitor.evidence()).toMatchObject({assessment: {state: 'fail'}, sourceMonotonicNs: null});
+    expect(monitor.evidence()).toMatchObject({assessment: {state: 'fail'}, sourceMonotonicNs: null, diagnostic: 'guard-deadline'});
     expect(publications.filter(value => value.check)).toHaveLength(1);
 
     const retry = monitor.refresh(true);
