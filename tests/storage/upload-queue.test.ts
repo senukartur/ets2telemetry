@@ -733,8 +733,9 @@ it.each([
 });
 // ET-112c: an engine-1 root's frozen upload keeps its bytes. The retroactive join of a later segment revises the root, so
 // it is the next material change, and the upload materialized after it carries the spliced head's accounting state. A
-// drives 40 m on 20 ml and stops; B's first reading is its junction, then B drives 20 m on 10 ml: 60 m either way.
-it.each([['a forward gap',1_000_100,true],['the same save point',1_000_040,false]] as const)('REG-005/010 engine 1 shows a retroactive splice at %s in the next upload',async(_name,odometer,unavailable)=>{
+// drives 40 m on 20 ml and stops; B's first reading is its junction, then B drives 20 m on 10 ml. The distance is the
+// odometer difference: 60 m at the same save point, and 120 m across the forward gap, whose 60 m the odometer counted.
+it.each([['a forward gap',1_000_100,true,120],['the same save point',1_000_040,false,60]] as const)('REG-005/010 engine 1 shows a retroactive splice at %s in the next upload',async(_name,odometer,unavailable,distance)=>{
   const conn=await openConnection(ws.options({purpose:'history'})),storage=new Storage(conn);opened.push(storage);const source=await setup(storage),db=conn.writer(),b=new Script(ETS2_B),second=tripUuidFor(ETS2_B,'1');
   const absent={available:false,reason:'not-observed'} as const;
   const point=(s:Script,uuid:string,at:number,odo:number,fuel:number,speed:number,withProof:boolean):SampleInput=>({tripUuid:uuid,utcMs:1000+at*1000,sourceClockId:s.clockId,
@@ -759,7 +760,7 @@ it.each([['a forward gap',1_000_100,true],['the same save point',1_000_040,false
   workId=await complete(storage,source);const after=ok(storage.freezeUploadMaterialization({workId,producerVersion:'test',createdUtcMs:5000}));expect(after.status).toBe('frozen');
   expect(new Uint8Array(payload(before.eventId))).toEqual(bytes);
   const snapshot=wire(after.eventId).snapshot;
-  expect(snapshot.observedDistance).toEqual({available:true,value:60,unit:'m'});
+  expect(snapshot.observedDistance).toEqual({available:true,value:distance,unit:'m'});
   expect(snapshot.evidence.reasons.includes('accounting-unavailable')).toBe(unavailable);
 });
 

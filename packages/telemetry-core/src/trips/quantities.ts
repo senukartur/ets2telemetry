@@ -127,9 +127,11 @@ export function advanceQuantities<R extends QuantityRun>(previous: QuantityPoint
     if (x !== e.odometerM) { run = 'new'; flags |= F.distanceTransfer; }
     if (Math.abs(fuelDelta) <= FUEL_NOISE_LITERS) consume(); else flags |= F.fuelTransfer;
   } else if (step.seconds >= READING_HOLE_SECONDS) {
-    // ET-112 E4 and REG-008: distance bridges a hole only inside one recorder connection.
+    // ET-112 E4 and REG-008: distance bridges a hole only inside one recorder connection. A step across the hole that is
+    // not continuous movement is also a jump, so the trip's odometer difference never covers it.
     const moved = gameDistanceStep(e, anchor, step.seconds);
-    if (step.linked && moved.kind === 'continuous') { credit(moved.meters); flags |= F.distanceBridged; } else { run = 'new'; flags |= F.distanceHole; }
+    if (step.linked && moved.kind === 'continuous') { credit(moved.meters); flags |= F.distanceBridged; }
+    else { run = 'new'; flags |= F.distanceHole | (moved.kind === 'continuous' ? 0 : F.distanceJump); }
     flags |= F.fuelHole;
   } else {
     const moved = gameDistanceStep(e, anchor, step.seconds);
