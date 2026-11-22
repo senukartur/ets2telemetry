@@ -433,6 +433,40 @@ describe('REG-008 engine 1 corpus recorded live and reconstructed', () => {
   it.each(['open', 'pre-join', 'retro'] as const)('continues the incident across both game restarts: %s', async join => {
     await recorded(incidentReadings(), INCIDENT_QUANTITIES, join);
   });
+  // REG-002: A drives 1000 to 1020 m and pauses 0.2 s later for almost three minutes. The first reading after the
+  // resume is 6 ms after the start, 2 m on with unchanged fuel, without the recorder link (a paused reading ends it).
+  // Protocol v1 lets a snapshot's state lead the plugin's event store, and the emergency journal stores each sample
+  // right after its snapshot, so that reading can reach storage before its `simulation.started` event. Either order is
+  // 0.2 s of running time, no reading hole: both quantities stay complete, and the reconstruction equals the live head.
+  const shortDrive: QuantityExpectation = {distanceM: 42, distance: 'complete', fuelUsedL: 0.02, fuel: 'complete', flags: [], cut: false};
+  // T17: when A instead drives 10 s (200 m on 0.1 L) without a reading before the pause, the step is a reading hole in
+  // either order. The odometer difference 1240 - 1000 m keeps the trip distance complete; fuel across the hole is not counted.
+  const longDrive: QuantityExpectation = {distanceM: 40, distance: 'partial', fuelUsedL: 0.02, fuel: 'partial', flags: ['distanceHole', 'fuelHole'], cut: false,
+    trip: {distanceM: 240, distance: 'complete'}};
+  it.each([
+    ['start first', 0.2, shortDrive], ['reading first', 0.2, shortDrive], ['start first', 10, longDrive], ['reading first', 10, longDrive]
+  ] as const)('counts only the running time around a pause when the resumed reading is stored %s, %s s after the last reading', async (order, drive, expected) => {
+    const storage = await ws.open(), a = openMember(storage, 'A', 'root', []);
+    const append = (reading: QuantityReading) => { ok(storage.appendSamples(a.script.session, [sampleOf(a, reading, true)], {uniqueSeconds: true})); a.previous = reading; };
+    const lifecycle = (record: EventRecord, t: number, simulation: 'running' | 'paused') => {
+      const at = BigInt(ns(t)) + 1_000_000n;
+      ok(storage.commitEvent({message: a.script.event(record, {simulation, advanceMs: Number((at - a.at) / 1_000_000n)})}));
+      a.at = at;
+    };
+    append(s(0));
+    append(s(1));
+    lifecycle(r.paused(), 1 + drive, 'paused');
+    const odometerM = drive === 10 ? 1220 : 1022, fuelL = drive === 10 ? 399.89 : 399.99;
+    const resumed = s(173, {odometerM, x: odometerM - 1000, fuelL, linked: false});
+    if (order === 'start first') { lifecycle(r.started(), 172.994, 'running'); append(resumed); }
+    else { append(resumed); lifecycle(r.started(), 172.994, 'running'); }
+    append(s(174, {odometerM: odometerM + 20, x: odometerM - 980, fuelL: fuelL - 0.01}));
+    expectJournal(storage, a.uuid, expected);
+    const found = ledger(storage, a.uuid);
+    expectLedger(found, expected);
+    expect(found.annotations).toEqual(drive === 10
+      ? [{annotation: true, cause: 'accounting-chain-break', version: 2, engine: 1, distanceFlags: F.distanceHole, fuelFlags: F.fuelHole}] : []);
+  });
   it('Q1 at storage level: a reading without predecessor and with a coalesced-snapshot reset is an ordinary step without annotation', async () => {
     const storage = await ws.open(), readings = QUANTITY_SCENARIOS.find(scenario => scenario.id === 'Q1')!.readings, {members} = record(storage, readings.slice(0, 2));
     const m = members[0], k2 = sampleOf(m, readings[2], true);
