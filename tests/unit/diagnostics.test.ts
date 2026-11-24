@@ -16,7 +16,7 @@ import {mainLogLocation, SERVICE_LOG_ROOT_VARIABLE, serviceEnvironment, serviceL
  * bound; one macrotask turn (afterCallbacks) delivers every completion that is due.
  */
 const control = vi.hoisted(() => ({syncDelayMs: 0, gate: undefined as Promise<void> | undefined, fail: 0, writes: [] as string[], syncWrites: [] as string[], syncFail: false,
-  renameFail: false}));
+  renameFail: false, renameGate: undefined as Promise<void> | undefined}));
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const appendFileSync = (...args: Parameters<typeof actual.appendFileSync>) => {
@@ -37,8 +37,11 @@ vi.mock('node:fs/promises', async importOriginal => {
     if (control.fail > 0) { control.fail--; throw new Error('EIO: i/o error, open C:\\private\\startup.jsonl'); }
     realAppendFileSync(args[0] as string, String(args[1]), 'utf8');
   };
-  // `renameFail` makes the writer's rename of a full log fail, as a file another program holds open would.
+  // `renameFail` makes the writer's rename of a full log fail, as a file another program holds open would; `renameGate`
+  // holds a rename that starts while it is set, as a stalled thread pool would.
   const rename = async (...args: Parameters<typeof actual.rename>) => {
+    const gate = control.renameGate;
+    if (gate) await gate;
     if (control.renameFail) throw Object.assign(new Error('EBUSY: resource busy or locked, rename C:\\private\\startup.jsonl'), {code: 'EBUSY'});
     return actual.rename(...args);
   };
@@ -49,7 +52,7 @@ const directories: string[] = [];
 function directory() {const result = mkdtempSync(path.join(tmpdir(), 'ets2-log-test-')); directories.push(result); return result;}
 afterEach(() => {
   for (const dir of directories.splice(0)) rmSync(dir, {recursive: true, force: true});
-  Object.assign(control, {syncDelayMs: 0, gate: undefined, fail: 0, writes: [], syncWrites: [], syncFail: false, renameFail: false});
+  Object.assign(control, {syncDelayMs: 0, gate: undefined, fail: 0, writes: [], syncWrites: [], syncFail: false, renameFail: false, renameGate: undefined});
   vi.restoreAllMocks(); vi.useRealTimers();
 });
 function held() {
@@ -240,6 +243,24 @@ it('renames synchronously when the crash path drains the queue', async () => {
   expect(await log.flush(5000)).toBe(true);
   // The documented reordering of the batch that was in flight; nothing is written twice.
   expect(sequence(dir).sort()).toEqual(['IN_FLIGHT', 'ROW_0', 'ROW_1']);
+});
+// Review (race): a drain during the writer's own rename used to rename again, and the rename in flight then moved
+// the new file over that `.1`, deleting rows already on disk.
+it('does not rename again while the writer rename is in flight, so no written row is lost', async () => {
+  const dir = directory(); earlierLog(dir);
+  const log = createDiagnostics(dir, true);
+  let release!: () => void;
+  control.renameGate = new Promise<void>(resolve => {release = resolve;});
+  log(...big(0)); log(...big(1));
+  await afterCallbacks();
+  // ROW_1 starts a new file, and its rename is held. Then about 256 KiB more are logged and drained synchronously, past
+  // the new file's bound.
+  for (let i = 2; i < 70; i++) { log(...big(i)); if (i % 20 === 0) log.drainSync(); }
+  log.drainSync();
+  control.renameGate = undefined; release();
+  expect(await log.flush(5000)).toBe(true);
+  expect(rows(dir, 'startup.jsonl.1')[0].event).toBe('OLD');
+  expect(sequence(dir).sort()).toEqual([...Array(70).keys()].map(i => `ROW_${i}`).sort());
 });
 it('reports a failed rename and everything after it on the console, leaving the full file as it was', async () => {
   const dir = directory(); earlierLog(dir);

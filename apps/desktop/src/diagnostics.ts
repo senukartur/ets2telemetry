@@ -1,5 +1,5 @@
 import {appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync} from 'node:fs';
-import {appendFile, rename, rm} from 'node:fs/promises';
+import {appendFile, rename} from 'node:fs/promises';
 import path from 'node:path';
 
 const LIMIT = 256 * 1024;
@@ -35,7 +35,7 @@ export interface DiagnosticLog {
   flush(timeoutMs: number): Promise<boolean>;
   /**
    * Lets the asynchronous append in flight, if any, finish within `timeoutMs`, then writes everything still queued with
-   * one synchronous append (at most the 256 KiB the bounds counted). The queued rows are therefore on disk when it
+   * one synchronous append per file, renaming a full file first (at most the 256 KiB the bounds counted). The queued rows are therefore on disk when it
    * resolves, whatever the timer does. Only a batch that is still in flight after `timeoutMs` can land after them, or be
    * lost if the process exits first. Nothing is written twice. Later records are written asynchronously again.
    */
@@ -52,8 +52,8 @@ export interface DiagnosticLog {
    */
   enterTerminalMode(): void;
   /**
-   * Crash and unhandled-rejection paths only: writes every queued record at once with a synchronous append (at most the
-   * 256 KiB the bounds counted). A batch already being written asynchronously may land after these records, or be lost
+   * Crash and unhandled-rejection paths only: writes every queued record at once with one synchronous append per file,
+   * renaming a full file first (at most the 256 KiB the bounds counted). A batch already being written asynchronously may land after these records, or be lost
    * if the process exits first; nothing is written twice.
    */
   drainSync(): void;
@@ -64,10 +64,11 @@ export interface DiagnosticLog {
  *
  * Normal logging never waits for the disk; irreversible Windows session end opts into synchronous terminal mode.
  * A record is formatted when it is logged, then queued; one asynchronous append at a time writes everything queued, in
- * order, to `startup.jsonl` with the same append semantics as before. The file holds at most 256 KiB and 2,000 records
- * of this process: a record that would pass either bound first renames the file to `startup.jsonl.1`, replacing the
- * previous one, and starts a new file, so a long-running process keeps logging. The writer renames in logging order,
- * between appends. Records not yet written count against the same bounds, so the queue never holds more than 256 KiB;
+ * order, to `startup.jsonl` with the same append semantics as before. A file holds 256 KiB and 2,000 records of this
+ * process: a record that would pass either bound first renames the file to `startup.jsonl.1`, replacing the previous
+ * one, and starts a new file, so a long-running process keeps logging. The writer renames in logging order, between
+ * appends. A synchronous drain while a rename is still in flight appends to the file being renamed instead of renaming
+ * it again, so that file can exceed the bounds but no written row is lost. Records not yet written count against the same bounds, so the queue never holds more than 256 KiB;
  * a record beyond them is refused. A failed append or rename reports that batch, the rest of the queue and every later
  * record on the console by event code only, as a failed synchronous append did. A process that starts with a file
  * within 8 KiB of the limit renames it at once.
@@ -93,6 +94,9 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
   type Entry = {event: string; line: string; size: number; rotate: boolean};
   let queue: Entry[] = [];
   let writing = false;
+  // The asynchronous writer's rename has started and not yet settled: a synchronous drain must not rename again, or the
+  // rename in flight would move the new file over the `.1` that the drain just made.
+  let renaming = false;
   // final: no new asynchronous append; drained: finalize resolved or terminal mode began, so records write at once.
   let final = false, drained = false;
   // Called once the append in flight settled, before the next one may start (settle and finalize).
@@ -115,13 +119,13 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
   }
   // A file that is already gone (removed by hand) leaves nothing to rename.
   const gone = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
+  // A rename replaces the earlier `.1` (MoveFileEx with MOVEFILE_REPLACE_EXISTING), so a failed one keeps it.
   function rotateSync(): void {
-    rmSync(previous, {force: true});
     try { renameSync(filename, previous); } catch (error) { if (!gone(error)) throw error; }
   }
   async function rotate(): Promise<void> {
-    await rm(previous, {force: true});
-    await rename(filename, previous).catch((error: unknown) => { if (!gone(error)) throw error; });
+    renaming = true;
+    try { await rename(filename, previous); } catch (error) { if (!gone(error)) throw error; } finally { renaming = false; }
   }
   /** The queued records up to the next one that starts a new file, so that one append never spans a rename. */
   function take(): Entry[] {
@@ -182,7 +186,7 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
       if (!available) { for (const entry of batch) fallback(entry.event); }
       else {
         try {
-          if (batch[0].rotate) rotateSync();
+          if (batch[0].rotate && !renaming) rotateSync();
           appendFileSync(filename, batch.map(entry => entry.line).join(''), 'utf8');
         } catch { available = false; for (const entry of batch) fallback(entry.event); }
       }
