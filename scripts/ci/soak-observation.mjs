@@ -225,8 +225,9 @@ async function logUse(file, fromUtc, toUtc) {
     if (time >= from && time <= to) {soakBytes += Buffer.byteLength(line); soakRecords++;}
   }
   const budget = logBudget({bytes: Buffer.byteLength(text), records: lines.length, soakBytes, soakRecords, soakMs: to - from});
-  // A run starts with an empty log directory, so a `.1` file means the log was renamed during the run and the rows the
-  // later checks read are no longer all in this file.
+  // Invoke-RuntimeSmoke.ps1 creates the diagnostics directory empty in a new <mode>-<GUID> output directory, and the soak
+  // launches the application once, so a `.1` file means the log was renamed during the run and the rows the later checks
+  // read are no longer all in this file.
   return existsSync(`${file}.1`) ? {...budget, reached: true} : budget;
 }
 /**

@@ -1,3 +1,7 @@
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {describe, expect, it} from 'vitest';
 import {
   checkTail, compactSoakLogs, databaseGrowth, journalPageSizes, leakTrend, listDifferences, logBudget, reconnectCycles, seriesSummary, soakExpectation, soakSessionId,
@@ -170,6 +174,25 @@ describe('soak evidence', () => {
     expect(logBudget({bytes: 253_953, records: 10, soakBytes: 0, soakRecords: 0, soakMs: 1}).reached).toBe(true);
     expect(logBudget({bytes: 253_952, records: 1_999, soakBytes: 0, soakRecords: 0, soakMs: 1}).reached).toBe(false);
     expect(logBudget({bytes: 1_000, records: 2_000, soakBytes: 0, soakRecords: 0, soakMs: 1}).reached).toBe(true);
+  });
+  it('fails the log budget once a log was renamed to .1 during the run, however small the current file', async () => {
+    const {verifySoakLogs} = await import(pathToFileURL(path.resolve('scripts/ci/soak-observation.mjs')).href) as {
+      verifySoakLogs(options: {config: {diagnostics: string}; record: Record<string, unknown>}): Promise<void>};
+    const diagnostics = mkdtempSync(path.join(tmpdir(), 'soak-logs-'));
+    try {
+      mkdirSync(path.join(diagnostics, 'service'));
+      const row = `${JSON.stringify({time: '2027-01-01T00:00:30.000Z', pid: 1, event: 'ROW'})}
+`;
+      writeFileSync(path.join(diagnostics, 'startup.jsonl'), row);
+      writeFileSync(path.join(diagnostics, 'service', 'startup.jsonl'), row);
+      const record: Record<string, unknown> = {startedUtc: '2027-01-01T00:00:00.000Z', stoppedUtc: '2027-01-01T00:01:00.000Z'};
+      await verifySoakLogs({config: {diagnostics}, record});
+      expect(record.logBudgetKept).toBe(true);
+      writeFileSync(path.join(diagnostics, 'service', 'startup.jsonl.1'), row);
+      const renamed: Record<string, unknown> = {...record, logBudgetKept: undefined};
+      await expect(verifySoakLogs({config: {diagnostics}, record: renamed})).rejects.toThrow('LOG_BUDGET_REACHED');
+      expect(renamed.logs).toMatchObject({main: {reached: false, records: 1}, service: {reached: true, records: 1}});
+    } finally { rmSync(diagnostics, {recursive: true, force: true}); }
   });
   it('relates the database size to the measured 534,364 bytes per sample-hour and the allowance', () => {
     expect(databaseGrowth({databaseBytes: 1_069_056, samples: 7_200})).toEqual({databaseBytes: 1_069_056, samples: 7_200, bytesPerSampleHour: 534_528,
