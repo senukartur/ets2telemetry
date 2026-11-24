@@ -17,7 +17,8 @@ import {createHash} from 'node:crypto';
 // - the recording losses: docs/telemetry-service-v1.md, "Losses (G6)".
 //
 // Memory, database growth and the log budget are evidence only (ET-019 plan decision D3, measure, then gate): nothing
-// here turns them into a pass condition, except that a log that reached its budget has lost rows (LOG_BUDGET_REACHED).
+// here turns them into a pass condition, except that a log that reached its budget may have moved rows to its `.1` file
+// (LOG_BUDGET_REACHED).
 
 /** The documented schedule, encoded independently of tools/telemetry-simulator/src/v1/soak.ts. */
 export const SOAK_SCHEDULE = Object.freeze({
@@ -197,8 +198,8 @@ export function summarizeSoakMetrics(metrics, kindOf) {
 
 /**
  * One diagnostic log's use of its budget, and the use projected to `targetMinutes` of soak at the rate of this run:
- * the rows written before the soak plus the soak's rows scaled to the target length. `reached` means a record may have
- * been dropped: 2,000 records, or less than 8 KiB left (the margin diagnostics.ts uses for rotation).
+ * the rows written before the soak plus the soak's rows scaled to the target length. `reached` means the next record may
+ * start a new file: 2,000 records, or less than 8 KiB left (the margin diagnostics.ts uses for rotation at startup).
  */
 export function logBudget({bytes, records, soakBytes, soakRecords, soakMs}, {targetMinutes = 90} = {}) {
   const scale = soakMs > 0 ? (targetMinutes * 60_000) / soakMs : 0;

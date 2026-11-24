@@ -1,5 +1,5 @@
 import {appendFileSync, existsSync, mkdirSync, renameSync, rmSync, statSync} from 'node:fs';
-import {appendFile} from 'node:fs/promises';
+import {appendFile, rename, rm} from 'node:fs/promises';
 import path from 'node:path';
 
 const LIMIT = 256 * 1024;
@@ -63,28 +63,35 @@ export interface DiagnosticLog {
  * Startup diagnostics only; never log telemetry or credentials. Detailed errors are opt-in.
  *
  * Normal logging never waits for the disk; irreversible Windows session end opts into synchronous terminal mode.
- * A record is formatted and counted against the 256 KiB and 2,000-record bounds when
- * it is logged, then queued; one asynchronous append at a time writes everything queued, in order, to `startup.jsonl`
- * with the same append semantics as before. The bounds count queued records too, so the queue never holds more than
- * 256 KiB. A failed append reports that batch, the rest of the queue and every later record on the console by event
- * code only, as a failed synchronous append did. Rotation to `.1` still happens once, when the log is created.
+ * A record is formatted when it is logged, then queued; one asynchronous append at a time writes everything queued, in
+ * order, to `startup.jsonl` with the same append semantics as before. The file holds at most 256 KiB and 2,000 records
+ * of this process: a record that would pass either bound first renames the file to `startup.jsonl.1`, replacing the
+ * previous one, and starts a new file, so a long-running process keeps logging. The writer renames in logging order,
+ * between appends. Records not yet written count against the same bounds, so the queue never holds more than 256 KiB;
+ * a record beyond them is refused. A failed append or rename reports that batch, the rest of the queue and every later
+ * record on the console by event code only, as a failed synchronous append did. A process that starts with a file
+ * within 8 KiB of the limit renames it at once.
  */
 export function createDiagnostics(directory: string, detailed = false): DiagnosticLog {
   let available = true;
-  let bytes = 0;
-  let records = 0;
-  const filename = path.join(directory, 'startup.jsonl');
+  // The current file: its bytes, and the records this process wrote or queued to it.
+  let fileBytes = 0, fileRecords = 0;
+  // Records logged but not yet written or reported: what the queue holds in memory.
+  let pendingBytes = 0, pendingRecords = 0;
+  const filename = path.join(directory, 'startup.jsonl'), previous = `${filename}.1`;
   try {
     mkdirSync(directory, {recursive: true});
     if (existsSync(filename)) {
       if (statSync(filename).size >= LIMIT - 8192) {
-        rmSync(`${filename}.1`, {force: true});
-        renameSync(filename, `${filename}.1`);
-      } else bytes = statSync(filename).size;
+        rmSync(previous, {force: true});
+        renameSync(filename, previous);
+      } else fileBytes = statSync(filename).size;
     }
   } catch {available = false;}
 
-  let queue: {event: string; line: string}[] = [];
+  /** `rotate`: the record starts a new file, so the current one becomes `.1` before the record is written. */
+  type Entry = {event: string; line: string; size: number; rotate: boolean};
+  let queue: Entry[] = [];
   let writing = false;
   // final: no new asynchronous append; drained: finalize resolved or terminal mode began, so records write at once.
   let final = false, drained = false;
@@ -101,9 +108,31 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
       if (handled >= waiter.until) waiter.resolve(true); else waiters.push(waiter);
     }
   }
+  /** The entries were written or reported, so the queue no longer holds them. */
+  function release(entries: readonly Entry[]): void {
+    for (const entry of entries) { pendingBytes -= entry.size; pendingRecords--; }
+    handled += entries.length;
+  }
+  // A file that is already gone (removed by hand) leaves nothing to rename.
+  const gone = (error: unknown) => (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
+  function rotateSync(): void {
+    rmSync(previous, {force: true});
+    try { renameSync(filename, previous); } catch (error) { if (!gone(error)) throw error; }
+  }
+  async function rotate(): Promise<void> {
+    await rm(previous, {force: true});
+    await rename(filename, previous).catch((error: unknown) => { if (!gone(error)) throw error; });
+  }
+  /** The queued records up to the next one that starts a new file, so that one append never spans a rename. */
+  function take(): Entry[] {
+    const end = queue.findIndex((entry, index) => index > 0 && entry.rotate);
+    const batch = end < 0 ? queue : queue.slice(0, end);
+    queue = end < 0 ? [] : queue.slice(end);
+    return batch;
+  }
   function pump(): void {
     if (writing || final || !queue.length) return;
-    const batch = queue; queue = [];
+    const batch = take();
     writing = true;
     const finished = (written: boolean) => {
       if (!written) {
@@ -111,17 +140,19 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
         // console, in order.
         available = false;
         for (const entry of [...batch, ...queue]) fallback(entry.event);
-        handled += queue.length; queue = [];
+        release(queue); queue = [];
       }
-      writing = false; handled += batch.length;
+      writing = false; release(batch);
       for (const resume of idle.splice(0)) resume();
       notifyFlushes(); pump();
     };
-    appendFile(filename, batch.map(entry => entry.line).join(''), 'utf8').then(() => finished(true), () => finished(false));
+    // Without a rename the append starts at once, as before.
+    const write = () => appendFile(filename, batch.map(entry => entry.line).join(''), 'utf8');
+    (batch[0].rotate ? rotate().then(write) : write()).then(() => finished(true), () => finished(false));
   }
 
   const log = (event: string, detail?: unknown, facts?: DiagnosticFacts): void => {
-    if (++records > MAX_RECORDS) return;
+    if (pendingRecords >= MAX_RECORDS) return;
     const value = detail instanceof Error
       ? {name: detail.name, message: detail.message.slice(0, 2048), stack: detail.stack?.slice(0, 4096)}
       : typeof detail === 'string' ? detail.slice(0, 4096) : detail;
@@ -131,21 +162,32 @@ export function createDiagnostics(directory: string, detailed = false): Diagnost
         ...(detailed && value !== undefined ? {detail: value} : {})}) + '\n';
     } catch {return;}
     const size = Buffer.byteLength(line);
-    if (bytes + size > LIMIT) return;
-    bytes += size;
-    if (!available) { fallback(event); return; }
-    queue.push({event, line}); queued++;
+    if (pendingBytes + size > LIMIT) return;
+    const full = fileBytes + size > LIMIT || fileRecords >= MAX_RECORDS;
+    // Without a file there is nothing to rename: the console output keeps the file's bounds, as before.
+    if (!available) {
+      if (full) return;
+      fileBytes += size; fileRecords++;
+      fallback(event); return;
+    }
+    if (full) { fileBytes = 0; fileRecords = 0; }
+    fileBytes += size; fileRecords++; pendingBytes += size; pendingRecords++;
+    queue.push({event, line, size, rotate: full}); queued++;
     if (drained) drainSync(); else pump();
   };
   function drainSync(): void {
     if (!queue.length) return;
-    const batch = queue; queue = [];
-    if (!available) { for (const entry of batch) fallback(entry.event); }
-    else {
-      try { appendFileSync(filename, batch.map(entry => entry.line).join(''), 'utf8'); }
-      catch { available = false; for (const entry of batch) fallback(entry.event); }
+    while (queue.length) {
+      const batch = take();
+      if (!available) { for (const entry of batch) fallback(entry.event); }
+      else {
+        try {
+          if (batch[0].rotate) rotateSync();
+          appendFileSync(filename, batch.map(entry => entry.line).join(''), 'utf8');
+        } catch { available = false; for (const entry of batch) fallback(entry.event); }
+      }
+      release(batch);
     }
-    handled += batch.length;
     notifyFlushes();
   }
   function settleWrites(timeoutMs: number): Promise<void> {

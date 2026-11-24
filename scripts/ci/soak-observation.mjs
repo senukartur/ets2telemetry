@@ -224,11 +224,14 @@ async function logUse(file, fromUtc, toUtc) {
     const time = Date.parse(JSON.parse(line).time);
     if (time >= from && time <= to) {soakBytes += Buffer.byteLength(line); soakRecords++;}
   }
-  return logBudget({bytes: Buffer.byteLength(text), records: lines.length, soakBytes, soakRecords, soakMs: to - from});
+  const budget = logBudget({bytes: Buffer.byteLength(text), records: lines.length, soakBytes, soakRecords, soakMs: to - from});
+  // A run starts with an empty log directory, so a `.1` file means the log was renamed during the run and the rows the
+  // later checks read are no longer all in this file.
+  return existsSync(`${file}.1`) ? {...budget, reached: true} : budget;
 }
 /**
- * The budget of main's and the service's log (256 KiB and 2,000 records each). A log that reached it may have dropped
- * rows, so the run fails with LOG_BUDGET_REACHED before any check that reads those rows. The projection to 90 minutes is
+ * The budget of main's and the service's log (256 KiB and 2,000 records each). A log that reached it, or that was renamed
+ * to `.1` during the run, may have moved rows out of `startup.jsonl`, so the run fails with LOG_BUDGET_REACHED before any check that reads those rows. The projection to 90 minutes is
  * evidence only.
  */
 export async function verifySoakLogs({config, record}) {
