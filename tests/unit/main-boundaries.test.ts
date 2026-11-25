@@ -476,6 +476,9 @@ it('constructs hidden click-through nonfocus sandboxed overlay and retains dashb
     webPreferences: {sandbox: true, contextIsolation: true, nodeIntegration: false}});
   // The constructor flag would apply Electron's `floating` level, which stacks the overlay behind the taskbar.
   expect(configurations[1]).not.toHaveProperty('alwaysOnTop');
+  // A throttled hidden overlay credits deliveries late, past the 500 ms deadline that closes its channel and hides it.
+  expect(configurations[1].webPreferences!.backgroundThrottling).toBe(false);
+  expect(configurations[0].webPreferences).not.toHaveProperty('backgroundThrottling');
   expect(windows[1].setAlwaysOnTop.mock.calls).toEqual([[true, 'screen-saver']]);
   expect(windows[1].setIgnoreMouseEvents).toHaveBeenCalledWith(true); expect(windows[1].setFocusable).toHaveBeenCalledWith(false);
   expect(windows[1].moveTop).not.toHaveBeenCalled();
