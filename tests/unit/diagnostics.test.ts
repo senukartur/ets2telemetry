@@ -1,4 +1,4 @@
-import {mkdtempSync, readFileSync, rmSync, statSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {afterEach, expect, it, vi} from 'vitest';
@@ -15,7 +15,8 @@ import {mainLogLocation, SERVICE_LOG_ROOT_VARIABLE, serviceEnvironment, serviceL
  * undelayed `appendFileSync`. No test therefore waits for real thread-pool I/O, which a loaded runner can delay without
  * bound; one macrotask turn (afterCallbacks) delivers every completion that is due.
  */
-const control = vi.hoisted(() => ({syncDelayMs: 0, gate: undefined as Promise<void> | undefined, fail: 0, writes: [] as string[], syncWrites: [] as string[], syncFail: false}));
+const control = vi.hoisted(() => ({syncDelayMs: 0, gate: undefined as Promise<void> | undefined, fail: 0, writes: [] as string[], syncWrites: [] as string[], syncFail: false,
+  renameFail: false, renameGate: undefined as Promise<void> | undefined}));
 vi.mock('node:fs', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const appendFileSync = (...args: Parameters<typeof actual.appendFileSync>) => {
@@ -36,14 +37,22 @@ vi.mock('node:fs/promises', async importOriginal => {
     if (control.fail > 0) { control.fail--; throw new Error('EIO: i/o error, open C:\\private\\startup.jsonl'); }
     realAppendFileSync(args[0] as string, String(args[1]), 'utf8');
   };
-  return {...actual, default: {...actual, appendFile}, appendFile};
+  // `renameFail` makes the writer's rename of a full log fail, as a file another program holds open would; `renameGate`
+  // holds a rename that starts while it is set, as a stalled thread pool would.
+  const rename = async (...args: Parameters<typeof actual.rename>) => {
+    const gate = control.renameGate;
+    if (gate) await gate;
+    if (control.renameFail) throw Object.assign(new Error('EBUSY: resource busy or locked, rename C:\\private\\startup.jsonl'), {code: 'EBUSY'});
+    return actual.rename(...args);
+  };
+  return {...actual, default: {...actual, appendFile, rename}, appendFile, rename};
 });
 
 const directories: string[] = [];
 function directory() {const result = mkdtempSync(path.join(tmpdir(), 'ets2-log-test-')); directories.push(result); return result;}
 afterEach(() => {
   for (const dir of directories.splice(0)) rmSync(dir, {recursive: true, force: true});
-  Object.assign(control, {syncDelayMs: 0, gate: undefined, fail: 0, writes: [], syncWrites: [], syncFail: false});
+  Object.assign(control, {syncDelayMs: 0, gate: undefined, fail: 0, writes: [], syncWrites: [], syncFail: false, renameFail: false, renameGate: undefined});
   vi.restoreAllMocks(); vi.useRealTimers();
 });
 function held() {
@@ -51,7 +60,7 @@ function held() {
   control.gate = new Promise<void>(resolve => {release = resolve;});
   return () => {control.gate = undefined; release();};
 }
-const rows = (dir: string) => readFileSync(path.join(dir, 'startup.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as {event: string; detail?: unknown});
+const rows = (dir: string, file = 'startup.jsonl') => readFileSync(path.join(dir, file), 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as {event: string; detail?: unknown});
 
 it('writes terminal session-end rows before returning even while an earlier append never settles', async () => {
   const dir = directory(), log = createDiagnostics(dir);
@@ -175,6 +184,96 @@ it('bounds what a stalled disk holds in memory by the 256 KiB and 2,000-record l
   for (let i = 0; i < 2100; i++) counted('TINY');
   await counted.flush(5000);
   expect(rows(small)).toHaveLength(2000);
+});
+// Regression (November 24, 2026): the service started with a 245 KiB log, under the 248 KiB rotation threshold, filled it
+// 29 minutes later and refused every later record, so the log said nothing about a reading hole at minute 42. A full file
+// is now renamed to `.1` while the process runs, and logging continues in a new file.
+const LIMIT = 256 * 1024;
+/** An earlier process's log of exactly `bytes` bytes, just under the size that a new process renames at once. */
+function earlierLog(dir: string, bytes = LIMIT - 8192 - 1) {
+  // `{"event":"OLD","pad":"` and `"}\n` take 25 bytes.
+  const line = (length: number) => `${JSON.stringify({event: 'OLD', pad: ''}).slice(0, -2)}${'x'.repeat(length - 25)}"}\n`;
+  const lines: string[] = [];
+  for (let left = bytes; left > 0;) { const length = left >= 256 ? 128 : left; lines.push(line(length)); left -= length; }
+  writeFileSync(path.join(dir, 'startup.jsonl'), lines.join(''));
+  expect(statSync(path.join(dir, 'startup.jsonl')).size).toBe(bytes);
+}
+const big = (index: number) => [`ROW_${index}`, 'x'.repeat(4096)] as const;
+const sequence = (dir: string) => [...rows(dir, 'startup.jsonl.1'), ...rows(dir)].map(row => row.event).filter(event => event !== 'OLD');
+it('keeps logging after the file fills: the full file becomes .1 and later rows go to a new file', async () => {
+  const dir = directory(); earlierLog(dir);
+  const log = createDiagnostics(dir, true);
+  log('BOOT');
+  for (let i = 0; i < 4; i++) { log(...big(i)); expect(await log.flush(5000)).toBe(true); }
+  expect(rows(dir, 'startup.jsonl.1')[0].event).toBe('OLD');
+  expect(rows(dir).map(row => row.event)).toEqual(['ROW_1', 'ROW_2', 'ROW_3']);
+  expect(sequence(dir)).toEqual(['BOOT', 'ROW_0', 'ROW_1', 'ROW_2', 'ROW_3']);
+  for (const file of ['startup.jsonl', 'startup.jsonl.1']) expect(statSync(path.join(dir, file)).size).toBeLessThanOrEqual(LIMIT);
+});
+it('starts a new file after 2,000 records of the process, keeping every record in order', async () => {
+  const dir = directory(), log = createDiagnostics(dir);
+  for (let i = 0; i < 2100; i++) { log('TINY', undefined, {i}); if (i % 100 === 99) expect(await log.flush(5000)).toBe(true); }
+  const index = (file: string) => (readFileSync(path.join(dir, file), 'utf8').trim().split('\n').map(line => (JSON.parse(line) as {facts: {i: number}}).facts.i));
+  expect(index('startup.jsonl.1')).toEqual([...Array(2000).keys()]);
+  expect(index('startup.jsonl')).toEqual([...Array(100).keys()].map(i => 2000 + i));
+});
+it('renames between appends while the disk is slow, so no append spans two files', async () => {
+  const dir = directory(); earlierLog(dir);
+  const log = createDiagnostics(dir, true);
+  const release = held();
+  log('BOOT'); log(...big(0)); log(...big(1)); log(...big(2));
+  release();
+  expect(await log.flush(5000)).toBe(true);
+  expect(control.writes.map(chunk => chunk.trim().split('\n').map(line => (JSON.parse(line) as {event: string}).event)))
+    .toEqual([['BOOT'], ['ROW_0'], ['ROW_1', 'ROW_2']]);
+  expect(rows(dir).map(row => row.event)).toEqual(['ROW_1', 'ROW_2']);
+  expect(sequence(dir)).toEqual(['BOOT', 'ROW_0', 'ROW_1', 'ROW_2']);
+});
+it('renames synchronously when the crash path drains the queue', async () => {
+  const dir = directory(); earlierLog(dir);
+  const log = createDiagnostics(dir, true);
+  const release = held();
+  log('IN_FLIGHT'); log(...big(0)); log(...big(1));
+  log.drainSync();
+  // One synchronous append per file, on disk when drainSync returns, while the first batch is still held.
+  expect(control.syncWrites).toHaveLength(2);
+  expect(rows(dir, 'startup.jsonl.1').at(-1)?.event).toBe('ROW_0');
+  expect(rows(dir).map(row => row.event)).toEqual(['ROW_1']);
+  release();
+  expect(await log.flush(5000)).toBe(true);
+  // The documented reordering of the batch that was in flight; nothing is written twice.
+  expect(sequence(dir).sort()).toEqual(['IN_FLIGHT', 'ROW_0', 'ROW_1']);
+});
+// Review (race): a drain during the writer's own rename used to rename again, and the rename in flight then moved
+// the new file over that `.1`, deleting rows already on disk.
+it('does not rename again while the writer rename is in flight, so no written row is lost', async () => {
+  const dir = directory(); earlierLog(dir);
+  const log = createDiagnostics(dir, true);
+  let release!: () => void;
+  control.renameGate = new Promise<void>(resolve => {release = resolve;});
+  log(...big(0)); log(...big(1));
+  await afterCallbacks();
+  // ROW_1 starts a new file, and its rename is held. Then about 256 KiB more are logged and drained synchronously, past
+  // the new file's bound.
+  for (let i = 2; i < 70; i++) { log(...big(i)); if (i % 20 === 0) log.drainSync(); }
+  log.drainSync();
+  control.renameGate = undefined; release();
+  expect(await log.flush(5000)).toBe(true);
+  expect(rows(dir, 'startup.jsonl.1')[0].event).toBe('OLD');
+  expect(sequence(dir).sort()).toEqual([...Array(70).keys()].map(i => `ROW_${i}`).sort());
+});
+it('reports a failed rename and everything after it on the console, leaving the full file as it was', async () => {
+  const dir = directory(); earlierLog(dir);
+  const log = createDiagnostics(dir, true);
+  const fallback = vi.spyOn(console, 'error').mockImplementation(() => {});
+  log(...big(0)); expect(await log.flush(5000)).toBe(true);
+  const size = statSync(path.join(dir, 'startup.jsonl')).size;
+  control.renameFail = true;
+  log(...big(1)); expect(await log.flush(5000)).toBe(true);
+  log('AFTER');
+  expect(fallback.mock.calls.map(call => call[0] as string)).toEqual(['[ETS2Telemetry] ROW_1', '[ETS2Telemetry] AFTER']);
+  expect(statSync(path.join(dir, 'startup.jsonl')).size).toBe(size);
+  expect(existsSync(path.join(dir, 'startup.jsonl.1'))).toBe(false);
 });
 it('reports a failed write and everything after it on the console, in order, without throwing', async () => {
   const dir = directory(), log = createDiagnostics(dir, true);
