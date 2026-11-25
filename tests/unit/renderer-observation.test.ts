@@ -3,10 +3,10 @@ import type {Page} from '@playwright/test';
 import {runInNewContext} from 'node:vm';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
-  captureFailureScreenshot, clusterCentreProbe, clusterSpeedArcProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, partialLiveObservation, SYNTHETIC_V0_HIDDEN_ROWS,
+  captureFailureScreenshot, clusterCentreProbe, clusterSpeedArcProbe, completeLiveObservation, currentTelemetryObservation, notCurrentLiveObservation, overlayOverflow, overlayV1Observation, heldNotCurrentLiveObservation, partialLiveObservation, placeholderLiveObservation, LIVE_PLACEHOLDER_CAPTION, SYNTHETIC_V0_HIDDEN_ROWS,
   SYNTHETIC_V0_LIVE_ROWS, SYNTHETIC_V0_VALUE_IDS, SYNTHETIC_V0V1_HIDDEN_ROWS, SYNTHETIC_V0V1_LIVE_ROWS, SYNTHETIC_V1_OVERLAY_CURRENT, SYNTHETIC_V1_OVERLAY_STOPPED,
   SYNTHETIC_V1_OVERLAY_V0_STALE, SYNTHETIC_V1_OVERLAY_V1_STALE, SYNTHETIC_V1_LIVE_ROWS, SYNTHETIC_V1_VALUE_IDS, stripNumberProbe, v1NotCurrentObservation, waitForCompleteLive, waitForCurrentTelemetry,
-  waitForNotCurrentLive, waitForPartialLive, type RendererObservation
+  waitForNotCurrentLive, waitForHeldNotCurrentLive, waitForPartialLive, waitForPlaceholderLive, type RendererObservation
 } from '../../scripts/ci/renderer-observation.mjs';
 
 const current = {gauge: {number: '90', unit: 'km/h', accessibleName: 'Speed: 90 km/h; Engine RPM: 600 rpm', visible: true}, status: 'connected: Validated current observation', speed: 'Speed: 90 km/h', fuel: 'Fuel: 73.0 L'};
@@ -148,6 +148,59 @@ describe('coherent Live partial presentation', () => {
     expect(read(partialLiveObservation, frame(stale.status, 'partial', {'live.waiting': []}))).toMatchObject({
       bannerVisible: false, title: null, text: null,
     });
+  });
+});
+
+describe('Live placeholder presentation', () => {
+  const caption = LIVE_PLACEHOLDER_CAPTION.en;
+  const frame = (change: Record<string, FakeElement[]> = {}) => fakeGlobals({
+    'telemetry-status': one(stale.status), 'live-telemetry': one('', {attributes: {'data-live-state': 'stale', 'data-live-display': 'placeholder'}}),
+    'live.placeholder': one(''), 'live.placeholder.caption': one(caption), ...change,
+  });
+  const read = (globals: ReturnType<typeof frame>, expected = {status: '^stale:', caption}) =>
+    runInNewContext(`(${placeholderLiveObservation.toString()})(${JSON.stringify(expected)})`, globals) as unknown;
+  it('reads the held placeholder with its state and caption', () => {
+    expect(read(frame())).toEqual({state: 'stale', caption});
+    expect(read(frame(), {status: '^stale:', caption: LIVE_PLACEHOLDER_CAPTION.ru})).toBe(false);
+  });
+  it('waits while the dashboard is still held or any dashboard part remains', () => {
+    expect(read(frame({'live-telemetry': one('', {attributes: {'data-live-state': 'stale', 'data-live-display': 'dashboard'}})}))).toBe(false);
+    for (const id of ['live.instrument', 'live.waiting', 'live.stale', 'live.details']) expect(read(frame({[id]: one('')})), id).toBe(false);
+    expect(read(frame({'live.placeholder': one('', {visibility: 'hidden'})}))).toBe(false);
+    expect(read(frame({'live.placeholder': one('', {box: {width: 0, height: 440, top: 10}})}))).toBe(false);
+    expect(read(frame({'telemetry-status': one(current.status)}))).toBe(false);
+  });
+  it('waits up to twelve seconds, for the freshness expiry plus the three-second hold', async () => {
+    const dispose = vi.fn(() => Promise.resolve());
+    const waitForFunction = vi.fn(() => Promise.resolve({jsonValue: () => Promise.resolve({state: 'waiting', caption}), dispose}));
+    expect(await waitForPlaceholderLive({waitForFunction} as unknown as Page, '^(disconnected|waiting):')).toEqual({state: 'waiting', caption});
+    expect(waitForFunction).toHaveBeenCalledExactlyOnceWith(placeholderLiveObservation, {status: '^(disconnected|waiting):', caption}, {timeout: 12000});
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Live held dashboard after both streams stop', () => {
+  const frame = (state: string, display: string, change: Record<string, FakeElement[]> = {}) => fakeGlobals({
+    'telemetry-status': one(stale.status), 'live-telemetry': one('', {attributes: {'data-live-state': state, 'data-live-display': display}}),
+    'live-speed-number': one('—'), 'live.stale': one('No current data'), ...change,
+  });
+  const read = (globals: ReturnType<typeof frame>, status = '^stale:') =>
+    runInNewContext(`(${heldNotCurrentLiveObservation.toString()})(${JSON.stringify({status})})`, globals) as unknown;
+  it('reads what the held dashboard shows so the caller can assert dashes', () => {
+    expect(read(frame('stale', 'dashboard'))).toEqual({state: 'stale', gauge: '—', staleBadges: 1, banners: 0, placeholders: 0});
+    expect(read(frame('waiting', 'dashboard', {'live-speed-number': one('90'), 'live.stale': [], 'live.waiting': one('Waiting')}))).toEqual({state: 'waiting', gauge: '90', staleBadges: 0, banners: 1, placeholders: 0});
+  });
+  it('waits while data is current, after the hold, or for another status', () => {
+    for (const state of ['connected', 'paused', 'partial']) expect(read(frame(state, 'dashboard')), state).toBe(false);
+    expect(read(frame('stale', 'placeholder'))).toBe(false);
+    expect(read(frame('stale', 'dashboard'), '^(disconnected|waiting):')).toBe(false);
+  });
+  it('polls every 50 ms within eight seconds', async () => {
+    const dispose = vi.fn(() => Promise.resolve()), value = {state: 'stale', gauge: '—', staleBadges: 1, banners: 0, placeholders: 0};
+    const waitForFunction = vi.fn(() => Promise.resolve({jsonValue: () => Promise.resolve(value), dispose}));
+    expect(await waitForHeldNotCurrentLive({waitForFunction} as unknown as Page, '^stale:')).toEqual(value);
+    expect(waitForFunction).toHaveBeenCalledExactlyOnceWith(heldNotCurrentLiveObservation, {status: '^stale:'}, {timeout: 8000, polling: 50});
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });
 

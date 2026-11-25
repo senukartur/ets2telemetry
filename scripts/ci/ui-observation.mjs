@@ -5,7 +5,7 @@ import path from 'node:path';
 import {readFile, writeFile, rename, mkdir, rmdir} from 'node:fs/promises';
 import {screen, settingsPanel, chooseLanguage, isolateDashboardPointer} from './ui-navigation.mjs';
 import {until} from './lifecycle-observation.mjs';
-import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, waitForPartialLive, zeroLiveObservation} from './renderer-observation.mjs';
+import {clusterCentreProbe, clusterSpeedArcProbe, overlayOverflow, stripNumberProbe, waitForHeldNotCurrentLive, waitForPartialLive, waitForPlaceholderLive, LIVE_PLACEHOLDER_CAPTION, zeroLiveObservation} from './renderer-observation.mjs';
 import {overlayTagObservation, SCALE_RANGE_FRAMES, SCALE_RANGE_ZOOM, SCALE_REFERENCE_FRAMES} from './overlay-observation.mjs';
 import {stubSaveDialog} from './journal-observation.mjs';
 import {pluginActionResult} from './plugin-fixture.mjs';
@@ -263,7 +263,7 @@ const waitState = (page, state) => until(() => page.getByTestId('telemetry-statu
 /** Navigation and a source resume do not establish freshness. Capture all current instrument assertions in one DOM observation. */
 async function waitLiveInstrument(page, language) {
   const handle = await page.waitForFunction(dashboardObservation, {speed: language === 'en' ? 'Speed: 90 km/h' : 'Скорость: 90 км/ч',
-    fuel: language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л', tankHeight: '7.3%'}, {timeout: 5000});
+    fuel: language === 'en' ? 'Fuel: 73.0 L' : 'Топливо: 73.0 л', tankHeight: '7.3%'}, {timeout: 8000}); // after the placeholder, the dashboard returns 2 s into current data
   try {assert.deepEqual((await handle.jsonValue()).tank, {state: 'value', height: '7.3%', unavailable: 0});} finally {await handle.dispose();}
   const typography = await page.evaluate(() => {
     const metrics = [...globalThis.document.querySelectorAll('.yu-gauge-number,.yu-gauge-caption,.yu-gear strong,.yu-fuel strong,.yu-job-metrics strong,.yu-kv dd')];
@@ -1178,12 +1178,13 @@ export async function runUiSmoke({application, dashboard, overlay, source, sourc
           assert.equal(partial.text?.includes(partialText), true, `UI_LIVE_PARTIAL_TEXT_${language}`);
           assert.equal(partial.title, language === 'en' ? 'Connection incomplete' : 'Подключение неполное', `UI_LIVE_PARTIAL_TITLE_${language}`);
           assert.equal(partial.staleBadges, 0, `UI_LIVE_PARTIAL_STALE_BADGE_${language}`);
-          // Both streams stopped: the stale state, with its badge in the instrument and without the waiting banner.
+          // Both streams stopped: during the display hold the dashboard shows the stale badge and dashes, never frozen
+          // values; after it the placeholder scene with its one caption replaces it, and the state stays stale underneath.
           sourceV1.hold();
-          await until(() => dashboard.getByTestId('live-telemetry').getAttribute('data-live-state'), value => value === 'stale', `UI_LIVE_STATE_STALE_${language}`, 5000);
-          assert.equal(await dashboard.locator('.yu-gauge-number').textContent(), '—');
-          assert.equal(await dashboard.getByTestId('live.instrument').getByTestId('live.stale').isVisible(), true, `UI_LIVE_STALE_BADGE_${language}`);
-          assert.equal(await dashboard.getByTestId('live.waiting').count(), 0, `UI_LIVE_STALE_WAITING_${language}`);
+          const held = await waitForHeldNotCurrentLive(dashboard, '^stale:');
+          assert.deepEqual(held, {state: 'stale', gauge: '—', staleBadges: 1, banners: 0, placeholders: 0}, `UI_LIVE_STALE_HELD_${language}`);
+          const placeholder = await waitForPlaceholderLive(dashboard, '^stale:', LIVE_PLACEHOLDER_CAPTION[language]);
+          assert.equal(placeholder.state, 'stale', `UI_LIVE_STATE_STALE_${language}`);
           await save('stale', language, size);
         } finally {source.resume(); sourceV1.resume();}
         await waitLiveInstrument(dashboard, language);

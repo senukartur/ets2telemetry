@@ -4,6 +4,7 @@ import {describe, expect, it, vi} from 'vitest';
 import type {AppLanguage, LiveTelemetry, RecordingHealth} from '../../packages/contracts/src';
 import {LiveDashboard} from '../../apps/desktop/src/live-dashboard';
 import {liveDashboardText} from '../../apps/desktop/src/live-dashboard-text';
+import type {LiveDisplay} from '../../apps/desktop/src/live-display-hold';
 import {smokePair, smokeV0} from '../shared/live-v1-fixtures';
 
 // ET-074 (REG-009, REG-002): the compact Live page in its four states. The shadcn containers are substituted by plain
@@ -17,8 +18,9 @@ vi.mock('@/components/ui/badge', () => ({
 
 const recording = (completeness: 'complete' | 'partial' | 'unknown' | null): RecordingHealth => ({state: 'recording', target: 'synthetic', code: null,
   losses: {lostEvents: 0, eventLoss: 0, notConnected: 0, sampleLoss: 0, restoreLoss: 0, droppedSamples: 0}, trip: {phase: 'active', completeness, untrackedJob: false}});
-const render = (live: LiveTelemetry | undefined, language: AppLanguage = 'en', health?: RecordingHealth) =>
-  renderToStaticMarkup(React.createElement(LiveDashboard, {live, units: undefined, language, recording: health}));
+/** The page for a live update; `display` is the renderer's held choice, which keeps the dashboard while a stop is still held. */
+const render = (live: LiveTelemetry | undefined, language: AppLanguage = 'en', health?: RecordingHealth, display?: LiveDisplay) =>
+  renderToStaticMarkup(React.createElement(LiveDashboard, {live, units: undefined, language, recording: health, display}));
 /** The markup from one test id to the next, enough to scope an assertion to one card. */
 const between = (html: string, from: string, to: string) => {
   const start = html.indexOf(`data-testid="${from}"`), end = html.indexOf(`data-testid="${to}"`, start + 1);
@@ -124,8 +126,8 @@ it.each(['en', 'ru'] as const)('paused keeps current values with the paused badg
   expect(html).toContain('data-testid="live-speed-number">90</text>');
 });
 
-it.each([['en', 'No current data'], ['ru', 'Нет текущих данных']] as const)('stale shows its badge and dashes, not the waiting banner, in %s', (language, word) => {
-  const html = render(stalePair(), language);
+it.each([['en', 'No current data'], ['ru', 'Нет текущих данных']] as const)('stale shows its badge and dashes, not the waiting banner, while the dashboard is still held in %s', (language, word) => {
+  const html = render(stalePair(), language, undefined, 'dashboard');
   expect(state(html)).toBe('stale');
   expect(html).toMatch(new RegExp(`data-testid="live.stale" data-variant="error"><svg[^>]*lucide-wifi-off[^>]*aria-hidden="true"[^>]*>.*?</svg>${word}</span>`));
   expect(html).not.toContain('data-testid="live.waiting"');
@@ -176,7 +178,7 @@ it('beside an incompatible v1 source stays connected and the banner names the ve
 
 it('puts the tank fill inside the inset track with its inline height', () => {
   expect(render(smokePair())).toMatch(/data-testid="live.instrument.tank" data-state="value" aria-hidden="true"><span class="yu-tank-track"><i style="height:7.3%;background:var\(--yu-progress-pending\)"><\/i><\/span><\/div>/);
-  expect(render(stalePair())).toContain('data-state="unavailable" aria-hidden="true"><span class="yu-tank-unavailable">—</span></div>');
+  expect(render(stalePair(), 'en', undefined, 'dashboard')).toContain('data-state="unavailable" aria-hidden="true"><span class="yu-tank-unavailable">—</span></div>');
 });
 
 it.each([
@@ -184,8 +186,8 @@ it.each([
     noJob: 'No active job. The fields appear when the game reports a job.'}],
   ['ru', {title: 'Ожидание игры', text: 'Запустите Euro Truck Simulator 2 или American Truck Simulator. Плагин подключится сам, здесь ничего нажимать не нужно.',
     noJob: 'Нет активного заказа. Поля появятся, когда игра передаст заказ.'}]
-] as const)('waiting shows the banner, dashes and the no-job hint without badges in %s', (language, expected) => {
-  const html = render(undefined, language);
+] as const)('waiting shows the banner, dashes and the no-job hint without badges while the dashboard is still held in %s', (language, expected) => {
+  const html = render(undefined, language, undefined, 'dashboard');
   expect(state(html)).toBe('waiting');
   const banner = between(html, 'live.waiting', 'live.instrument');
   expect(banner).toContain(`<strong>${expected.title}</strong><p>${expected.text}</p>`);
@@ -240,5 +242,77 @@ describe('Rest State (REG-009)', () => {
   it('shows a dash for stale readings and omits the row until a v1 source is carried', () => {
     expect(render(smokePair({status: 'stale', fresh: false}))).toContain('data-testid="live.session.restState">—</dd>');
     expect(render(smokeV0())).not.toContain('data-testid="live.session.restState"');
+  });
+});
+
+describe('placeholder', () => {
+  const CAPTION = {en: 'The instruments appear when you get behind the wheel', ru: 'Приборы появятся, когда вы сядете за руль'} as const;
+  const display = (html: string) => /data-live-display="([a-z]+)"/.exec(html)?.[1];
+  const ENTITIES: Record<string, string> = {'&gt;': '>', '&lt;': '<', '&amp;': '&', '&quot;': '"', '&#x27;': "'"};
+  const caption = (html: string) => /data-testid="live.placeholder.caption">([^<]*)<\/p>/.exec(html)?.[1]?.replace(/&(?:gt|lt|amp|quot|#x27);/g, entity => ENTITIES[entity]);
+  it.each(['en', 'ru'] as const)('waiting and stale show the scene and one caption, without connection details, in %s', language => {
+    for (const [live, expected] of [[undefined, 'waiting'], [stalePair(), 'stale']] as const) {
+      const html = render(live, language);
+      expect(state(html)).toBe(expected);
+      expect(display(html)).toBe('placeholder');
+      expect(caption(html)).toBe(CAPTION[language]);
+      for (const id of ['live.instrument', 'live.waiting', 'live.stale', 'live.job', 'live.details']) expect(html).not.toContain(`data-testid="${id}"`);
+      expect(html).not.toMatch(/No current data|Нет текущих данных|Waiting for the game|Ожидание игры/);
+    }
+  });
+  it('connected, paused and partial show the dashboard without a held choice', () => {
+    for (const live of [smokePair(), smokePair({}, {status: 'paused'}), smokePair({}, STALE)]) expect(display(render(live))).toBe('dashboard');
+  });
+  it('the held choice wins over the state both ways', () => {
+    const html = render(smokePair(), 'en', undefined, 'placeholder');
+    expect(state(html)).toBe('connected');
+    expect(display(html)).toBe('placeholder');
+    expect(html).not.toContain('data-testid="live.instrument"');
+    expect(display(render(undefined, 'en', undefined, 'dashboard'))).toBe('dashboard');
+  });
+  it('draws the scene as decoration with the rims and puffs on their own layers', () => {
+    const html = render(undefined);
+    expect(html).toContain('<section class="yu-live-placeholder" data-testid="live.placeholder" aria-labelledby="live-placeholder-caption">');
+    expect(html).toMatch(/<div class="yu-ph-stage" style="[^"]*--yu-ph-lane-x:-[\d.]+px[^"]*" aria-hidden="true">/);
+    expect(html.match(/class="yu-ph-rim"/g)).toHaveLength(6);
+    expect(html.match(/class="yu-ph-puff/g)).toHaveLength(2);
+    for (const layer of ['yu-ph-lane', 'yu-ph-trees', 'yu-ph-truck']) expect(html).toContain(`class="yu-ph-layer ${layer}"`);
+  });
+  /** No current data with the given status and reason: no observation and no v1 stream unless a case adds one. */
+  const without = (status: LiveTelemetry['status'], reason: string, v1?: LiveTelemetry['v1']) => {
+    const live = smokePair(); Object.assign(live, {status, fresh: false, reason, observation: undefined, v1}); return live;
+  };
+  // Expected texts are written by hand from strings.ts; an unmapped service reason is shown as the service wrote it.
+  const MISMATCH = {en: 'The game sources do not match. Reconnect or choose a source in Settings > Diagnostics.', ru: 'Источники игры не совпадают. Переподключитесь или выберите источник в «Настройки > Диагностика».'};
+  const AMBIGUOUS = {en: 'Multiple instances of a game were found. Close the extra instance to connect.', ru: 'Найдено несколько экземпляров игры. Закройте лишний экземпляр для подключения.'};
+  const REJECTED = {en: 'The game connection could not be verified. Check Settings > Game plugin.', ru: 'Не удалось проверить подключение к игре. Откройте «Настройки > Игровой плагин».'};
+  const FAILED = 'Telemetry service failed after repeated restarts';
+  it.each(['en', 'ru'] as const)('a condition the driver must act on replaces the caption with its exact text in %s', language => {
+    const cases: [LiveTelemetry, string][] = [
+      [without('incompatible', 'Game protocol target mismatch', {selection: 'synthetic', status: 'incompatible', reason: 'Game protocol target mismatch', fresh: false}), MISMATCH[language]],
+      [without('incompatible', 'Game protocol target mismatch'), MISMATCH[language]],
+      [without('service-failed', FAILED), FAILED],
+      [without('waiting', 'Multiple game instances are ambiguous'), AMBIGUOUS[language]],
+      [without('waiting', 'Native source authority or transport failed'), REJECTED[language]],
+      [without('disconnected', 'Verified native game pipe client is not configured'), REJECTED[language]]
+    ];
+    for (const [live, expected] of cases) {
+      const html = render(live, language);
+      expect(display(html), live.reason).toBe('placeholder');
+      expect(caption(html), live.reason).toBe(expected);
+    }
+  });
+  it.each(['en', 'ru'] as const)('a passing connection step keeps the one caption in %s', language => {
+    for (const reason of ['Waiting for game', 'Discovering selected game process', 'Game protocol targets changed; retrying discovery', 'Main has no recent SDK capture']) {
+      expect(caption(render(without(reason === 'Main has no recent SDK capture' ? 'stale' : 'waiting', reason), language)), reason).toBe(CAPTION[language]);
+    }
+  });
+  it('keeps the game choice above the scene', () => {
+    const live = smokePair(); Object.assign(live, {status: 'waiting', fresh: false, selection: 'game', reason: 'Both games are available; choose ETS2 or ATS', observation: undefined}); live.v1 = undefined;
+    const html = renderToStaticMarkup(React.createElement(LiveDashboard, {live, units: undefined, language: 'en', onSelect: () => Promise.resolve()}));
+    expect(display(html)).toBe('placeholder');
+    expect(html.indexOf('data-testid="live-game-choice"')).toBeGreaterThan(-1);
+    expect(html.indexOf('data-testid="live-game-choice"')).toBeLessThan(html.indexOf('data-testid="live.placeholder"'));
+    expect(caption(html)).toBe('Both games are available. Choose which game to connect to.');
   });
 });

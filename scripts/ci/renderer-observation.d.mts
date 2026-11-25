@@ -14,6 +14,13 @@ export function waitForNotCurrentLive(page: Page, values: readonly string[], sta
 export type PartialLiveObservation = {gauge: string | null; bannerVisible: boolean; title: string | null; text: string | null; staleBadges: number};
 export function partialLiveObservation(): PartialLiveObservation | false;
 export function waitForPartialLive(page: Page): Promise<PartialLiveObservation>;
+export interface HeldNotCurrentLiveObservation {state: 'stale' | 'waiting'; gauge: string | null; staleBadges: number; banners: number; placeholders: number}
+export function heldNotCurrentLiveObservation(expected: {status: string}): HeldNotCurrentLiveObservation | false;
+export function waitForHeldNotCurrentLive(page: Page, status: string): Promise<HeldNotCurrentLiveObservation>;
+export interface PlaceholderLiveObservation {state: string | null; caption: string}
+export function placeholderLiveObservation(expected: {status: string; caption: string}): PlaceholderLiveObservation | false;
+export const LIVE_PLACEHOLDER_CAPTION: Readonly<Record<'en' | 'ru', string>>;
+export function waitForPlaceholderLive(page: Page, status: string, caption?: string): Promise<PlaceholderLiveObservation>;
 export const SYNTHETIC_V1_LIVE_ROWS: readonly LiveRow[];
 export const SYNTHETIC_V1_VALUE_IDS: readonly string[];
 export const SYNTHETIC_V0V1_LIVE_ROWS: readonly LiveRow[];
