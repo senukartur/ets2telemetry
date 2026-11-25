@@ -844,9 +844,11 @@ function runApplication(profileError: unknown): void {
     const created = overlay = new BrowserWindow({width: size.width, height: size.height, show: false, frame: false,
       transparent: true, backgroundColor: '#00000000',
       focusable: false, skipTaskbar: true, resizable: false, movable: false, minimizable: false, maximizable: false, fullscreenable: false,
-      // A dedicated in-memory session separates the overlay's browser context from the dashboard.
+      // A dedicated in-memory session separates the overlay's browser context from the dashboard. The overlay is hidden
+      // most of the time, and Chromium's background throttling can delay its consumption credit past main's 500 ms
+      // deadline, which closes the channel and keeps the overlay hidden until the preload's bounded recovery.
       webPreferences: {partition: 'ets2telemetry-overlay', preload: path.join(__dirname, 'overlay-preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false,
-        zoomFactor: overlayZoom(placement.scale)}});
+        backgroundThrottling: false, zoomFactor: overlayZoom(placement.scale)}});
     timeline?.('OVERLAY_WINDOW_CREATED'); observeLoads(created.webContents, 'OVERLAY');
     if (latency) {
       const frames = observeLatencyFrames(created, latency, () => lastOverlay.freshness === 'current' && !lastOverlay.paused && !overlayEdit.active,

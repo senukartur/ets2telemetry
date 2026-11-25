@@ -332,6 +332,7 @@ export async function windowSecurity(application) {
       sessionPersistent: window.webContents.session.getStoragePath() !== null,
       sandbox: preferences.sandbox, isolation: preferences.contextIsolation,
       node: preferences.nodeIntegration, visible: window.isVisible(), focusable: window.isFocusable(),
+      backgroundThrottling: window.webContents.getBackgroundThrottling(),
       // On Windows, Chromium derives this from the HWND's actual WS_EX_TOPMOST style, not a cached flag.
       alwaysOnTop: window.isAlwaysOnTop()};
   }));
@@ -342,8 +343,11 @@ export async function windowSecurity(application) {
   assert.equal(overlay.length, 1); assert.equal(overlay[0].visible, false); assert.equal(overlay[0].focusable, false);
   // The hidden overlay already holds WS_EX_TOPMOST; Electron's `floating` level could lose it behind the taskbar.
   assert.equal(overlay[0].alwaysOnTop, true, 'Overlay window must be topmost');
+  // A throttled hidden overlay credits deliveries past main's 500 ms deadline, which closes its channel and hides it.
+  assert.equal(overlay[0].backgroundThrottling, false, 'Overlay renderer must not be background-throttled');
   const dashboard = windows.filter(window => new URL(window.url).search === '');
   assert.equal(dashboard.length, 1); assert.equal(dashboard[0].alwaysOnTop, false, 'Dashboard must not be topmost');
+  assert.equal(dashboard[0].backgroundThrottling, true, 'Dashboard keeps the default background throttling');
   assert.notEqual(overlay[0].rendererPid, dashboard[0].rendererPid, 'Overlay and dashboard must use independent renderer processes');
   assert.deepEqual([overlay[0].isDefaultSession, overlay[0].isOverlaySession, overlay[0].sessionPersistent], [false, true, false]);
   assert.deepEqual([dashboard[0].isDefaultSession, dashboard[0].isOverlaySession, dashboard[0].sessionPersistent], [true, false, true]);
